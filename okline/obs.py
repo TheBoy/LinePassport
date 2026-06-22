@@ -1,0 +1,104 @@
+"""OBS (Object Storage Service) — upload/download of message media & profiles.
+
+Two routes, both observed in the bundle:
+
+* Gateway helpers (simplest, used for profile pictures)::
+
+      POST /api/obs/uploadProfile?mid=<mid>     body=<bytes>  content-type=<mime>
+      POST /api/obs/copyForMessage              body=<copy params json>
+
+* Raw OBS (used for chat media), against ``obs.line-apps.com``::
+
+      POST /r/<service>/<sid>/<oid>             body=<bytes>
+      headers: X-Obs-Params: <base64(json)>,  range: bytes <off>-<end>/<total>
+      GET  /r/<service>/<sid>/<oid>            download
+      GET  <path>/object_info.obs              headers: X-Talk-Meta
+
+``X-Obs-Params`` is a base64 of a small JSON descriptor (name, type, ver, ...).
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+from typing import Any, Mapping, Optional
+
+from . import endpoints as ep
+from .transport import Transport
+
+
+def encode_obs_params(params: Mapping[str, Any]) -> str:
+    """Base64(JSON) — the ``X-Obs-Params`` header value."""
+    raw = json.dumps(params, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return base64.b64encode(raw).decode("ascii")
+
+
+class ObsClient:
+    """High-level wrapper over the OBS endpoints."""
+
+    def __init__(self, transport: Transport) -> None:
+        self._t = transport
+
+    # -- gateway helpers -----------------------------------------------------
+    def upload_profile_image(self, mid: str, data: bytes,
+                             content_type: str = "image/jpeg") -> Any:
+        """Upload a profile picture for ``mid`` via the gateway."""
+        path = "/" + ep.SPECIAL_ENDPOINTS["obs.uploadProfile"] + \
+            f"?mid={_q(mid)}"
+        headers = self._t.base_headers()
+        headers["content-type"] = content_type
+        resp = self._t._send(  # noqa: SLF001 - intentional reuse
+            "POST", self._t.config.gateway_base + path, headers=headers, data=data)
+        return _json(resp)
+
+    def copy_for_message(self, params: Mapping[str, Any]) -> Any:
+        """``/api/obs/copyForMessage`` — re-use an already uploaded object."""
+        path = "/" + ep.SPECIAL_ENDPOINTS["obs.copyForMessage"]
+        return self._t.post_json(path, params)
+
+    # -- raw OBS -------------------------------------------------------------
+    def upload_object(self, service: str, sid: str, oid: str, data: bytes, *,
+                      obs_params: Mapping[str, Any],
+                      offset: Optional[int] = None,
+                      total: Optional[int] = None) -> Any:
+        """Upload bytes to ``/r/<service>/<sid>/<oid>`` on the OBS host."""
+        url = f"{self._t.config.obs_base}/r/{service}/{sid}/{oid}"
+        headers = self._t.base_headers()
+        headers["X-Obs-Params"] = encode_obs_params(obs_params)
+        headers.pop("content-type", None)
+        if offset is not None and total is not None:
+            headers["range"] = f"bytes {offset}-{total - 1}/{total}"
+        resp = self._t._send("POST", url, headers=headers, data=data)  # noqa: SLF001
+        return _json(resp)
+
+    def download_object(self, service: str, sid: str, oid: str, *,
+                        talk_meta: Optional[str] = None) -> bytes:
+        """Download the raw bytes of an OBS object."""
+        url = f"{self._t.config.obs_base}/r/{service}/{sid}/{oid}"
+        headers = self._t.base_headers()
+        headers.pop("content-type", None)
+        if talk_meta:
+            headers["X-Talk-Meta"] = talk_meta
+        resp = self._t._send("GET", url, headers=headers)  # noqa: SLF001
+        resp.raise_for_status()
+        return resp.content
+
+    def object_info(self, path: str, *, talk_meta: Optional[str] = None) -> Any:
+        url = f"{self._t.config.obs_base}{path}/object_info.obs"
+        headers = self._t.base_headers()
+        if talk_meta:
+            headers["X-Talk-Meta"] = talk_meta
+        resp = self._t._send("GET", url, headers=headers)  # noqa: SLF001
+        return _json(resp)
+
+
+def _q(s: str) -> str:
+    from urllib.parse import quote
+    return quote(s, safe="")
+
+
+def _json(resp: Any) -> Any:
+    try:
+        return resp.json()
+    except ValueError:
+        return resp.text

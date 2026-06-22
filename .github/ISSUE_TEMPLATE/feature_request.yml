@@ -1,0 +1,23 @@
+name: ✨ Feature / endpoint request
+description: Suggest a new endpoint wrapper or capability
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like?
+      description: The endpoint or capability, and what you'd use it for.
+    validations:
+      required: true
+  - type: input
+    id: endpoint
+    attributes:
+      label: Endpoint key (if known)
+      placeholder: "Talk.TalkService.someMethod"
+  - type: textarea
+    id: payload
+    attributes:
+      label: Known payload shape (if any)
+      description: Argument order / field names, ideally observed from the real client.
+      render: json

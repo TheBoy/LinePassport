@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "okline"
+version = "2.0.0"
+description = "OkLine — an unofficial, high-level Python client / SDK for the LINE Chrome messaging API (CHROMEOS 3.7.2): send messages, QR & email login, X-Hmac signing, and full response recording."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "OkLine contributors" }]
+keywords = [
+    "line", "line-api", "line-bot", "line-messaging", "line-messaging-api",
+    "line-chrome", "line-client", "line-sdk", "python-line", "unofficial-line",
+    "messaging", "chat", "chatbot", "automation", "reverse-engineering",
+    "chrome-extension", "thrift", "x-hmac", "okline",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed",
+]
+dependencies = [
+    "requests>=2.28",
+    "cryptography>=41.0",
+]
+
+[project.optional-dependencies]
+qr = ["qrcode>=7.0"]
+test = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/NiceDayZc/OkLine"
+Documentation = "https://github.com/NiceDayZc/OkLine/tree/main/docs"
+Repository = "https://github.com/NiceDayZc/OkLine"
+Issues = "https://github.com/NiceDayZc/OkLine/issues"
+Changelog = "https://github.com/NiceDayZc/OkLine/blob/main/CHANGELOG.md"
+
+[project.scripts]
+okline = "okline.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["okline*"]
+
+[tool.setuptools.package-data]
+okline = ["ltsm/ltsm.wasm", "ltsm/ltsmSandbox.js", "ltsm/ltsm_bridge.js"]

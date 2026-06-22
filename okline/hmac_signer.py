@@ -1,0 +1,192 @@
+"""X-Hmac request signer.
+
+The LINE Chrome gateway rejects every request that is missing a valid
+``X-Hmac`` header (error ``REQUEST_INVALID_HMAC`` / 10005).  The signature is
+produced by LINE's secure WASM module (``ltsm.wasm``); the key derivation and
+HMAC are implemented inside that binary, so the only reliable way to reproduce
+it is to *run the real module*.
+
+:class:`HmacSigner` launches a small persistent Node.js bridge
+(``ltsm/ltsm_bridge.js``) that loads ``ltsm.wasm`` and computes the signature
+exactly as the extension does::
+
+    X-Hmac = base64( Hmac(deriveKey(SHA256("3.7.2"), SHA256(accessToken)))
+                       .digest(path + body) )
+
+Requires Node.js on ``PATH`` (or set ``LINE_NODE`` / pass ``node_path``).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import threading
+from pathlib import Path
+from typing import Any, Optional
+
+from .exceptions import LineError
+
+_LTSM_DIR = Path(__file__).resolve().parent / "ltsm"
+_BRIDGE_JS = _LTSM_DIR / "ltsm_bridge.js"
+
+
+class HmacSignerError(LineError):
+    """Raised when the LTSM bridge cannot be started or a command fails."""
+
+
+class LtsmBridge:
+    """Persistent Node bridge running LINE's real LTSM WASM module.
+
+    A single shared instance serves both the per-request ``X-Hmac`` signing and
+    the Curve25519 / E2EE-keychain operations needed for QR login (the curve
+    key handle lives inside the one WASM instance, so the same process must be
+    reused across calls).
+
+    Thread-safe: one lock serialises the request/response round-trips.  The
+    Node process is started lazily on first use and reused for the lifetime of
+    the bridge.
+    """
+
+    def __init__(self, node_path: Optional[str] = None,
+                 origin: Optional[str] = None,
+                 start_timeout: float = 60.0) -> None:
+        self.node_path = node_path or os.environ.get("LINE_NODE") or "node"
+        self.origin = origin or os.environ.get("LTSM_ORIGIN")
+        self.start_timeout = start_timeout
+        self._proc: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
+        self._id = 0
+
+    # -- lifecycle -----------------------------------------------------------
+    def _ensure_started(self) -> None:
+        if self._proc and self._proc.poll() is None:
+            return
+        if not _BRIDGE_JS.exists():
+            raise HmacSignerError(f"bridge script missing: {_BRIDGE_JS}")
+        env = dict(os.environ)
+        if self.origin:
+            env["LTSM_ORIGIN"] = self.origin
+        try:
+            self._proc = subprocess.Popen(
+                [self.node_path, str(_BRIDGE_JS)],
+                cwd=str(_LTSM_DIR),
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True, bufsize=1, env=env,
+            )
+        except FileNotFoundError as exc:
+            raise HmacSignerError(
+                f"Node.js not found ({self.node_path!r}). Install Node 18+ or set "
+                f"LINE_NODE / node_path. X-Hmac signing is required by the gateway."
+            ) from exc
+
+        # wait for the readiness line
+        ready_line = self._readline(timeout=self.start_timeout)
+        try:
+            msg = json.loads(ready_line)
+        except (TypeError, ValueError):
+            raise HmacSignerError(f"bridge did not start: {ready_line!r}")
+        if not msg.get("ready"):
+            raise HmacSignerError(f"bridge init failed: {msg.get('error')}")
+
+    def _readline(self, timeout: Optional[float] = None) -> str:
+        assert self._proc and self._proc.stdout
+        # readline() blocks; the bridge always responds promptly so we rely on
+        # the OS pipe.  (A watchdog could be added if needed.)
+        line = self._proc.stdout.readline()
+        if line == "":
+            raise HmacSignerError("bridge process exited unexpectedly")
+        return line.strip()
+
+    # -- generic command -----------------------------------------------------
+    def _call(self, op: str, **fields: Any) -> Any:
+        with self._lock:
+            self._ensure_started()
+            assert self._proc and self._proc.stdin
+            self._id += 1
+            rid = self._id
+            req = json.dumps({"id": rid, "op": op, **fields})
+            try:
+                self._proc.stdin.write(req + "\n")
+                self._proc.stdin.flush()
+            except (BrokenPipeError, ValueError) as exc:
+                raise HmacSignerError(f"bridge write failed: {exc}") from exc
+            line = self._readline()
+            try:
+                resp = json.loads(line)
+            except ValueError as exc:
+                raise HmacSignerError(f"bad bridge response: {line!r}") from exc
+            if resp.get("error"):
+                raise HmacSignerError(f"{op} failed: {resp['error']}")
+            return resp.get("result")
+
+    # -- X-Hmac --------------------------------------------------------------
+    def sign(self, access_token: str, path: str, body: str = "") -> str:
+        """Return the ``X-Hmac`` value for a request.
+
+        ``path`` is the request path (everything after the gateway base, incl.
+        any query string); ``body`` is the exact serialized request body (empty
+        string for GET / bodyless requests).
+        """
+        return self._call("hmac", accessToken=access_token or "", path=path,
+                           body=body or "")
+
+    # -- Curve25519 / E2EE (QR login) ----------------------------------------
+    def curvekey_generate(self) -> int:
+        """Generate a Curve25519 keypair in the WASM; returns its handle id."""
+        return self._call("curvekey_generate")
+
+    def e2ee_public_key(self, key_id: int) -> str:
+        """Base64 public key for a previously generated curve key handle."""
+        return self._call("e2ee_public_key", keyId=key_id)
+
+    def e2ee_create_channel(self, key_id: int, server_pubkey_b64: str) -> int:
+        """Create an E2EE channel between our curve key and a peer public key."""
+        return self._call("e2ee_create_channel", keyId=key_id,
+                           serverPubKeyB64=server_pubkey_b64)
+
+    def e2ee_unwrap_keychain(self, channel_id: int, enc_keychain_b64: str) -> Any:
+        """Unwrap the encrypted E2EE keychain returned by qrCodeLoginV2."""
+        return self._call("e2ee_unwrap_keychain", channelId=channel_id,
+                           encKeyChainB64=enc_keychain_b64)
+
+    # -- teardown ------------------------------------------------------------
+    def close(self) -> None:
+        with self._lock:
+            if self._proc and self._proc.poll() is None:
+                try:
+                    self._proc.stdin.close()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                try:
+                    self._proc.terminate()
+                    self._proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        self._proc.kill()
+                    except Exception:
+                        pass
+            self._proc = None
+
+    def __del__(self) -> None:  # best-effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    @staticmethod
+    def is_available(node_path: Optional[str] = None) -> bool:
+        """True if Node.js and the bridge artifacts are present."""
+        node = node_path or os.environ.get("LINE_NODE") or "node"
+        if not _BRIDGE_JS.exists() or not (_LTSM_DIR / "ltsm.wasm").exists():
+            return False
+        try:
+            subprocess.run([node, "--version"], capture_output=True, timeout=10)
+            return True
+        except Exception:
+            return False
+
+
+# Backwards-compatible name: the bridge started life as an HMAC-only signer.
+HmacSigner = LtsmBridge

@@ -1,0 +1,47 @@
+name: 🐛 Bug report
+description: Something in OkLine doesn't work as expected
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please **redact any tokens, mids, or personal
+        data** before pasting logs.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: e.g. `api.send_text(...)` raised LineApiError code 8
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest snippet / command that reproduces it.
+      render: python
+  - type: textarea
+    id: transcript
+    attributes:
+      label: Redacted transcript (optional)
+      description: Output of `api.last.pretty()` or `okline ... --raw` (secrets stay masked by default).
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: OkLine version, Python version, Node version, OS.
+      placeholder: "OkLine 2.0.0, Python 3.11, Node 20, Windows 11"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: Node.js 18+ is installed and on PATH (`node --version`)
+          required: true
+        - label: I removed all tokens / personal data from this report
+          required: true
