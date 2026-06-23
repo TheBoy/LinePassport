@@ -173,12 +173,12 @@ def run(api: OkLine, *, to: Optional[str], image: Optional[str],
             summary=lambda d: "channelAccessToken OK" if isinstance(d, dict) and d.get("channelAccessToken") else _summ(d))
 
     # --- writes (only with --to) -------------------------------------------
+    # NOTE: do NOT send to yourself — a self / Letter-Sealed conversation
+    # rejects plain text with code 82 "can not send using plain mode" (needs
+    # E2EE). Pass --to a chat that allows plain mode (most groups do).
     r.section("Messaging (write)")
-    target = to or my_mid
-    if not to:
-        print(f"  (no --to given; sending write-tests to yourself: {str(my_mid)[:12]}…)")
-    if target:
-        sent = r.check("send_text", lambda: api.send_text(target, "OkLine live test"),
+    if to:
+        sent = r.check("send_text", lambda: api.send_text(to, "OkLine live test"),
                        summary=lambda m: f"id={m.get('id') if isinstance(m, dict) else m}")
         msg_id = sent.get("id") if isinstance(sent, dict) else None
         if msg_id:
@@ -186,22 +186,23 @@ def run(api: OkLine, *, to: Optional[str], image: Optional[str],
             r.check("cancel_reaction", lambda: api.cancel_reaction(msg_id))
             r.check("unsend_message", lambda: api.unsend_message(msg_id))
         else:
-            r.skip("react/unsend", "no message id from send_text")
+            r.skip("react/unsend", "send_text returned no id (E2EE chat? try a group)")
     else:
-        r.skip("send_text", "no target mid")
+        r.skip("send_text / react / unsend",
+               "pass --to <chat mid> (NOT yourself; self/E2EE chats need encryption)")
 
-    # --- media (only with --image / --file) --------------------------------
+    # --- media (only with --to + --image / --file) -------------------------
     r.section("Media (write)")
-    if target and image:
-        r.check("send_image", lambda: api.send_image(target, image),
+    if to and image:
+        r.check("send_image", lambda: api.send_image(to, image),
                 summary=lambda m: f"id={m.get('id') if isinstance(m, dict) else m}")
     else:
-        r.skip("send_image", "pass --to and --image to test")
-    if target and file:
-        r.check("send_file", lambda: api.send_file(target, file),
+        r.skip("send_image", "pass --to <chat> and --image to test")
+    if to and file:
+        r.check("send_file", lambda: api.send_file(to, file),
                 summary=lambda m: f"id={m.get('id') if isinstance(m, dict) else m}")
     else:
-        r.skip("send_file", "pass --to and --file to test")
+        r.skip("send_file", "pass --to <chat> and --file to test")
 
     # --- recording ---------------------------------------------------------
     r.section("Recording")

@@ -400,6 +400,18 @@ class Transport:
                 code = err.get("code", err.get("statusCode"))
                 reason = err.get("message") or err.get("reason") or err.get("debugMessage")
                 meta = err.get("metadata") or err.get("parameterMap")
+                # The gateway wraps the real Thrift exception in `data`
+                # (e.g. {"code":10051,"message":"RESPONSE_ERROR",
+                #        "data":{"name":"TalkException","code":82,
+                #                "reason":"can not send using plain mode"}}).
+                # Surface that inner code/reason — it is what actually matters.
+                inner = err.get("data")
+                if isinstance(inner, dict) and (inner.get("code") is not None
+                                                or inner.get("reason")):
+                    code = inner.get("code", code)
+                    reason = (inner.get("reason") or inner.get("alertMessage")
+                              or inner.get("message") or reason)
+                    meta = inner.get("parameterMap") or inner.get("metadata") or meta
         # Talk auth code can also arrive as a header.
         if code is None:
             hv = resp.headers.get("x-line-resp-code") or resp.headers.get("X-Line-Response-Code")

@@ -196,3 +196,18 @@ def test_cli_has_send_command():
     from okline.__main__ import build_parser
     a = build_parser().parse_args(["send", "u123", "hi", "--token", "T"])
     assert a.command == "send" and a.to == "u123" and a.text == "hi"
+
+
+def test_nested_thrift_error_is_surfaced(make_api):
+    """A wrapped TalkException must surface its inner code/reason, not 10051."""
+    from conftest import FakeResp
+    from okline.exceptions import LineApiError
+
+    body = {"code": 10051, "message": "RESPONSE_ERROR",
+            "data": {"name": "TalkException", "code": 82,
+                     "reason": "can not send using plain mode"}}
+    api = make_api(lambda m, u, kw: FakeResp(400, body))
+    with pytest.raises(LineApiError) as ei:
+        api.get_server_time()
+    assert ei.value.code == 82
+    assert "plain mode" in (ei.value.reason or "")
