@@ -210,7 +210,7 @@ def run(api: OkLine, *, to: Optional[str], image: Optional[str],
         print(f"  (E2EE keys loaded: {len(api.e2ee.my_keys)} key(s))")
         # you cannot message yourself, so E2EE send needs a real --to (a friend's
         # uXX DM). Group sealing uses a different key scheme (not wired).
-        if to and to.startswith("u") and to != my_mid:
+        if to and to[:1].lower() == "u" and to != my_mid:
             r.check("send_encrypted_text",
                     lambda: api.send_encrypted_text(to, "OkLine E2EE test"),
                     summary=lambda m: f"id={m.get('id') if isinstance(m, dict) else m}")
@@ -223,11 +223,11 @@ def run(api: OkLine, *, to: Optional[str], image: Optional[str],
         boxes = api.get_message_boxes(limit=15)
         box_list = boxes.get("messageBoxes", []) if isinstance(boxes, dict) else []
         user_boxes = [b.get("id") for b in box_list
-                      if isinstance(b, dict) and str(b.get("id", "")).startswith("u")]
+                      if isinstance(b, dict) and str(b.get("id", ""))[:1].lower() == "u"]
         for bid in user_boxes[:6]:
             msgs = api.get_recent_messages(bid, 10) or []
             cand = [m for m in msgs if isinstance(m, dict) and m.get("chunks")
-                    and str(m.get("to", "")).startswith("u")]
+                    and str(m.get("to", ""))[:1].lower() == "u"]
             if cand:
                 sealed = cand[-1]
                 break

@@ -155,6 +155,17 @@ def test_bot_handler_errors_are_caught(make_api):
 
 
 # --- media builders --------------------------------------------------------
+def test_mid_to_type_is_case_insensitive():
+    """Modern LINE mids are upper-case (U/C/R) — must classify correctly."""
+    from okline.models import mid_to_type
+    assert mid_to_type("U" + "a" * 32) == int(enums.MIDType.USER)
+    assert mid_to_type("C" + "a" * 32) == int(enums.MIDType.GROUP)
+    assert mid_to_type("R" + "a" * 32) == int(enums.MIDType.ROOM)
+    assert mid_to_type("c" + "a" * 32) == int(enums.MIDType.GROUP)   # legacy lower-case
+    # a group message built for an upper-case mid gets toType GROUP
+    assert Message.text("C" + "1" * 32, "hi")["toType"] == int(enums.MIDType.GROUP)
+
+
 def test_media_message_builders():
     img = Message.image(USER_MID)
     assert img["contentType"] == int(enums.ContentType.IMAGE) and img["hasContent"]

@@ -41,7 +41,7 @@ log = logging.getLogger("okline.bot")
 def _reply_target(message: dict) -> Optional[str]:
     """Where a reply should go: the group/room if any, else the sender."""
     to = message.get("to") or ""
-    if to[:1] in ("c", "r", "s"):          # group / room / square chat
+    if to[:1].lower() in ("c", "r", "s"):  # group / room / square chat
         return to
     return message.get("from") or to or None
 
@@ -79,7 +79,7 @@ class MessageContext(EventContext):
 
     @property
     def is_group(self) -> bool:
-        return (self.to or "")[:1] in ("c", "r", "s")
+        return (self.to or "")[:1].lower() in ("c", "r", "s")
 
     @property
     def reply_target(self) -> Optional[str]:

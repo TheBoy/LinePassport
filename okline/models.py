@@ -19,10 +19,14 @@ from .enums import ContentType, MIDType
 
 
 def mid_to_type(mid: str) -> int:
-    """Infer ``toType`` from a mid prefix (u=user, r=room, c=group/chat)."""
+    """Infer ``toType`` from a mid prefix.
+
+    Modern LINE mids are upper-case (``U`` user, ``C`` group/chat, ``R`` room,
+    ``S`` square) — match case-insensitively.
+    """
     if not mid:
         return int(MIDType.USER)
-    head = mid[0]
+    head = mid[:1].lower()
     if head == "c":
         return int(MIDType.GROUP)
     if head == "r":
