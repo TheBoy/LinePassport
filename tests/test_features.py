@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from conftest import GROUP_MID, USER_MID, USER_MID2, build_api, enveloped, route
 
 from okline import Bot, Contact, Group, Profile, RateLimiter, Session, enums
