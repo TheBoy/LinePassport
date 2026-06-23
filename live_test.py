@@ -208,11 +208,15 @@ def run(api: OkLine, *, to: Optional[str], image: Optional[str],
     r.section("E2EE / Letter Sealing")
     if api.e2ee.is_ready():
         print(f"  (E2EE keys loaded: {len(api.e2ee.my_keys)} key(s))")
-        et = to or my_mid
-        if et:
+        # you cannot message yourself, so E2EE send needs a real --to (a friend's
+        # uXX DM). Group sealing uses a different key scheme (not wired).
+        if to and to.startswith("u") and to != my_mid:
             r.check("send_encrypted_text",
-                    lambda: api.send_encrypted_text(et, "OkLine E2EE test"),
+                    lambda: api.send_encrypted_text(to, "OkLine E2EE test"),
                     summary=lambda m: f"id={m.get('id') if isinstance(m, dict) else m}")
+        else:
+            r.skip("send_encrypted_text",
+                   "pass --to <a friend's uXX mid> (self / groups not supported here)")
         # find a sealed 1:1 (user DM) message to decrypt — group sealing uses a
         # different key scheme, so only try user boxes (id/to starts with 'u').
         sealed = None
