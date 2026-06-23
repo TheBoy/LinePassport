@@ -4,6 +4,32 @@ All notable changes to OkLine are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-06-23
+
+### Added
+- **E2EE / Letter Sealing — now fully live-verified (1:1).** Encrypted **send**
+  (V2) and **decrypt of received messages** (both **V1** and **V2** formats) work
+  end-to-end against the real servers. Added `E2EEManager.roundtrip()` as a
+  self-test, and V1 framing (`build_chunks_v1`/`parse_chunks_v1`) plus the
+  `e2ee_decrypt_v1` bridge op (`decryptV1(channel, ciphertext)` — no AAD args).
+- **`examples/`** — eight runnable mini-tools (`whoami`, `find_contact`,
+  `export_contacts`, `group_members`, `backup_chat`, `send_media`, `broadcast`,
+  `watch`) with their own README.
+
+### Fixed
+- **Encrypted send was rejected (500/99999).** The sealed message must omit
+  `text`/`location`/`from` entirely (the real `EL()` sets them to `undefined`);
+  we were sending `text:null`/`from:<mid>`. Now deleted outright.
+- **mid type detection is case-insensitive** — modern mids are upper-case
+  (`U`/`C`/`R`/`S`); groups were being misclassified as users (wrong `toType`).
+
+### Changed
+- Safe, behaviour-preserving optimizations (wire bytes/crypto unchanged): signed
+  GET path computed once, recorder uses a bounded `deque`, the SSE response is
+  closed in a `finally`, dead imports removed.
+- Removed the GitHub Actions workflow; slimmed the README to a clean overview
+  with details under `docs/`.
+
 ## [2.2.0] - 2026-06-23
 
 ### Added

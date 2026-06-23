@@ -1,7 +1,8 @@
-"""E2EE (Letter Sealing) for 1:1 messages — EXPERIMENTAL.
+"""E2EE (Letter Sealing) for 1:1 messages.
 
 Ties together the WASM bridge (key handles + encrypt/decrypt) and the framing in
-:mod:`okline.e2ee_crypto`.
+:mod:`okline.e2ee_crypto`.  Live-verified end-to-end: encrypted **send** (V2) and
+**decrypt of received messages** (both **V1** and **V2** wire formats).
 
 Scope / how it works
 --------------------
@@ -15,8 +16,7 @@ The E2EE private keys live in the keychain that is unwrapped **during QR login**
   is not implemented yet.
 
 Only **user (1:1)** messages are handled here; group Letter Sealing uses shared
-group keys (not yet wired).  This is new and needs live verification — treat it
-as experimental.
+group keys (not yet wired).
 """
 
 from __future__ import annotations
