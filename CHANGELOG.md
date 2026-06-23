@@ -4,6 +4,24 @@ All notable changes to OkLine are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-06-23
+
+### Added
+- **Media send (V1)** — `OkLine.send_image/send_video/send_audio/send_file`:
+  posts a placeholder message then uploads the bytes to OBS
+  (`/r/talk/m/<messageId>`) with the encrypted OBS token. New `okline send` CLI.
+- **E2EE / Letter Sealing (experimental, 1:1)** — `okline.e2ee.E2EEManager`
+  (loaded automatically by `qr_login`), `api.send_encrypted_text()`,
+  `api.decrypt_message()`, and **auto-seal-and-retry** in `send_message` when the
+  server rejects plain text with code 82. Framing in `okline.e2ee_crypto`
+  (chunks/plaintext) is fully unit-tested; the crypto runs in the WASM bridge.
+  Works **in the same session as `qr_login`** (cross-session reuse is future
+  work). Group Letter Sealing is not wired yet.
+- Errors now surface the **inner Thrift exception** code/reason (e.g. 82
+  "can not send using plain mode") instead of a generic `RESPONSE_ERROR`.
+- `live_test.py` — detailed live integration test (`--to`, `--image`, `--qr`,
+  `--listen`).
+
 ## [2.1.0] - 2026-06-23
 
 ### Added

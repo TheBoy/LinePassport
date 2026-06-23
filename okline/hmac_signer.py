@@ -147,9 +147,43 @@ class LtsmBridge:
                            serverPubKeyB64=server_pubkey_b64)
 
     def e2ee_unwrap_keychain(self, channel_id: int, enc_keychain_b64: str) -> Any:
-        """Unwrap the encrypted E2EE keychain returned by qrCodeLoginV2."""
+        """Unwrap the encrypted E2EE keychain returned by qrCodeLoginV2.
+
+        Returns a list of *our* unwrapped E2EE key handles (numbers)."""
         return self._call("e2ee_unwrap_keychain", channelId=channel_id,
                            encKeyChainB64=enc_keychain_b64)
+
+    def e2ee_get_key_id(self, key_handle: int) -> int:
+        """Numeric keyId of one of our unwrapped E2EE key handles."""
+        return self._call("e2ee_get_key_id", keyHandle=key_handle)
+
+    def e2ee_public_key_for_handle(self, key_handle: int) -> str:
+        return self._call("e2ee_public_key_for_handle", keyHandle=key_handle)
+
+    def e2ee_create_channel_with_pubkey(self, key_handle: int,
+                                        peer_pubkey_b64: str) -> int:
+        """Channel between our key handle and a peer's public key."""
+        return self._call("e2ee_create_channel_with_pubkey", keyHandle=key_handle,
+                           peerPubKeyB64=peer_pubkey_b64)
+
+    def e2ee_encrypt_v2(self, channel_id: int, *, to: str, frm: str,
+                        sender_key_id: int, receiver_key_id: int,
+                        content_type: int, sequence_number: int,
+                        plaintext_b64: str) -> str:
+        """Encrypt (V2) -> base64 ciphertext."""
+        return self._call("e2ee_encrypt_v2", channelId=channel_id, to=to,
+                           **{"from": frm}, senderKeyId=sender_key_id,
+                           receiverKeyId=receiver_key_id, contentType=content_type,
+                           sequenceNumber=sequence_number, plaintextB64=plaintext_b64)
+
+    def e2ee_decrypt_v2(self, channel_id: int, *, to: str, frm: str,
+                        sender_key_id: int, receiver_key_id: int,
+                        content_type: int, ciphertext_b64: str) -> str:
+        """Decrypt (V2) -> base64 plaintext."""
+        return self._call("e2ee_decrypt_v2", channelId=channel_id, to=to,
+                           **{"from": frm}, senderKeyId=sender_key_id,
+                           receiverKeyId=receiver_key_id, contentType=content_type,
+                           ciphertextB64=ciphertext_b64)
 
     # -- teardown ------------------------------------------------------------
     def close(self) -> None:

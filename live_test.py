@@ -204,6 +204,28 @@ def run(api: OkLine, *, to: Optional[str], image: Optional[str],
     else:
         r.skip("send_file", "pass --to <chat> and --file to test")
 
+    # --- E2EE (Letter Sealing) ---------------------------------------------
+    r.section("E2EE / Letter Sealing")
+    if api.e2ee.is_ready():
+        print(f"  (E2EE keys loaded: {len(api.e2ee.my_keys)} key(s))")
+        et = to or my_mid
+        if et:
+            r.check("send_encrypted_text",
+                    lambda: api.send_encrypted_text(et, "OkLine E2EE test"),
+                    summary=lambda m: f"id={m.get('id') if isinstance(m, dict) else m}")
+        # try to decrypt a recent sealed message from the first chat
+        if first_chat:
+            msgs = api.get_recent_messages(first_chat, 10) or []
+            sealed = [m for m in msgs if isinstance(m, dict) and m.get("chunks")]
+            if sealed:
+                r.check("decrypt_message", lambda: api.decrypt_message(sealed[0]),
+                        summary=lambda m: f"text={(m.get('text') or '')[:30]!r}")
+            else:
+                r.skip("decrypt_message", "no sealed messages in the first chat")
+    else:
+        r.skip("E2EE send/decrypt",
+               "keys not loaded — run with --qr (fresh QR login) to test E2EE")
+
     # --- recording ---------------------------------------------------------
     r.section("Recording")
     r.check("history captured", lambda: api.history,
@@ -260,6 +282,8 @@ def main(argv=None) -> int:
     p.add_argument("--image", help="image path to test send_image")
     p.add_argument("--file", help="file path to test send_file")
     p.add_argument("--listen", type=int, default=0, help="watch the event stream N seconds")
+    p.add_argument("--qr", action="store_true",
+                   help="log in fresh via QR (enables E2EE tests this session)")
     args = p.parse_args(argv)
 
     try:  # display names / messages may contain Thai or emoji
@@ -267,7 +291,21 @@ def main(argv=None) -> int:
     except Exception:
         pass
 
-    if args.token:
+    if args.qr:
+        from okline.qrterm import print_qr
+        api = OkLine()
+        print("Scan this QR with the LINE app, then enter/confirm the PIN:\n")
+        res = api.qr_login(on_qr=lambda u: print_qr(u),
+                           on_pin=lambda pin: print(f"\n>>> PIN: {pin}\n"))
+        if not res.access_token:
+            print("QR login did not complete.", file=sys.stderr)
+            return 2
+        try:
+            api.save_tokens(args.tokens_file)
+            print(f"(session saved to {args.tokens_file})")
+        except Exception:
+            pass
+    elif args.token:
         api = OkLine(access_token=args.token, redact=True)
     else:
         try:

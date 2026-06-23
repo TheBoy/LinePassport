@@ -93,6 +93,7 @@ class AuthFlows:
 
     def __init__(self, transport: Transport) -> None:
         self._t = transport
+        self.last_e2ee_login: Optional[dict] = None
 
     # -- shared --------------------------------------------------------------
     def get_rsa_key_info(self, provider: int = IdentityProvider.LINE) -> RSAKeyInfo:
@@ -242,16 +243,13 @@ class AuthFlows:
         # 4) issue the tokens.
         result = self.qr_login_v2(session, system_name=system_name or "CHROMEOS")
 
-        # 5) best-effort: unwrap the E2EE keychain so Letter-Sealed messages can
-        #    be read later (does not affect token issuance if it fails).
+        # 5) stash the E2EE login material (curve key handle + metaData) so an
+        #    E2EEManager can unwrap our Letter-Sealing keys (same process only).
         meta = (result.raw or {}).get("metaData") if isinstance(result.raw, dict) else None
-        if isinstance(meta, dict) and meta.get("keyId") is not None \
-                and meta.get("publicKey") and meta.get("encryptedKeyChain"):
-            try:
-                channel = bridge.e2ee_create_channel(curve_key_id, meta["publicKey"])
-                bridge.e2ee_unwrap_keychain(channel, meta["encryptedKeyChain"])
-            except Exception as exc:  # pragma: no cover - e2ee optional
-                log.warning("E2EE keychain unwrap failed (non-fatal): %s", exc)
+        if isinstance(meta, dict) and meta.get("publicKey") and meta.get("encryptedKeyChain"):
+            self.last_e2ee_login = {"curve_key_id": curve_key_id, "metadata": meta}
+        else:
+            self.last_e2ee_login = None
         return result
 
     def _poll(self, call: Callable[[], Any], max_count: int) -> Any:

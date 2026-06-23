@@ -70,6 +70,8 @@ class OkLine(AllServices):
         self.auth = AuthFlows(self.transport)
         self.ops = OperationReceiver(self.transport)
         self.obs = ObsClient(self.transport)
+        from .e2ee import E2EEManager
+        self.e2ee = E2EEManager(self)   # Letter Sealing (ready after qr_login)
         self._reqseq = 0
 
         # Response recording.
@@ -185,8 +187,30 @@ class OkLine(AllServices):
         return self.auth.email_login(email, password, **kw)
 
     def qr_login(self, **kw: Any) -> LoginResult:
-        """Shortcut for :meth:`AuthFlows.qr_login`."""
-        return self.auth.qr_login(**kw)
+        """QR login, then load our E2EE (Letter Sealing) keys for this session."""
+        result = self.auth.qr_login(**kw)
+        info = getattr(self.auth, "last_e2ee_login", None)
+        if info:
+            try:
+                self.e2ee.load_from_login(info["curve_key_id"], info["metadata"])
+            except Exception as exc:  # pragma: no cover - e2ee optional
+                log.warning("E2EE init failed (non-fatal): %s", exc)
+        return result
+
+    # -- E2EE (Letter Sealing) ----------------------------------------------
+    def decrypt_message(self, message: dict) -> dict:
+        """Decrypt a received Letter-Sealed message (needs E2EE keys from
+        :meth:`qr_login` this session). Returns the message with plaintext
+        ``text``; non-sealed messages are returned unchanged."""
+        from .e2ee_crypto import is_e2ee_message
+        if not is_e2ee_message(message):
+            return message
+        return self.e2ee.decrypt(message)
+
+    def send_encrypted_text(self, to: str, text: str, **kw: Any) -> Any:
+        """Send a Letter-Sealed text message (1:1)."""
+        from .models import Message as _M
+        return self.send_message(_M.text(to, text, **kw), encrypt=True)
 
     # -- media send (V1 / non-E2EE) -----------------------------------------
     def _send_media(self, to: str, data: bytes, content_type: int, *,

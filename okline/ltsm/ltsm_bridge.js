@@ -218,6 +218,30 @@ async function handle(req) {
       // returns an array of unwrapped E2EE key handles (numbers)
       return await send({ command: 'e2eechannel_unwrap_e2ee_key_chain',
         ltsmKeyId: req.channelId, payload: b64ToBytes(req.encKeyChainB64) });
+    case 'e2ee_get_key_id':
+      return await send({ command: 'e2eekey_get_key_id', ltsmKeyId: req.keyHandle });
+    case 'e2ee_public_key_for_handle': {
+      const pk = await send({ command: 'e2eekey_get_public_key', ltsmKeyId: req.keyHandle });
+      return bytesToB64(pk);
+    }
+    case 'e2ee_create_channel_with_pubkey':
+      // channel from one of *our* key handles and a peer public key (bytes)
+      return await send({ command: 'e2eekey_create_channel', ltsmKeyId: req.keyHandle,
+        payload: b64ToBytes(req.peerPubKeyB64) });
+    case 'e2ee_encrypt_v2': {
+      const ct = await send({ command: 'e2eechannel_encrypt_v2', ltsmKeyId: req.channelId,
+        payload: { to: req.to, from: req.from, senderKeyId: req.senderKeyId,
+          receiverKeyId: req.receiverKeyId, contentType: req.contentType,
+          sequenceNumber: req.sequenceNumber, plaintext: b64ToBytes(req.plaintextB64) } });
+      return bytesToB64(ct);
+    }
+    case 'e2ee_decrypt_v2': {
+      const pt = await send({ command: 'e2eechannel_decrypt_v2', ltsmKeyId: req.channelId,
+        payload: { to: req.to, from: req.from, senderKeyId: req.senderKeyId,
+          receiverKeyId: req.receiverKeyId, contentType: req.contentType,
+          ciphertext: b64ToBytes(req.ciphertextB64) } });
+      return bytesToB64(pt);
+    }
     default:
       throw new Error('unknown op: ' + req.op);
   }

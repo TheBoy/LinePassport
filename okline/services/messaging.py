@@ -10,17 +10,37 @@ from __future__ import annotations
 from typing import Any, Iterable, Optional
 
 from ..enums import ContentType, PredefinedReactionType, SyncReason
+from ..exceptions import LineApiError
 from ..models import Message
 
 
 class MessagingMixin:
     # -- sending -------------------------------------------------------------
-    def send_message(self, message: dict, req_seq: Optional[int] = None) -> Any:
-        """``sendMessage(reqSeq, Message)`` — body ``[reqSeq, message]``."""
+    def send_message(self, message: dict, req_seq: Optional[int] = None,
+                     encrypt: Optional[bool] = None) -> Any:
+        """``sendMessage(reqSeq, Message)`` — body ``[reqSeq, message]``.
+
+        If the conversation requires Letter Sealing the server rejects a plain
+        send with code 82 ("can not send using plain mode"); when an E2EE manager
+        is ready (after :meth:`qr_login`) the message is then encrypted and
+        re-sent automatically.  Pass ``encrypt=True`` to seal up-front.
+        """
+        e2ee = getattr(self, "e2ee", None)
+        if encrypt and e2ee is not None and not message.get("chunks"):
+            message = e2ee.encrypt(message)
         if req_seq is None:
             req_seq = self.next_req_seq()
-        return self.transport.call("Talk.TalkService.sendMessage",
-                                   [req_seq, message])
+        try:
+            return self.transport.call("Talk.TalkService.sendMessage",
+                                       [req_seq, message])
+        except LineApiError as exc:
+            # 82 == E2EE_RETRY_ENCRYPT — seal and resend, once.
+            if (exc.code == 82 and e2ee is not None and e2ee.is_ready()
+                    and not message.get("chunks")):
+                sealed = e2ee.encrypt(message)
+                return self.transport.call("Talk.TalkService.sendMessage",
+                                           [self.next_req_seq(), sealed])
+            raise
 
     def send_text(self, to: str, text: str, **kw: Any) -> Any:
         """Convenience: build a text :class:`Message` and send it."""
