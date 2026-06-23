@@ -103,11 +103,23 @@ class ObsClient:
         headers["X-Obs-Params"] = encode_obs_params(params)
         if enc_token:                       # OBS auth = encrypted access token
             headers["X-Line-Access"] = enc_token
+        import time
+        t0 = time.monotonic()
+        started = time.time()
         resp = self._t._send("POST", url, headers=headers, data=data)  # noqa: SLF001
+        err = None
         if resp.status_code >= 400:
             from .exceptions import LineApiError
-            raise LineApiError(f"OBS upload failed: HTTP {resp.status_code}",
+            err = LineApiError(f"OBS upload failed: HTTP {resp.status_code}",
                                status=resp.status_code, path=url, raw=resp.text)
+        # record the upload so it shows up in api.last / api.dump()
+        self._t._record_exchange(  # noqa: SLF001
+            "POST", url, f"/r/{service}/{sid}/{oid}", "OBS.uploadMessageObject",
+            {**headers, "X-Obs-Params": headers.get("X-Obs-Params", "")},
+            f"<{len(data)} bytes: {obs_type}>", resp, None, err, t0, started,
+            decode_text=True)
+        if err:
+            raise err
         return _json(resp)
 
     def object_info(self, path: str, *, talk_meta: Optional[str] = None) -> Any:
