@@ -136,8 +136,9 @@ class ChatsMixin:
     GET_CHATS_LIMIT = 100
 
     def get_chats(self, chat_mids: Iterable[str], *, with_members: bool = True,
-                  with_invitees: bool = True) -> Any:
-        """``getChats(request)`` -> ``{chats: [Chat]}``.
+                  with_invitees: bool = True,
+                  sync_reason: int = int(SyncReason.FULL_SYNC)) -> Any:
+        """``getChats(request, syncReason)`` -> ``{chats: [Chat]}``.
 
         Automatically chunked at :attr:`GET_CHATS_LIMIT` mids per request and the
         ``chats`` lists merged, so you can pass an unbounded number of chat mids.
@@ -149,7 +150,7 @@ class ChatsMixin:
                 "chatMids": batch,
                 "withMembers": with_members,
                 "withInvitees": with_invitees,
-            }])
+            }, sync_reason])
 
         if len(mids) <= self.GET_CHATS_LIMIT:
             return _call(mids)

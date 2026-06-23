@@ -99,6 +99,21 @@ class TestContactListingLookup:
 
         assert last_request(api)[0]["targetUserMids"] == [USER_MID, USER_MID2]
 
+    def test_get_contacts_chunks_over_the_limit(self, make_api):
+        """>100 mids are split into <=100-mid requests and the maps merged."""
+        api = make_api()
+        sizes = []
+
+        def fake_call(endpoint, args, **kw):
+            mids = args[0]["targetUserMids"]
+            sizes.append(len(mids))
+            return {"contacts": {m: {"contact": {"mid": m}} for m in mids}}
+
+        api.transport.call = fake_call
+        res = api.get_contacts([f"U{i}" for i in range(250)])
+        assert sizes == [100, 100, 50]
+        assert len(res["contacts"]) == 250
+
     def test_find_contact_by_userid(self, make_api, last_request):
         """findContactByUserid sends the search id as the single positional arg."""
         api = make_api(route({"findContactByUserid": SAMPLE_CONTACT}))
@@ -391,12 +406,13 @@ class TestChatListing:
         assert result == {"chats": [{"chatMid": GROUP_MID}]}
         assert_endpoint(api, "TalkService", "getChats")
         body = last_request(api)
-        assert len(body) == 1
+        assert len(body) == 2          # struct + syncReason (matches the real client)
         assert body[0] == {
             "chatMids": [GROUP_MID],
             "withMembers": True,
             "withInvitees": True,
         }
+        assert body[1] == int(SyncReason.FULL_SYNC)
 
     def test_get_chats_flags_overridable(self, make_api, last_request):
         """withMembers / withInvitees default to True but can be turned off."""

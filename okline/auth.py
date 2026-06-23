@@ -288,7 +288,7 @@ class AuthFlows:
         return access
 
     def logout(self) -> Any:
-        return self._t.call("Talk.AuthService.logoutV2", [{}])
+        return self._t.call("Talk.AuthService.logoutV2", [])
 
     # -- internal ------------------------------------------------------------
     def _adopt(self, result: LoginResult) -> None:

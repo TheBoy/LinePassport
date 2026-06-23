@@ -34,9 +34,12 @@ class MessagingMixin:
             return self.transport.call("Talk.TalkService.sendMessage",
                                        [req_seq, message])
         except LineApiError as exc:
-            # 82 == E2EE_RETRY_ENCRYPT — seal and resend, once.
+            # 82 == E2EE_RETRY_ENCRYPT — seal and resend, once.  Only text/location
+            # (contentType NONE=0) can be Letter-Sealed this way; a media/sticker
+            # placeholder (IMAGE/VIDEO/…) must NOT be re-sealed (it has no text).
             if (exc.code == 82 and e2ee is not None and e2ee.is_ready()
-                    and not message.get("chunks")):
+                    and not message.get("chunks")
+                    and int(message.get("contentType", 0)) == 0):
                 sealed = e2ee.encrypt(message)
                 return self.transport.call("Talk.TalkService.sendMessage",
                                            [self.next_req_seq(), sealed])

@@ -14,16 +14,34 @@ class ContactsMixin:
         return self.transport.call("Talk.TalkService.getAllContactIds",
                                    [sync_reason])
 
+    #: ``getContactsV2`` rejects more than this many mids per call (``Invalid
+    #: Length``), so requests are chunked and the ``contacts`` maps merged.
+    GET_CONTACTS_LIMIT = 100
+
     def get_contacts(self, mids: Iterable[str],
                      sync_reason: int = int(SyncReason.FULL_SYNC)) -> Any:
         """``getContactsV2(request, syncReason)``.
 
-        Returns ``{contacts: {mid: {contact: Contact}}}``.
+        Returns ``{contacts: {mid: {contact: Contact}}}``.  Automatically chunked
+        at :attr:`GET_CONTACTS_LIMIT` mids per request, so you can pass any number
+        of mids.
         """
-        return self.transport.call("Talk.TalkService.getContactsV2", [{
-            "targetUserMids": list(mids),
-            "neededContactCalendarEvents": [],
-        }, sync_reason])
+        all_mids = list(mids)
+
+        def _call(batch):
+            return self.transport.call("Talk.TalkService.getContactsV2", [{
+                "targetUserMids": batch,
+                "neededContactCalendarEvents": [],
+            }, sync_reason])
+
+        if len(all_mids) <= self.GET_CONTACTS_LIMIT:
+            return _call(all_mids)
+        contacts: dict = {}
+        for i in range(0, len(all_mids), self.GET_CONTACTS_LIMIT):
+            res = _call(all_mids[i:i + self.GET_CONTACTS_LIMIT])
+            if isinstance(res, dict):
+                contacts.update(res.get("contacts", {}) or {})
+        return {"contacts": contacts}
 
     def find_contact_by_userid(self, user_id: str) -> Any:
         """``findContactByUserid(searchId)`` -> single Contact."""

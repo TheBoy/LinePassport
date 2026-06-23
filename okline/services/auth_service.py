@@ -19,7 +19,7 @@ class AuthServiceMixin:
                                    require_auth=False)
 
     def logout_v2(self) -> Any:
-        return self.transport.call("Talk.AuthService.logoutV2", [{}])
+        return self.transport.call("Talk.AuthService.logoutV2", [])
 
     def confirm_e2ee_login(self, verifier: str, device_secret: str) -> Any:
         """``confirmE2EELogin(verifier, deviceSecret)`` -> new verifier token."""

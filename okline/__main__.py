@@ -97,8 +97,38 @@ def _need_auth(api: OkLine) -> None:
                          "(or pass --token / --tokens-file)")
 
 
+def _node_ok() -> bool:
+    """Friendly up-front check that Node.js (needed for X-Hmac) is on PATH."""
+    from .hmac_signer import LtsmBridge
+    if LtsmBridge.is_available():
+        return True
+    print("OkLine needs Node.js 18+ on your PATH to sign requests (X-Hmac).\n"
+          "  Install it from https://nodejs.org , then check:  node --version\n"
+          "  (installed elsewhere? set  LINE_NODE=/full/path/to/node )",
+          file=sys.stderr)
+    return False
+
+
+def _resolve_to(api: OkLine, to: str) -> str:
+    """Accept a mid directly, or resolve a (unique) contact name to its mid."""
+    if to[:1].lower() in ("u", "c", "r") and len(to) >= 20:
+        return to
+    matches = [(m, n) for m, n in _contact_names(api).items()
+               if to.lower() in n.lower()]
+    if len(matches) == 1:
+        print(f"  -> {matches[0][1]} ({matches[0][0]})")
+        return matches[0][0]
+    if not matches:
+        raise SystemExit(f"no contact matching {to!r} — pass a mid, or try `okline find`")
+    raise SystemExit(f"{len(matches)} contacts match {to!r}: "
+                     + ", ".join(n for _, n in matches[:8])
+                     + " — be more specific or use the mid")
+
+
 # -- session / identity -----------------------------------------------------
 def cmd_login(args: argparse.Namespace) -> int:
+    if not _node_ok():
+        return 2
     from .qrterm import print_qr
     api = OkLine(record=False, redact=not args.show_secrets)
 
@@ -184,6 +214,27 @@ def cmd_profile(args: argparse.Namespace) -> int:
 def cmd_version(args: argparse.Namespace) -> int:
     print(f"OkLine {__version__} (emulates LINE CHROMEOS 3.7.2)")
     return 0
+
+
+def cmd_logout(args: argparse.Namespace) -> int:
+    import os
+
+    def run(api: OkLine):
+        if api.tokens.access_token:
+            try:
+                api.auth.logout()
+                print("logged out (server session invalidated)")
+            except Exception as exc:  # noqa: BLE001
+                print(f"server logout failed (continuing): {exc}", file=sys.stderr)
+    code = _go(args, run)
+    path = getattr(args, "tokens_file", None) or "tokens.json"
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+            print(f"removed local session {path}")
+        except OSError as exc:
+            print(f"could not remove {path}: {exc}", file=sys.stderr)
+    return code
 
 
 def cmd_menu(args: argparse.Namespace) -> int:
@@ -341,6 +392,7 @@ def cmd_accept(args: argparse.Namespace) -> int:
 def cmd_send(args: argparse.Namespace) -> int:
     def run(api: OkLine):
         _need_auth(api)
+        args.to = _resolve_to(api, args.to)
         if args.image:
             res = api.send_image(args.to, args.image)
         elif args.file:
@@ -382,10 +434,18 @@ def cmd_broadcast(args: argparse.Namespace) -> int:
         print(f"sending to {len(args.to)} target(s): {args.message!r}")
         if not args.yes and input("proceed? [y/N] ").strip().lower() != "y":
             print("cancelled"); return
+        from .enums import ErrorCode
+        from .exceptions import LineApiError
+        abuse = {int(ErrorCode.EXCESSIVE_ACCESS), int(ErrorCode.ABUSE_BLOCK)}
         ok = 0
         for mid in args.to:
             try:
                 api.send_text(mid, args.message); ok += 1; print(f"  sent -> {mid}")
+            except LineApiError as exc:
+                print(f"  FAIL -> {mid}: {exc}")
+                if getattr(exc, "code", None) in abuse:
+                    print("  LINE rate-limited / blocked this account — stopping.")
+                    break
             except Exception as exc:  # noqa: BLE001
                 print(f"  FAIL -> {mid}: {exc}")
         print(f"\n{ok}/{len(args.to)} delivered")
@@ -609,6 +669,8 @@ def cmd_selftest(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="okline", description="OkLine — a full LINE client in your terminal")
+    p.add_argument("--version", "-V", action="version",
+                   version=f"OkLine {__version__} (emulates LINE CHROMEOS 3.7.2)")
 
     auth = argparse.ArgumentParser(add_help=False)
     auth.add_argument("--token", help="X-Line-Access token (or env LINE_ACCESS_TOKEN)")
@@ -619,8 +681,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = p.add_subparsers(dest="command", required=False, metavar="<command>")
 
-    def add(name, fn, help, *, parents=(auth,)):
-        s = sub.add_parser(name, parents=list(parents), help=help)
+    def add(name, fn, help, *, parents=(auth,), aliases=()):
+        s = sub.add_parser(name, parents=list(parents), help=help, aliases=list(aliases))
         s.set_defaults(func=fn)
         return s
 
@@ -628,10 +690,12 @@ def build_parser() -> argparse.ArgumentParser:
     add("menu", cmd_menu, "interactive menu UI (the default — just run `okline`)")
 
     # session / identity
-    s = add("login", cmd_login, "scan a QR to log in and save the session")
+    s = add("login", cmd_login, "scan a QR to log in and save the session",
+            aliases=["qr-login"])
     s.add_argument("--save", help="session file to write (default tokens.json)")
     s.add_argument("--wait", type=float, default=180.0, help="seconds to wait for scan/PIN")
     s.add_argument("--invert", action="store_true", help="invert QR colours (light terminal)")
+    add("logout", cmd_logout, "log out and remove the local session file")
     add("whoami", cmd_whoami, "your profile + account stats")
     s = add("profile", cmd_profile, "print your profile, or another user's by mid")
     s.add_argument("mid", nargs="?", help="a user mid to look up (default: yourself)")
@@ -672,9 +736,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--sticker", nargs=2, metavar=("PKG", "STK"))
     s.add_argument("--location", nargs=2, type=float, metavar=("LAT", "LON"))
     s.add_argument("--title", help="location title")
-    s = add("react", cmd_react, "react to a message")
+    s = add("react", cmd_react, "react to a message: okline react <id> LOVE")
     s.add_argument("message_id")
-    s.add_argument("--reaction", default="NICE",
+    s.add_argument("reaction", nargs="?", default="NICE",
                    choices=["NICE", "LOVE", "FUN", "AMAZING", "SAD", "OMG"])
     s = add("unsend", cmd_unsend, "recall one of your messages")
     s.add_argument("message_id")

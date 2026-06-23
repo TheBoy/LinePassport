@@ -150,6 +150,15 @@ class Bot:
             if self.ignore_self and self._self_mid and \
                     op.message.get("from") == self._self_mid:
                 return
+            # transparently decrypt Letter-Sealed messages so ctx.text is the
+            # plaintext (the ciphertext lives in `chunks`, not `text`).
+            if op.message.get("chunks"):
+                e2ee = getattr(self.api, "e2ee", None)
+                if e2ee is not None and e2ee.is_ready():
+                    try:
+                        op.message = self.api.decrypt_message(op.message)
+                    except Exception as exc:  # noqa: BLE001
+                        log.debug("bot: could not decrypt message: %s", exc)
             ctx = MessageContext(self.api, self, op, message=op.message)
             if self.auto_mark_read:
                 self._safe(ctx.mark_read)

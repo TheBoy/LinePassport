@@ -27,7 +27,12 @@ def _names(api: Any) -> Dict[str, str]:
 # -- session ----------------------------------------------------------------
 def _qr_login(path: str) -> Optional[Any]:
     from .client import OkLine
+    from .hmac_signer import LtsmBridge
     from .qrterm import print_qr
+    if not LtsmBridge.is_available():
+        print(ui.warn("  Node.js 18+ is required to sign requests (X-Hmac).") + "\n"
+              + ui.dim("  Install from https://nodejs.org, run `node --version`, then retry."))
+        return None
     api = OkLine(record=False)
     print("\n" + ui.title("Scan this QR with the LINE app")
           + ui.dim("  (Settings › Add friends › QR code)") + "\n")
@@ -112,8 +117,26 @@ def act_find(api: Any) -> None:
     ui.table([[ui.dim(m), n] for m, n in hits])
 
 
+def _resolve_to(api: Any, to: str) -> Optional[str]:
+    """A mid, or a (unique) contact-name match -> its mid."""
+    if not to:
+        return None
+    if to[:1].lower() in ("u", "c", "r") and len(to) >= 20:
+        return to
+    matches = [(m, n) for m, n in _names(api).items() if to.lower() in n.lower()]
+    if len(matches) == 1:
+        print(ui.dim(f"  -> {matches[0][1]} ({matches[0][0]})"))
+        return matches[0][0]
+    if not matches:
+        print(ui.warn(f"  no contact matching {to!r}"))
+    else:
+        print(ui.warn(f"  {len(matches)} match {to!r}: ")
+              + ", ".join(n for _, n in matches[:8]))
+    return None
+
+
 def act_send(api: Any) -> None:
-    to = ui.prompt("send to (mid)")
+    to = _resolve_to(api, ui.prompt("send to (mid or name)"))
     if not to:
         return
     text = ui.prompt("message")
