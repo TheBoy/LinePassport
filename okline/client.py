@@ -114,22 +114,42 @@ class OkLine(AllServices):
 
     # -- session persistence -------------------------------------------------
     def save_tokens(self, path: Optional[str] = None) -> None:
-        """Save the current credentials to a JSON session file."""
+        """Save the current credentials to a JSON session file.
+
+        If E2EE is active (after ``qr_login``), the unwrapped keychain is exported
+        into the file too, so Letter Sealing keeps working across runs without a
+        fresh QR login.
+        """
         from .session import Session
         path = path or self._session_path
         if not path:
             raise ValueError("no path given and no session file attached")
         self._session_path = path
-        Session.from_tokens(self.transport.tokens).save(path)
+        s = Session.from_tokens(self.transport.tokens)
+        try:
+            if self.e2ee.is_ready():
+                s.e2ee = self.e2ee.export_keys()
+        except Exception as exc:  # pragma: no cover - e2ee optional
+            log.warning("E2EE export for session failed (non-fatal): %s", exc)
+        s.save(path)
 
     @classmethod
     def from_tokens_file(cls, path: str, **kw: Any) -> "OkLine":
-        """Build a client from a session file (and auto-save refreshed tokens)."""
+        """Build a client from a session file (and auto-save refreshed tokens).
+
+        Restores the E2EE keychain from the file if present, so Letter Sealing is
+        available without re-scanning a QR code.
+        """
         from .session import Session
         s = Session.load(path)
         api = cls(access_token=s.access_token, refresh_token=s.refresh_token,
                   certificate=s.certificate, mid=s.mid, **kw)
         api._session_path = path
+        if s.e2ee:
+            try:
+                api.e2ee.load_from_export(s.e2ee)
+            except Exception as exc:  # pragma: no cover - e2ee optional
+                log.warning("E2EE restore from session failed (non-fatal): %s", exc)
         return api
 
     def next_req_seq(self) -> int:

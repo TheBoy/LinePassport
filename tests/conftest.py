@@ -126,6 +126,16 @@ class FakeBridge:
     def e2ee_unwrap_keychain(self, channel_id: int, enc_keychain_b64: str) -> list:
         return [1, 2]
 
+    def e2ee_get_key_id(self, handle: int) -> int:
+        return 5000000 + int(handle)
+
+    def e2ee_export_key(self, handle: int) -> str:
+        return base64.b64encode(f"exported:{handle}".encode()).decode("ascii")
+
+    def e2ee_load_key(self, exported_b64: str) -> int:
+        raw = base64.b64decode(exported_b64).decode()
+        return int(raw.split(":", 1)[1])      # round-trips e2ee_export_key
+
     def close(self) -> None:
         pass
 

@@ -18,8 +18,8 @@ token is refreshed, so the session stays valid across runs.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -31,16 +31,23 @@ class Session:
     certificate: Optional[str] = None
     mid: Optional[str] = None
     region_code: Optional[str] = None
+    #: Exported E2EE keychain (``E2EEManager.export_keys()``) so Letter Sealing
+    #: works across sessions without a fresh QR login.  Private-key material —
+    #: keep the file secret.
+    e2ee: Optional[Dict[str, Any]] = None
 
     # JSON uses the camelCase keys the rest of the ecosystem expects.
     def to_dict(self) -> dict:
-        return {
+        d = {
             "accessToken": self.access_token,
             "refreshToken": self.refresh_token,
             "certificate": self.certificate,
             "mid": self.mid,
             "regionCode": self.region_code,
         }
+        if self.e2ee:
+            d["e2ee"] = self.e2ee
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Session":
@@ -51,6 +58,7 @@ class Session:
             certificate=d.get("certificate"),
             mid=d.get("mid"),
             region_code=d.get("regionCode") or d.get("region_code"),
+            e2ee=d.get("e2ee"),
         )
 
     def save(self, path: str) -> None:

@@ -269,6 +269,21 @@ async function handle(req) {
         payload: b64ToBytes(req.ciphertextB64) });
       return bytesToB64(pt);
     }
+    case 'e2ee_export_key': {
+      // serialize an unwrapped private-key handle so it can be persisted and
+      // re-loaded in a future process (cross-session E2EE).
+      const bytes = await send({ command: 'e2eekey_export_key', ltsmKeyId: req.keyHandle });
+      return bytesToB64(bytes);
+    }
+    case 'e2ee_load_key':
+      // re-import an exported key blob -> a fresh numeric key handle. NOTE: the
+      // payload is at the TOP level (not under ltsmKeyId), per the bundle wrapper.
+      return await send({ command: 'e2eekey_load_key', payload: b64ToBytes(req.exportedB64) });
+    case 'e2ee_unwrap_group_shared_key':
+      // channel = e2eekey_create_channel(myKeyHandle, groupCreatorPubKey); this
+      // unwraps the group's encrypted shared key -> a group-key handle (number).
+      return await send({ command: 'e2eechannel_unwrap_group_shared_key',
+        ltsmKeyId: req.channelId, payload: b64ToBytes(req.encSharedKeyB64) });
     default:
       throw new Error('unknown op: ' + req.op);
   }

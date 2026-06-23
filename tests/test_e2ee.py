@@ -54,6 +54,53 @@ def test_message_e2ee_version():
     assert fr.message_e2ee_version({}) == 2
 
 
+# --- cross-session key persistence -----------------------------------------
+def test_session_persists_e2ee_keychain(tmp_path):
+    from okline.session import Session
+    exp = {"mid": "Ume", "latestKeyId": 5312832, "keys": {"5312832": "QkxPQg=="}}
+    p = str(tmp_path / "sess.json")
+    Session(access_token="T", mid="Ume", e2ee=exp).save(p)
+    assert Session.load(p).e2ee == exp
+    # a session with no E2EE omits the key from the file entirely
+    p2 = str(tmp_path / "plain.json")
+    Session(access_token="T").save(p2)
+    assert "e2ee" not in json.loads(open(p2, encoding="utf-8").read())
+
+
+def test_e2ee_manager_export_load_roundtrip():
+    from conftest import FakeBridge
+    api = build_api(bridge=FakeBridge())
+    mgr = api.e2ee
+    mgr.my_mid, mgr.my_keys, mgr.latest_key_id = "Ume", {5312832: 10, 5312833: 11}, 5312833
+    exp = mgr.export_keys()
+    assert exp["mid"] == "Ume" and exp["latestKeyId"] == 5312833
+    assert set(exp["keys"]) == {"5312832", "5312833"}
+
+    api2 = build_api(bridge=FakeBridge())          # fresh process / no QR login
+    assert api2.e2ee.load_from_export(exp) is True
+    assert api2.e2ee.my_keys == {5312832: 10, 5312833: 11}
+    assert api2.e2ee.latest_key_id == 5312833 and api2.e2ee.my_mid == "Ume"
+    api.close(); api2.close()
+
+
+def test_e2ee_export_empty_when_not_ready():
+    from conftest import FakeBridge
+    api = build_api(bridge=FakeBridge())
+    assert api.e2ee.export_keys() == {}                 # no keys loaded
+    assert api.e2ee.load_from_export({"keys": {}}) is False
+    api.close()
+
+
+# --- group vs 1:1 routing --------------------------------------------------
+def test_e2ee_is_group_routing():
+    g = __import__("okline.e2ee", fromlist=["E2EEManager"]).E2EEManager._is_group
+    assert g({"to": "C" + "a" * 32, "toType": 2})       # group by toType
+    assert g({"to": "Cabc", "toType": 0})               # group by prefix (upper)
+    assert g({"to": "rabc"})                            # room (legacy lower)
+    assert not g({"to": "U" + "a" * 32, "toType": 0})   # 1:1 user
+    assert not g({"to": "Uabc"})
+
+
 def test_plaintext_roundtrip():
     msg = {"text": "สวัสดี 👋", "contentType": 0, "contentMetadata": {}}
     pt = fr.serialize_plaintext(msg)

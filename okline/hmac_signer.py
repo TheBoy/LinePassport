@@ -195,6 +195,26 @@ class LtsmBridge:
         return self._call("e2ee_decrypt_v1", channelId=channel_id,
                            ciphertextB64=ciphertext_b64)
 
+    # -- cross-session key persistence --------------------------------------
+    def e2ee_export_key(self, key_handle: int) -> str:
+        """Serialize a private-key handle (``E2EEKey.exportKey()``) -> base64."""
+        return self._call("e2ee_export_key", keyHandle=key_handle)
+
+    def e2ee_load_key(self, exported_b64: str) -> int:
+        """Re-import an exported key blob -> a fresh key handle."""
+        return self._call("e2ee_load_key", exportedB64=exported_b64)
+
+    # -- group Letter Sealing -----------------------------------------------
+    def e2ee_unwrap_group_shared_key(self, channel_id: int, *,
+                                     enc_shared_key_b64: str) -> int:
+        """Unwrap a group's encrypted shared key -> a group-key handle.
+
+        ``channel_id`` must be a channel built from *my* key handle + the group
+        creator's public key (``e2ee_create_channel_with_pubkey``).
+        """
+        return self._call("e2ee_unwrap_group_shared_key", channelId=channel_id,
+                           encSharedKeyB64=enc_shared_key_b64)
+
     # -- teardown ------------------------------------------------------------
     def close(self) -> None:
         with self._lock:

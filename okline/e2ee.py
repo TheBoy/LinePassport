@@ -1,22 +1,25 @@
-"""E2EE (Letter Sealing) for 1:1 messages.
+"""E2EE (Letter Sealing) — 1:1 **and** group.
 
 Ties together the WASM bridge (key handles + encrypt/decrypt) and the framing in
-:mod:`okline.e2ee_crypto`.  Live-verified end-to-end: encrypted **send** (V2) and
-**decrypt of received messages** (both **V1** and **V2** wire formats).
+:mod:`okline.e2ee_crypto`.  Live-verified: encrypted **send** (V2) and **decrypt**
+(V1 and V2) for **1:1**; **group** decrypt + send-when-a-group-key-exists reuse the
+same crypto with a group shared key.  :meth:`E2EEManager.encrypt` /
+:meth:`~E2EEManager.decrypt` route on the target (group vs user) automatically.
 
 Scope / how it works
 --------------------
 The E2EE private keys live in the keychain that is unwrapped **during QR login**
 (``qrCodeLoginV2`` -> ``metaData.encryptedKeyChain``).  So:
 
-* call ``api.auth.qr_login(...)`` then use E2EE **in the same process** — the
-  manager captures the unwrapped key handles automatically (see
-  :meth:`E2EEManager.load_from_login`);
-* cross-session reuse (from a saved token) needs LINE's secure-storage layer and
-  is not implemented yet.
+* call ``api.auth.qr_login(...)`` then use E2EE in the same process (the manager
+  captures the unwrapped handles, see :meth:`E2EEManager.load_from_login`); **or**
+* **persist + reload across sessions** — :meth:`E2EEManager.export_keys` serializes
+  the keychain (saved by ``save_tokens``) and :meth:`~E2EEManager.load_from_export`
+  restores it (by ``from_tokens_file``), so E2EE works without a fresh QR scan.
 
-Only **user (1:1)** messages are handled here; group Letter Sealing uses shared
-group keys (not yet wired).
+Group shared keys are fetched (``getLastE2EEGroupSharedKey``) and unwrapped via the
+WASM at runtime, then cached.  Creating a brand-new group key for the very first
+encrypted message in a group (``registerE2EEGroupKey``) is not implemented.
 """
 
 from __future__ import annotations
@@ -39,6 +42,8 @@ class E2EEManager:
         self.latest_key_id: Optional[int] = None
         # peer mid -> (channel, my_key_id, peer_key_id)
         self._peer_channels: Dict[str, Tuple[int, int, int]] = {}
+        # (group mid, group key id) -> unwrapped group-shared-key handle
+        self._group_keys: Dict[Tuple[str, int], int] = {}
         self._seq = 0
 
     @property
@@ -76,6 +81,48 @@ class E2EEManager:
         if not self.my_mid:
             self.my_mid = getattr(self.api.tokens, "mid", None)
         log.info("E2EE ready: %d key(s), latest=%s", len(self.my_keys), self.latest_key_id)
+        return self.is_ready()
+
+    # -- cross-session persistence ------------------------------------------
+    def export_keys(self) -> Dict[str, Any]:
+        """Serialize the unwrapped keychain so it survives the process.
+
+        Mirrors the extension's ``exportedKeyMap`` (``E2EEKey.exportKey()`` per
+        keyId).  Persist the result (e.g. in the session file) and feed it to
+        :meth:`load_from_export` next run to use E2EE **without a fresh QR login**.
+
+        ⚠️ The blobs are private-key material — store them as carefully as the
+        access token.
+        """
+        if not self.is_ready():
+            return {}
+        keys: Dict[str, str] = {}
+        for kid, handle in self.my_keys.items():
+            try:
+                keys[str(kid)] = self._bridge.e2ee_export_key(handle)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("E2EE export of key %s failed: %s", kid, exc)
+        return {"mid": self.my_mid, "latestKeyId": self.latest_key_id, "keys": keys}
+
+    def load_from_export(self, data: Dict[str, Any]) -> bool:
+        """Rebuild the keychain from :meth:`export_keys` output (no QR needed)."""
+        keys = (data or {}).get("keys") or {}
+        if not keys:
+            return False
+        self.my_keys.clear()
+        for kid_s, blob in keys.items():
+            try:
+                self.my_keys[int(kid_s)] = int(self._bridge.e2ee_load_key(blob))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("E2EE load of key %s failed: %s", kid_s, exc)
+        if not self.my_keys:
+            return False
+        latest = data.get("latestKeyId")
+        self.latest_key_id = (int(latest) if latest is not None
+                              and int(latest) in self.my_keys else max(self.my_keys))
+        if not self.my_mid:
+            self.my_mid = data.get("mid") or getattr(self.api.tokens, "mid", None)
+        log.info("E2EE restored: %d key(s), latest=%s", len(self.my_keys), self.latest_key_id)
         return self.is_ready()
 
     # -- channels ------------------------------------------------------------
@@ -117,9 +164,42 @@ class E2EEManager:
             raise RuntimeError(f"no public key for sender {sender_mid}")
         return self._bridge.e2ee_create_channel_with_pubkey(my_handle, pub_b64)
 
-    # -- encrypt / decrypt ---------------------------------------------------
+    # -- encrypt / decrypt (routers) -----------------------------------------
+    @staticmethod
+    def _is_group(message: Dict[str, Any]) -> bool:
+        """A group/room/square target (vs a 1:1 user)."""
+        if int(message.get("toType", 0) or 0) in (1, 2, 4):   # ROOM, GROUP, SQUARE_CHAT
+            return True
+        return (message.get("to") or "")[:1].lower() in ("c", "r", "s")
+
     def encrypt(self, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Encrypt a 1:1 message dict -> sealed Message (with ``chunks``)."""
+        """Encrypt a message dict -> sealed Message (with ``chunks``).
+
+        Routes to **group** Letter Sealing for group/room targets, else **1:1**.
+        """
+        return (self._encrypt_group if self._is_group(message)
+                else self._encrypt_user)(message)
+
+    def decrypt(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Decrypt a received sealed message -> plain message dict.
+
+        Handles **V1** and **V2** framing (dispatched on
+        ``contentMetadata.e2eeVersion``) for both **1:1** and **group** messages.
+        """
+        return (self._decrypt_group if self._is_group(message)
+                else self._decrypt_user)(message)
+
+    def _finish_decrypt(self, message: Dict[str, Any], pt_b64: str) -> Dict[str, Any]:
+        plain = fr.deserialize_plaintext(base64.b64decode(pt_b64))
+        out = dict(message)
+        out["text"] = plain.get("text")
+        if plain.get("location") is not None:
+            out["location"] = plain["location"]
+        out["_decrypted"] = True
+        return out
+
+    # -- 1:1 -----------------------------------------------------------------
+    def _encrypt_user(self, message: Dict[str, Any]) -> Dict[str, Any]:
         to = message["to"]
         frm = message.get("from") or self.my_mid
         channel, my_kid, peer_kid = self._channel_for_send(to)
@@ -129,27 +209,17 @@ class E2EEManager:
             content_type=int(message.get("contentType", 0)),
             sequence_number=self._next_seq(),
             plaintext_b64=base64.b64encode(plaintext).decode("ascii"))
-        ciphertext = base64.b64decode(ct_b64)
-        chunks = fr.build_chunks(ciphertext, my_kid, peer_kid)
+        chunks = fr.build_chunks(base64.b64decode(ct_b64), my_kid, peer_kid)
         # EL() drops text/location/from — the gateway 500s if `from`/`text:null`
         # are present (the server populates `from` from the auth token).
         return fr.build_e2ee_message(message, chunks, 2)
 
-    def decrypt(self, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Decrypt a received sealed 1:1 message -> plain message dict.
-
-        Handles both Letter-Sealing **V1** (legacy: ``decryptV1(channel, ciphertext)``,
-        chunks concatenated in order) and **V2** (chunks salt/tag swapped, AAD =
-        to/from/keyIds/contentType), dispatched on ``contentMetadata.e2eeVersion``.
-        """
+    def _decrypt_user(self, message: Dict[str, Any]) -> Dict[str, Any]:
         chunks = message.get("chunks") or []
         version = fr.message_e2ee_version(message)
-        sender = message.get("from")
-        to = message.get("to")
-        if version == 1:
-            ciphertext, sender_key_id, receiver_key_id = fr.parse_chunks_v1(chunks)
-        else:
-            ciphertext, sender_key_id, receiver_key_id = fr.parse_chunks(chunks)
+        sender, to = message.get("from"), message.get("to")
+        parse = fr.parse_chunks_v1 if version == 1 else fr.parse_chunks
+        ciphertext, sender_key_id, receiver_key_id = parse(chunks)
         channel = self._channel_for_receive(sender, sender_key_id or 0,
                                             receiver_key_id or 0)
         ct_b64 = base64.b64encode(ciphertext).decode("ascii")
@@ -159,15 +229,81 @@ class E2EEManager:
             pt_b64 = self._bridge.e2ee_decrypt_v2(
                 channel, to=to, frm=sender, sender_key_id=sender_key_id or 0,
                 receiver_key_id=receiver_key_id or 0,
-                content_type=int(message.get("contentType", 0)),
-                ciphertext_b64=ct_b64)
-        plain = fr.deserialize_plaintext(base64.b64decode(pt_b64))
-        out = dict(message)
-        out["text"] = plain.get("text")
-        if plain.get("location") is not None:
-            out["location"] = plain["location"]
-        out["_decrypted"] = True
-        return out
+                content_type=int(message.get("contentType", 0)), ciphertext_b64=ct_b64)
+        return self._finish_decrypt(message, pt_b64)
+
+    # -- group ---------------------------------------------------------------
+    def _user_pub(self, mid: str, key_id: int) -> str:
+        """The Curve25519 public key (base64) of ``mid`` for ``key_id``."""
+        pk = self.api.get_e2ee_public_key(mid, 1, int(key_id))
+        data = pk.get("keyData") if isinstance(pk, dict) else None
+        if not data:
+            raise RuntimeError(f"no E2EE public key for {mid} keyId={key_id}")
+        return data
+
+    def _group_key_handle(self, group_mid: str,
+                          group_key_id: Optional[int] = None) -> Tuple[int, int]:
+        """Fetch + unwrap a group shared key -> ``(handle, group_key_id)`` (cached).
+
+        ``group_key_id=None`` resolves the **latest** key for the group.  Unwrap =
+        ECDH(my key, group creator's public key) then ``unwrap_group_shared_key``.
+        """
+        if group_key_id is not None and (group_mid, int(group_key_id)) in self._group_keys:
+            return self._group_keys[(group_mid, int(group_key_id))], int(group_key_id)
+        if group_key_id is None:
+            gsk = self.api.get_last_e2ee_group_shared_key(group_mid)
+        else:
+            gsk = self.api.get_e2ee_group_shared_key(group_mid, int(group_key_id))
+        if not isinstance(gsk, dict) or not gsk.get("encryptedSharedKey"):
+            raise RuntimeError(f"no E2EE group shared key for {group_mid} "
+                               "(first-message key creation is not implemented)")
+        gkid = int(gsk.get("groupKeyId", group_key_id or 0))
+        if (group_mid, gkid) in self._group_keys:
+            return self._group_keys[(group_mid, gkid)], gkid
+        recv_kid = int(gsk.get("receiverKeyId") or self.latest_key_id or 0)
+        my_handle = self.my_keys.get(recv_kid) or self.my_keys.get(self.latest_key_id)
+        if my_handle is None:
+            raise RuntimeError("no local E2EE key to unwrap the group key")
+        unwrap_channel = self._bridge.e2ee_create_channel_with_pubkey(
+            my_handle, self._user_pub(gsk["creator"], gsk["creatorKeyId"]))
+        handle = int(self._bridge.e2ee_unwrap_group_shared_key(
+            unwrap_channel, enc_shared_key_b64=gsk["encryptedSharedKey"]))
+        self._group_keys[(group_mid, gkid)] = handle
+        return handle, gkid
+
+    def _encrypt_group(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        group_mid = message["to"]
+        gk_handle, gkid = self._group_key_handle(group_mid, None)   # latest key
+        my_kid = self.latest_key_id
+        my_pub = self._bridge.e2ee_public_key_for_handle(self.my_keys[my_kid])
+        channel = self._bridge.e2ee_create_channel_with_pubkey(gk_handle, my_pub)
+        plaintext = fr.serialize_plaintext(message)
+        ct_b64 = self._bridge.e2ee_encrypt_v2(
+            channel, to=group_mid, frm=self.my_mid, sender_key_id=my_kid,
+            receiver_key_id=gkid, content_type=int(message.get("contentType", 0)),
+            sequence_number=self._next_seq(),
+            plaintext_b64=base64.b64encode(plaintext).decode("ascii"))
+        chunks = fr.build_chunks(base64.b64decode(ct_b64), my_kid, gkid)
+        return fr.build_e2ee_message(message, chunks, 2)
+
+    def _decrypt_group(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        chunks = message.get("chunks") or []
+        version = fr.message_e2ee_version(message)
+        parse = fr.parse_chunks_v1 if version == 1 else fr.parse_chunks
+        ciphertext, sender_key_id, group_key_id = parse(chunks)
+        group_mid, sender = message.get("to"), message.get("from")
+        gk_handle, _ = self._group_key_handle(group_mid, group_key_id or None)
+        channel = self._bridge.e2ee_create_channel_with_pubkey(
+            gk_handle, self._user_pub(sender, sender_key_id or 0))
+        ct_b64 = base64.b64encode(ciphertext).decode("ascii")
+        if version == 1:
+            pt_b64 = self._bridge.e2ee_decrypt_v1(channel, ciphertext_b64=ct_b64)
+        else:
+            pt_b64 = self._bridge.e2ee_decrypt_v2(
+                channel, to=group_mid, frm=sender, sender_key_id=sender_key_id or 0,
+                receiver_key_id=group_key_id or 0,
+                content_type=int(message.get("contentType", 0)), ciphertext_b64=ct_b64)
+        return self._finish_decrypt(message, pt_b64)
 
     def _next_seq(self) -> int:
         s = self._seq

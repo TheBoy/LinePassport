@@ -223,33 +223,62 @@ def run(api: OkLine, *, to: Optional[str], image: Optional[str],
         else:
             r.skip("e2ee roundtrip", "pass --to <a friend's uXX mid>")
         # you cannot message yourself, so E2EE send needs a real --to (a friend's
-        # uXX DM). Group sealing uses a different key scheme (not wired).
+        # uXX DM).
         if to and to[:1].lower() == "u" and to != my_mid:
             r.check("send_encrypted_text",
                     lambda: api.send_encrypted_text(to, "OkLine E2EE test"),
                     summary=lambda m: f"id={m.get('id') if isinstance(m, dict) else m}")
         else:
-            r.skip("send_encrypted_text",
-                   "pass --to <a friend's uXX mid> (self / groups not supported here)")
-        # find a sealed 1:1 (user DM) message to decrypt — group sealing uses a
-        # different key scheme, so only try user boxes (id/to starts with 'u').
-        sealed = None
-        boxes = api.get_message_boxes(limit=15)
+            r.skip("send_encrypted_text", "pass --to <a friend's uXX mid> (self n/a)")
+
+        # find a sealed message to decrypt, separately for 1:1 (u..) and group (c..)
+        boxes = api.get_message_boxes(limit=20)
         box_list = boxes.get("messageBoxes", []) if isinstance(boxes, dict) else []
-        user_boxes = [b.get("id") for b in box_list
-                      if isinstance(b, dict) and str(b.get("id", ""))[:1].lower() == "u"]
-        for bid in user_boxes[:6]:
-            msgs = api.get_recent_messages(bid, 10) or []
-            cand = [m for m in msgs if isinstance(m, dict) and m.get("chunks")
-                    and str(m.get("to", ""))[:1].lower() == "u"]
-            if cand:
-                sealed = cand[-1]
-                break
-        if sealed:
-            r.check("decrypt_message (1:1)", lambda: api.decrypt_message(sealed),
+
+        def _find_sealed(prefix):
+            ids = [b.get("id") for b in box_list
+                   if isinstance(b, dict) and str(b.get("id", ""))[:1].lower() == prefix]
+            for bid in ids[:8]:
+                msgs = api.get_recent_messages(bid, 10) or []
+                cand = [m for m in msgs if isinstance(m, dict) and m.get("chunks")]
+                if cand:
+                    return cand[-1]
+            return None
+
+        sealed_1to1 = _find_sealed("u")
+        if sealed_1to1:
+            r.check("decrypt_message (1:1)", lambda: api.decrypt_message(sealed_1to1),
                     summary=lambda m: f"text={(m.get('text') or '')[:40]!r}")
         else:
-            r.skip("decrypt_message", "no sealed 1:1 message found in your DMs")
+            r.skip("decrypt_message (1:1)", "no sealed 1:1 message found in your DMs")
+
+        sealed_group = _find_sealed("c")
+        if sealed_group:
+            r.check("decrypt_message (group)", lambda: api.decrypt_message(sealed_group),
+                    summary=lambda m: f"text={(m.get('text') or '')[:40]!r}")
+        else:
+            r.skip("decrypt_message (group)", "no sealed group message found")
+
+        # cross-session: export keys -> save -> reload in a FRESH client (new
+        # bridge process) -> E2EE still works, no QR re-scan.
+        import os
+        import tempfile
+        xpath = os.path.join(tempfile.gettempdir(), "okline_xsession_test.json")
+        api.save_tokens(xpath)
+        api_x = api.__class__.from_tokens_file(xpath)
+        r.check("cross-session E2EE (reload keys)",
+                lambda: api_x.e2ee.is_ready(),
+                summary=lambda b: f"ready={b}, keys={len(api_x.e2ee.my_keys)}",
+                ok=lambda b: bool(b))
+        if to and to[:1].lower() == "u" and to != my_mid:
+            r.check("cross-session roundtrip",
+                    lambda: api_x.e2ee.roundtrip(to, "xsession ✓"),
+                    summary=lambda t: f"recovered={t!r}", ok=lambda t: t == "xsession ✓")
+        api_x.close()
+        try:
+            os.remove(xpath)
+        except OSError:
+            pass
     else:
         r.skip("E2EE send/decrypt",
                "keys not loaded — run with --qr (fresh QR login) to test E2EE")
