@@ -93,6 +93,21 @@ Then include the mixin in `services/__init__.py`'s `AllServices`.
   must match what the real client sends (cite the source when non-obvious).
 - Keep secrets out of code and logs; redaction defaults must stay on.
 
+## Releasing / publishing to PyPI
+
+```bash
+pip install build twine
+python -m build                 # builds dist/*.whl and dist/*.tar.gz
+twine check dist/*              # validate metadata
+twine upload dist/*            # needs a PyPI account + API token
+# then tag the release:
+git tag v2.1.0 && git push --tags
+gh release create v2.1.0 --generate-notes
+```
+
+The wheel bundles the LTSM module (`ltsm.wasm`, `ltsmSandbox.js`, the bridge) and
+`py.typed`. `dist/`, `build/` and `*.egg-info/` are git-ignored.
+
 ## Scope & ethics
 
 OkLine is for interoperability, research and use with **your own account**, in

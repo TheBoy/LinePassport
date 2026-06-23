@@ -50,6 +50,7 @@ No token yet? See [Authentication](./authentication.md) for e-mail and QR login.
 | [Authentication](./authentication.md) | Token reuse, e-mail (RSA), QR login, refresh, logout |
 | [Sending messages](./messaging.md) | Text, stickers, location, contacts, flex, reactions |
 | [Receiving events](./receiving-events.md) | The SSE stream, operations, a simple echo bot |
+| [Building bots & helpers](./bots.md) | Bot framework, typed models, session, rate limiting |
 | [Recording](./recording.md) | Capture, paste, redact and export every response |
 | [CLI](./cli.md) | `python -m okline` subcommands |
 | [Architecture](./architecture.md) | The protocol, `X-Hmac`, module map |

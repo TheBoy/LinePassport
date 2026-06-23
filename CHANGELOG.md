@@ -4,6 +4,27 @@ All notable changes to OkLine are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-06-23
+
+### Added
+- **Bot framework** (`okline.bot.Bot`) — `@bot.on_message`, `@bot.command("…")`
+  and `@bot.on(OpType…)` decorators with a `MessageContext.reply()` helper and a
+  resilient `bot.run()` dispatch loop.
+- **Typed entities** (`okline.entities`) — `Profile`, `Contact`, `Group`, `Room`
+  dataclasses with `from_dict` (raw payload kept on `.raw`).
+- **Session persistence** — `OkLine.from_tokens_file(path)` / `api.save_tokens()`
+  (auto-saves on token refresh); `okline.Session`.
+- **Rate limiter** — `okline.ratelimit.RateLimiter` (token bucket), attachable as
+  `api.transport.rate_limiter`.
+- **Media message builders** — `Message.image/video/audio/file`.
+- `py.typed` marker (PEP 561) — the package now ships type information.
+
+### Experimental / known limitations
+- Full **media upload** (`send_image` over OBS) and **E2EE message
+  encrypt/decrypt** (Letter Sealing) require a live session to finalise and are
+  not yet shipped end-to-end; the building blocks (media metadata builders, the
+  Curve25519/E2EE bridge primitives, the E2EE key endpoints) are in place.
+
 ## [2.0.0] - 2026-06-22
 
 The library was renamed from `line_chrome_api` to **`okline`** (main class

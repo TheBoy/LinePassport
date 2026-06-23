@@ -79,6 +79,9 @@ class OkLine(AllServices):
         if on_exchange:
             self.transport.hooks.append(on_exchange)
 
+        # When loaded from a session file, persist refreshed tokens back to it.
+        self._session_path: Optional[str] = None
+
         # Auto-refresh the access token on a 401 if we hold a refresh token.
         self.transport._refresh_hook = self._auto_refresh  # noqa: SLF001
 
@@ -100,10 +103,32 @@ class OkLine(AllServices):
         try:
             self.auth.refresh_access_token()
             log.info("access token refreshed")
+            if self._session_path:        # persist the new token
+                self.save_tokens(self._session_path)
             return True
         except Exception as exc:  # pragma: no cover - network
             log.warning("token refresh failed: %s", exc)
             return False
+
+    # -- session persistence -------------------------------------------------
+    def save_tokens(self, path: Optional[str] = None) -> None:
+        """Save the current credentials to a JSON session file."""
+        from .session import Session
+        path = path or self._session_path
+        if not path:
+            raise ValueError("no path given and no session file attached")
+        self._session_path = path
+        Session.from_tokens(self.transport.tokens).save(path)
+
+    @classmethod
+    def from_tokens_file(cls, path: str, **kw: Any) -> "OkLine":
+        """Build a client from a session file (and auto-save refreshed tokens)."""
+        from .session import Session
+        s = Session.load(path)
+        api = cls(access_token=s.access_token, refresh_token=s.refresh_token,
+                  certificate=s.certificate, mid=s.mid, **kw)
+        api._session_path = path
+        return api
 
     def next_req_seq(self) -> int:
         self._reqseq += 1

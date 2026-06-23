@@ -4,7 +4,7 @@
 [![CI](https://github.com/NiceDayZc/OkLine/actions/workflows/ci.yml/badge.svg)](https://github.com/NiceDayZc/OkLine/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-392%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-406%20passing-brightgreen.svg)](tests/)
 [![Endpoints](https://img.shields.io/badge/endpoints-77-blue.svg)](docs/ENDPOINTS.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](docs/contributing.md)
 
@@ -26,6 +26,7 @@ stream and OBS media) and **every response recorded** so you can paste it.
 - ✅ Mandatory `X-Hmac` signing handled automatically (runs the real WASM).
 - ✅ E-mail (RSA) **and** QR login — QR rendered as ASCII in your terminal.
 - ✅ **Full response recording** — paste the response of every endpoint.
+- ✅ A **bot framework** (`@bot.on_message`), typed models & session persistence.
 - ✅ A CLI (`python -m okline …`) to call any endpoint from the shell.
 
 > คลาส Python ที่ทำงานได้จริง ครอบคลุม **ทุก endpoint** ของส่วนขยาย LINE บน Chrome
@@ -309,7 +310,7 @@ okline/
   selftest.py       live read-only self-test of every endpoint
 docs/               full documentation (see below)
 example.py          runnable examples
-tests/              392 offline tests (conftest fixtures + per-module files)
+tests/              406 offline tests (conftest fixtures + per-module files)
 ```
 
 ## 📚 Documentation
@@ -320,6 +321,7 @@ tests/              392 offline tests (conftest fixtures + per-module files)
 | [Authentication](docs/authentication.md) | token reuse, e-mail (RSA), QR login, refresh, logout |
 | [Sending messages](docs/messaging.md) | text, stickers, location, contacts, flex, reactions |
 | [Receiving events](docs/receiving-events.md) | the SSE stream, an echo bot |
+| [Building bots & helpers](docs/bots.md) | bot framework, typed models, session, rate limiting |
 | [Recording](docs/recording.md) | capture, paste, redact and export every response |
 | [CLI](docs/cli.md) | `python -m okline` — call any endpoint, `selftest`, `qr-login` |
 | [Architecture](docs/architecture.md) | the protocol, `X-Hmac`, module map |
@@ -330,7 +332,7 @@ tests/              392 offline tests (conftest fixtures + per-module files)
 ## Tests
 
 ```bash
-python -m pytest -q             # 392 offline tests, no network/Node needed
+python -m pytest -q             # 406 offline tests, no network/Node needed
 ```
 
 ## Notes on fidelity

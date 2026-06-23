@@ -122,3 +122,38 @@ class Message:
         meta = dict(content_metadata or {})
         return cls._base(to, text="", contentType=int(content_type),
                          contentMetadata=meta, **extra)
+
+    # -- media builders (the Message half of a media send) -------------------
+    # NOTE: a full media send is upload-then-send — the bytes go to OBS first,
+    # then this Message is sent. Building the Message is exact; wiring the OBS
+    # upload session is experimental (see docs/messaging.md).
+    @classmethod
+    def image(cls, to: str, *, content_metadata: Optional[dict] = None,
+              **extra: Any) -> dict:
+        return cls._base(to, text="", contentType=int(ContentType.IMAGE),
+                         contentMetadata=dict(content_metadata or {}),
+                         hasContent=True, **extra)
+
+    @classmethod
+    def video(cls, to: str, duration_ms: int = 0, *,
+              content_metadata: Optional[dict] = None, **extra: Any) -> dict:
+        meta = {"DURATION": str(duration_ms)}
+        meta.update(content_metadata or {})
+        return cls._base(to, text="", contentType=int(ContentType.VIDEO),
+                         contentMetadata=meta, hasContent=True, **extra)
+
+    @classmethod
+    def audio(cls, to: str, duration_ms: int = 0, *,
+              content_metadata: Optional[dict] = None, **extra: Any) -> dict:
+        meta = {"DURATION": str(duration_ms)}
+        meta.update(content_metadata or {})
+        return cls._base(to, text="", contentType=int(ContentType.AUDIO),
+                         contentMetadata=meta, hasContent=True, **extra)
+
+    @classmethod
+    def file(cls, to: str, file_name: str, file_size: int, *,
+             content_metadata: Optional[dict] = None, **extra: Any) -> dict:
+        meta = {"FILE_NAME": file_name, "FILE_SIZE": str(file_size)}
+        meta.update(content_metadata or {})
+        return cls._base(to, text="", contentType=int(ContentType.FILE),
+                         contentMetadata=meta, hasContent=True, **extra)

@@ -131,6 +131,8 @@ class Transport:
         self.recorder: Optional[Any] = None
         self.hooks: list = []
         self._seq = 0
+        # Optional token-bucket rate limiter (see okline.ratelimit).
+        self.rate_limiter: Optional[Any] = None
 
     # -- X-Hmac signing ------------------------------------------------------
     @property
@@ -315,6 +317,8 @@ class Transport:
     def _send(self, method: str, url: str, **kw: Any) -> "requests.Response":
         kw.setdefault("timeout", self.config.timeout)
         kw.setdefault("verify", self.config.verify_tls)
+        if self.rate_limiter is not None and not kw.get("stream"):
+            self.rate_limiter.acquire()
         last_exc: Optional[Exception] = None
         attempts = max(1, self.config.max_retries + 1)
         for attempt in range(attempts):
