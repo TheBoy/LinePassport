@@ -83,6 +83,33 @@ class ObsClient:
         resp.raise_for_status()
         return resp.content
 
+    def upload_message_object(self, oid: str, data: bytes, *, name: str,
+                              obs_type: str, cat: Optional[str] = None,
+                              enc_token: Optional[str] = None,
+                              service: str = "talk", sid: str = "m") -> Any:
+        """Upload media bytes for a (non-E2EE / V1) message.
+
+        ``oid`` is the message id returned by ``sendMessage``; the upload goes to
+        ``/r/talk/m/<oid>`` with ``X-Obs-Params`` describing the object.  OBS
+        uses the *encrypted* access token (``acquireEncryptedAccessToken``), not
+        the raw one, and is **not** X-Hmac signed.
+        """
+        params: dict = {"ver": "2.0", "name": name, "type": obs_type}
+        if cat:
+            params["cat"] = cat
+        url = f"{self._t.config.obs_base}/r/{service}/{sid}/{oid}"
+        headers = self._t.base_headers()
+        headers.pop("content-type", None)
+        headers["X-Obs-Params"] = encode_obs_params(params)
+        if enc_token:                       # OBS auth = encrypted access token
+            headers["X-Line-Access"] = enc_token
+        resp = self._t._send("POST", url, headers=headers, data=data)  # noqa: SLF001
+        if resp.status_code >= 400:
+            from .exceptions import LineApiError
+            raise LineApiError(f"OBS upload failed: HTTP {resp.status_code}",
+                               status=resp.status_code, path=url, raw=resp.text)
+        return _json(resp)
+
     def object_info(self, path: str, *, talk_meta: Optional[str] = None) -> Any:
         url = f"{self._t.config.obs_base}{path}/object_info.obs"
         headers = self._t.base_headers()

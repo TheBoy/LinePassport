@@ -186,6 +186,32 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         api.close()
 
 
+def cmd_send(args: argparse.Namespace) -> int:
+    api = _make_client(args)
+    if not api.tokens.access_token:
+        print("error: send needs a token (--token / --tokens-file)", file=sys.stderr)
+        return 2
+    try:
+        if args.image:
+            res = api.send_image(args.to, args.image)
+        elif args.file:
+            res = api.send_file(args.to, args.file)
+        else:
+            if not args.text:
+                print("error: provide TEXT, or --image/--file", file=sys.stderr)
+                return 2
+            res = api.send_text(args.to, args.text)
+        _print_json(res)
+        if args.raw:
+            _safe_print(api.last.pretty(redact=not args.show_secrets))
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        api.close()
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     print(f"OkLine {__version__} (emulates LINE CHROMEOS 3.7.2)")
     return 0
@@ -231,6 +257,14 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--wait", type=float, default=180.0, help="seconds to wait for scan/PIN")
     q.add_argument("--invert", action="store_true", help="invert QR colours (light terminal)")
     q.set_defaults(func=cmd_qr_login)
+
+    sd = sub.add_parser("send", parents=[auth], help="send a text/image/file message")
+    sd.add_argument("to", help="destination mid (u…/c…/r…)")
+    sd.add_argument("text", nargs="?", help="message text")
+    sd.add_argument("--image", help="path to an image to send")
+    sd.add_argument("--file", help="path to a file to send")
+    sd.add_argument("--raw", action="store_true", help="print the full transcript")
+    sd.set_defaults(func=cmd_send)
 
     st = sub.add_parser("selftest", parents=[auth],
                         help="call every read-only endpoint and report pass/fail")

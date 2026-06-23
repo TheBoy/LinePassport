@@ -161,3 +161,38 @@ def test_media_message_builders():
     f = Message.file(USER_MID, "a.pdf", 1234)
     assert f["contentMetadata"] == {"FILE_NAME": "a.pdf", "FILE_SIZE": "1234"}
     assert f["contentType"] == int(enums.ContentType.FILE)
+
+
+def test_send_image_flow(make_api):
+    import base64
+    import json as _json
+
+    from conftest import FakeResp
+
+    def responder(method, url, kw):
+        if url.endswith("sendMessage"):
+            return enveloped({"id": "15001", "text": ""})
+        if url.endswith("acquireEncryptedAccessToken"):
+            return enveloped("meta\x1eENCTOK")          # VR(result)[1][0] == ENCTOK
+        if "/r/talk/m/" in url:
+            return FakeResp(200, {"ok": True})           # OBS upload
+        return enveloped({})
+
+    api = make_api(responder)
+    api.send_image(USER_MID, b"\xff\xd8imagebytes", name="pic.jpg")
+
+    urls = [c["url"] for c in api.transport.session.calls]
+    assert any(u.endswith("sendMessage") for u in urls)
+    obs = [c for c in api.transport.session.calls if "/r/talk/m/15001" in c["url"]]
+    assert obs, "OBS upload to /r/talk/m/<messageId> not made"
+    h = obs[0]["headers"]
+    assert h["X-Line-Access"] == "ENCTOK"               # encrypted OBS token
+    params = _json.loads(base64.b64decode(h["X-Obs-Params"]))
+    assert params == {"ver": "2.0", "name": "pic.jpg", "type": "image", "cat": "original"}
+    assert obs[0]["data"] == b"\xff\xd8imagebytes"
+
+
+def test_cli_has_send_command():
+    from okline.__main__ import build_parser
+    a = build_parser().parse_args(["send", "u123", "hi", "--token", "T"])
+    assert a.command == "send" and a.to == "u123" and a.text == "hi"

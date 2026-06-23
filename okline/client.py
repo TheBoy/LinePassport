@@ -188,6 +188,59 @@ class OkLine(AllServices):
         """Shortcut for :meth:`AuthFlows.qr_login`."""
         return self.auth.qr_login(**kw)
 
+    # -- media send (V1 / non-E2EE) -----------------------------------------
+    def _send_media(self, to: str, data: bytes, content_type: int, *,
+                    name: str, obs_type: str, cat: Optional[str] = None,
+                    duration_ms: int = 0) -> Any:
+        """Send a media message: post a placeholder, then upload the bytes to
+        OBS at ``/r/talk/m/<messageId>`` (the V1, non-E2EE flow).
+
+        Experimental — works for non-Letter-Sealed chats.
+        """
+        from .enums import ContentType, EncryptedAccessTokenFeatureType
+        from .exceptions import LineApiError
+        from .models import Message as _M
+        ct = int(content_type)
+        if ct == int(ContentType.IMAGE):
+            msg = _M.image(to)
+        elif ct == int(ContentType.VIDEO):
+            msg = _M.video(to, duration_ms)
+        elif ct == int(ContentType.AUDIO):
+            msg = _M.audio(to, duration_ms)
+        else:
+            msg = _M.file(to, name, len(data))
+        sent = self.send_message(msg)
+        msg_id = sent.get("id") if isinstance(sent, dict) else None
+        if not msg_id:
+            raise LineApiError("sendMessage returned no message id for media",
+                               raw=sent)
+        enc = self.get_encrypted_access_token(
+            int(EncryptedAccessTokenFeatureType.OBS_GENERAL))
+        self.obs.upload_message_object(str(msg_id), data, name=name,
+                                       obs_type=obs_type, cat=cat, enc_token=enc)
+        return sent
+
+    def send_image(self, to: str, file: Any, *, name: Optional[str] = None) -> Any:
+        data, name = _read_media(file, name, "image.jpg")
+        return self._send_media(to, data, _ct().IMAGE, name=name,
+                                obs_type="image", cat="original")
+
+    def send_video(self, to: str, file: Any, *, name: Optional[str] = None,
+                   duration_ms: int = 0) -> Any:
+        data, name = _read_media(file, name, "video.mp4")
+        return self._send_media(to, data, _ct().VIDEO, name=name,
+                                obs_type="video", duration_ms=duration_ms)
+
+    def send_audio(self, to: str, file: Any, *, name: Optional[str] = None,
+                   duration_ms: int = 0) -> Any:
+        data, name = _read_media(file, name, "audio.m4a")
+        return self._send_media(to, data, _ct().AUDIO, name=name,
+                                obs_type="audio", duration_ms=duration_ms)
+
+    def send_file(self, to: str, file: Any, *, name: Optional[str] = None) -> Any:
+        data, name = _read_media(file, name, "file.bin")
+        return self._send_media(to, data, _ct().FILE, name=name, obs_type="file")
+
     # -- lifecycle -----------------------------------------------------------
     def close(self) -> None:
         """Release the LTSM Node bridge subprocess (if started)."""
@@ -206,6 +259,22 @@ class OkLine(AllServices):
         n = len(self.history)
         return (f"<OkLine {who} app={self.config.application_header.split(chr(9))[0]} "
                 f"calls={n}>")
+
+
+def _ct():
+    from .enums import ContentType
+    return ContentType
+
+
+def _read_media(file: Any, name: Optional[str], default: str):
+    """Accept a path (str/Path) or raw bytes; return (data, name)."""
+    import os
+    if isinstance(file, (bytes, bytearray)):
+        return bytes(file), (name or default)
+    path = os.fspath(file)
+    with open(path, "rb") as fh:
+        data = fh.read()
+    return data, (name or os.path.basename(path) or default)
 
 
 def _safe_print(text: str, file=None) -> None:
