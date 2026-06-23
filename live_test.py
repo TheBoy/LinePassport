@@ -213,15 +213,25 @@ def run(api: OkLine, *, to: Optional[str], image: Optional[str],
             r.check("send_encrypted_text",
                     lambda: api.send_encrypted_text(et, "OkLine E2EE test"),
                     summary=lambda m: f"id={m.get('id') if isinstance(m, dict) else m}")
-        # try to decrypt a recent sealed message from the first chat
-        if first_chat:
-            msgs = api.get_recent_messages(first_chat, 10) or []
-            sealed = [m for m in msgs if isinstance(m, dict) and m.get("chunks")]
-            if sealed:
-                r.check("decrypt_message", lambda: api.decrypt_message(sealed[0]),
-                        summary=lambda m: f"text={(m.get('text') or '')[:30]!r}")
-            else:
-                r.skip("decrypt_message", "no sealed messages in the first chat")
+        # find a sealed 1:1 (user DM) message to decrypt — group sealing uses a
+        # different key scheme, so only try user boxes (id/to starts with 'u').
+        sealed = None
+        boxes = api.get_message_boxes(limit=15)
+        box_list = boxes.get("messageBoxes", []) if isinstance(boxes, dict) else []
+        user_boxes = [b.get("id") for b in box_list
+                      if isinstance(b, dict) and str(b.get("id", "")).startswith("u")]
+        for bid in user_boxes[:6]:
+            msgs = api.get_recent_messages(bid, 10) or []
+            cand = [m for m in msgs if isinstance(m, dict) and m.get("chunks")
+                    and str(m.get("to", "")).startswith("u")]
+            if cand:
+                sealed = cand[-1]
+                break
+        if sealed:
+            r.check("decrypt_message (1:1)", lambda: api.decrypt_message(sealed),
+                    summary=lambda m: f"text={(m.get('text') or '')[:40]!r}")
+        else:
+            r.skip("decrypt_message", "no sealed 1:1 message found in your DMs")
     else:
         r.skip("E2EE send/decrypt",
                "keys not loaded — run with --qr (fresh QR login) to test E2EE")

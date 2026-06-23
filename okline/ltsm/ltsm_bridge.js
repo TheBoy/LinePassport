@@ -195,6 +195,15 @@ function send(data) {
 // base64 <-> bytes helpers (match the bundle's RR/NR)
 const b64ToBytes = (b64) => new Uint8Array(Buffer.from(String(b64), 'base64'));
 const bytesToB64 = (x) => Buffer.from(Array.from(x)).toString('base64');
+// uint64 Embind params want a BigInt; coerce numbers/strings safely.
+const bigIntOrNum = (v) => {
+  try { return BigInt(v); } catch (e) { return Number(v); }
+};
+const argTypes = (r) => `to=${typeof r.to} from=${typeof r.from} ` +
+  `senderKeyId=${typeof r.senderKeyId}:${r.senderKeyId} ` +
+  `receiverKeyId=${typeof r.receiverKeyId}:${r.receiverKeyId} ` +
+  `contentType=${typeof r.contentType}:${r.contentType} ` +
+  `sequenceNumber=${typeof r.sequenceNumber}:${r.sequenceNumber}`;
 
 // Dispatch a high-level op onto the sandbox command protocol.
 async function handle(req) {
@@ -229,18 +238,29 @@ async function handle(req) {
       return await send({ command: 'e2eekey_create_channel', ltsmKeyId: req.keyHandle,
         payload: b64ToBytes(req.peerPubKeyB64) });
     case 'e2ee_encrypt_v2': {
-      const ct = await send({ command: 'e2eechannel_encrypt_v2', ltsmKeyId: req.channelId,
-        payload: { to: req.to, from: req.from, senderKeyId: req.senderKeyId,
-          receiverKeyId: req.receiverKeyId, contentType: req.contentType,
-          sequenceNumber: req.sequenceNumber, plaintext: b64ToBytes(req.plaintextB64) } });
-      return bytesToB64(ct);
+      // sequenceNumber is a uint64 -> must be a BigInt for Embind; key ids are
+      // plain numbers (uint32). contentType is a small int.
+      try {
+        const ct = await send({ command: 'e2eechannel_encrypt_v2', ltsmKeyId: req.channelId,
+          payload: { to: req.to, from: req.from, senderKeyId: Number(req.senderKeyId),
+            receiverKeyId: Number(req.receiverKeyId), contentType: Number(req.contentType),
+            sequenceNumber: bigIntOrNum(req.sequenceNumber),
+            plaintext: b64ToBytes(req.plaintextB64) } });
+        return bytesToB64(ct);
+      } catch (e) {
+        throw new Error((e && e.message ? e.message : e) + ' | args ' + argTypes(req));
+      }
     }
     case 'e2ee_decrypt_v2': {
-      const pt = await send({ command: 'e2eechannel_decrypt_v2', ltsmKeyId: req.channelId,
-        payload: { to: req.to, from: req.from, senderKeyId: req.senderKeyId,
-          receiverKeyId: req.receiverKeyId, contentType: req.contentType,
-          ciphertext: b64ToBytes(req.ciphertextB64) } });
-      return bytesToB64(pt);
+      try {
+        const pt = await send({ command: 'e2eechannel_decrypt_v2', ltsmKeyId: req.channelId,
+          payload: { to: req.to, from: req.from, senderKeyId: Number(req.senderKeyId),
+            receiverKeyId: Number(req.receiverKeyId), contentType: Number(req.contentType),
+            ciphertext: b64ToBytes(req.ciphertextB64) } });
+        return bytesToB64(pt);
+      } catch (e) {
+        throw new Error((e && e.message ? e.message : e) + ' | args ' + argTypes(req));
+      }
     }
     default:
       throw new Error('unknown op: ' + req.op);
