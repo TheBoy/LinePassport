@@ -262,6 +262,13 @@ async function handle(req) {
         throw new Error((e && e.message ? e.message : e) + ' | args ' + argTypes(req));
       }
     }
+    case 'e2ee_decrypt_v1': {
+      // old format: decryptV1(channel, ciphertext) — payload IS the raw ciphertext
+      // bytes (no to/from/keyIds/contentType).
+      const pt = await send({ command: 'e2eechannel_decrypt_v1', ltsmKeyId: req.channelId,
+        payload: b64ToBytes(req.ciphertextB64) });
+      return bytesToB64(pt);
+    }
     default:
       throw new Error('unknown op: ' + req.op);
   }

@@ -185,6 +185,16 @@ class LtsmBridge:
                            receiverKeyId=receiver_key_id, contentType=content_type,
                            ciphertextB64=ciphertext_b64)
 
+    def e2ee_decrypt_v1(self, channel_id: int, *, ciphertext_b64: str) -> str:
+        """Decrypt (V1) -> base64 plaintext.
+
+        The old Letter-Sealing format: ``e2eeChannelDecryptV1(channel, ciphertext)``
+        takes only the channel + ciphertext (no to/from/keyIds/contentType — those
+        are not part of the V1 AAD).
+        """
+        return self._call("e2ee_decrypt_v1", channelId=channel_id,
+                           ciphertextB64=ciphertext_b64)
+
     # -- teardown ------------------------------------------------------------
     def close(self) -> None:
         with self._lock:

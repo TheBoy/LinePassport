@@ -35,6 +35,25 @@ def test_chunks_roundtrip():
     assert ct2 == ct and sid == 11 and rid == 22
 
 
+def test_chunks_v1_roundtrip():
+    ct = bytes(range(60))                      # salt(8) + body(36) + tag(16)
+    chunks = fr.build_chunks_v1(ct, sender_key_id=11, receiver_key_id=22)
+    assert len(chunks) == 5
+    # V1 wire order is [salt8, body, tag16, sidBE, ridBE] — NOT swapped
+    assert base64.b64decode(chunks[0]) == ct[0:8]
+    assert base64.b64decode(chunks[1]) == ct[8:-16]
+    assert base64.b64decode(chunks[2]) == ct[-16:]
+    ct2, sid, rid = fr.parse_chunks_v1(chunks)
+    assert ct2 == ct and sid == 11 and rid == 22   # concatenated in order
+
+
+def test_message_e2ee_version():
+    assert fr.message_e2ee_version({"contentMetadata": {"e2eeVersion": "1"}}) == 1
+    assert fr.message_e2ee_version({"contentMetadata": {"e2eeVersion": "2"}}) == 2
+    assert fr.message_e2ee_version({"contentMetadata": {}}) == 2      # default
+    assert fr.message_e2ee_version({}) == 2
+
+
 def test_plaintext_roundtrip():
     msg = {"text": "สวัสดี 👋", "contentType": 0, "contentMetadata": {}}
     pt = fr.serialize_plaintext(msg)

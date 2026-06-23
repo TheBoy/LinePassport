@@ -136,18 +136,31 @@ class E2EEManager:
         return fr.build_e2ee_message(message, chunks, 2)
 
     def decrypt(self, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Decrypt a received sealed 1:1 message -> plain message dict."""
+        """Decrypt a received sealed 1:1 message -> plain message dict.
+
+        Handles both Letter-Sealing **V1** (legacy: ``decryptV1(channel, ciphertext)``,
+        chunks concatenated in order) and **V2** (chunks salt/tag swapped, AAD =
+        to/from/keyIds/contentType), dispatched on ``contentMetadata.e2eeVersion``.
+        """
         chunks = message.get("chunks") or []
-        ciphertext, sender_key_id, receiver_key_id = fr.parse_chunks(chunks)
+        version = fr.message_e2ee_version(message)
         sender = message.get("from")
         to = message.get("to")
+        if version == 1:
+            ciphertext, sender_key_id, receiver_key_id = fr.parse_chunks_v1(chunks)
+        else:
+            ciphertext, sender_key_id, receiver_key_id = fr.parse_chunks(chunks)
         channel = self._channel_for_receive(sender, sender_key_id or 0,
                                             receiver_key_id or 0)
-        pt_b64 = self._bridge.e2ee_decrypt_v2(
-            channel, to=to, frm=sender, sender_key_id=sender_key_id or 0,
-            receiver_key_id=receiver_key_id or 0,
-            content_type=int(message.get("contentType", 0)),
-            ciphertext_b64=base64.b64encode(ciphertext).decode("ascii"))
+        ct_b64 = base64.b64encode(ciphertext).decode("ascii")
+        if version == 1:
+            pt_b64 = self._bridge.e2ee_decrypt_v1(channel, ciphertext_b64=ct_b64)
+        else:
+            pt_b64 = self._bridge.e2ee_decrypt_v2(
+                channel, to=to, frm=sender, sender_key_id=sender_key_id or 0,
+                receiver_key_id=receiver_key_id or 0,
+                content_type=int(message.get("contentType", 0)),
+                ciphertext_b64=ct_b64)
         plain = fr.deserialize_plaintext(base64.b64decode(pt_b64))
         out = dict(message)
         out["text"] = plain.get("text")

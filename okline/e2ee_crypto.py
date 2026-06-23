@@ -85,11 +85,44 @@ def build_chunks(ciphertext: bytes, sender_key_id: int,
 
 
 def parse_chunks(chunks: List[str]) -> Tuple[bytes, Optional[int], Optional[int]]:
-    """``hL`` (+ key ids) — rebuild ``(ciphertext, sender_key_id, receiver_key_id)``."""
+    """``hL`` (+ key ids) — rebuild ``(ciphertext, sender_key_id, receiver_key_id)``
+    for **V2** messages (salt/tag swapped: ``c[0] + c[2] + c[1]``)."""
     ct = _b64d(chunks[0]) + _b64d(chunks[2]) + _b64d(chunks[1])
     sid = key_id_from_bytes(_b64d(chunks[3])) if len(chunks) > 3 else None
     rid = key_id_from_bytes(_b64d(chunks[4])) if len(chunks) > 4 else None
     return ct, sid, rid
+
+
+def build_chunks_v1(ciphertext: bytes, sender_key_id: int,
+                    receiver_key_id: int) -> List[str]:
+    """``mL`` — split the **V1** ciphertext: ``[salt(8), body, tag(16), sid, rid]``."""
+    e = bytes(ciphertext)
+    return [
+        _b64e(e[0:8]),                        # salt
+        _b64e(e[8:-16]),                      # body
+        _b64e(e[-16:]),                       # tag
+        _b64e(key_id_to_bytes(sender_key_id)),
+        _b64e(key_id_to_bytes(receiver_key_id)),
+    ]
+
+
+def parse_chunks_v1(chunks: List[str]) -> Tuple[bytes, Optional[int], Optional[int]]:
+    """``fL`` (+ key ids) — rebuild ``(ciphertext, sender_key_id, receiver_key_id)``
+    for **V1** messages.  Unlike V2, the chunks are concatenated *in order*
+    (``c[0] + c[1] + c[2]`` = salt + body + tag)."""
+    ct = _b64d(chunks[0]) + _b64d(chunks[1]) + _b64d(chunks[2])
+    sid = key_id_from_bytes(_b64d(chunks[3])) if len(chunks) > 3 else None
+    rid = key_id_from_bytes(_b64d(chunks[4])) if len(chunks) > 4 else None
+    return ct, sid, rid
+
+
+def message_e2ee_version(message: Dict[str, Any]) -> int:
+    """The Letter-Sealing version of a received message (1 or 2; default 2)."""
+    meta = message.get("contentMetadata") or {}
+    try:
+        return int(meta.get("e2eeVersion") or 2)
+    except (ValueError, TypeError):
+        return 2
 
 
 def build_e2ee_message(message: Dict[str, Any], chunks: List[str],
