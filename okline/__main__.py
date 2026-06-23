@@ -1,19 +1,20 @@
-"""OkLine command-line interface.
+"""OkLine command-line interface — a full LINE client in your terminal.
 
-    python -m okline endpoints                 # list every endpoint key
-    python -m okline call <Endpoint> [argsJSON] --token <T>
-    python -m okline profile --token <T>
-    python -m okline qr-login [--save tokens.json]
-    python -m okline version
+Just install and go::
 
-``call`` lets you hit *any* endpoint and paste its full response::
+    pip install okline
+    okline login                       # scan the QR once (saves tokens.json)
+    okline whoami                      # every command reuses the saved session
+    okline send <mid> "hello"
+    okline contacts --search soda
+    okline chatlog <chat-mid>          # reads (and decrypts) recent messages
 
-    python -m okline call Talk.TalkService.getProfile "[2]" --token "$TOKEN" --raw
-    python -m okline call Talk.TalkService.sendMessage \
-        '[0,{"to":"u...","text":"hi","contentType":0,"contentMetadata":{}}]' --token "$TOKEN"
+Auth resolution for every command: ``--token`` / ``--tokens-file`` / the
+``LINE_ACCESS_TOKEN`` env var, else the default ``tokens.json`` in the current
+directory (created by ``okline login``).  A restored session also brings back
+your E2EE keys, so ``chatlog`` / ``send --encrypt`` work without re-scanning.
 
-Tokens come from ``--token`` / ``--refresh`` or the ``LINE_ACCESS_TOKEN`` /
-``LINE_REFRESH_TOKEN`` environment variables.
+Run ``okline -h`` for the full command list, or ``okline <cmd> -h`` for one.
 """
 
 from __future__ import annotations
@@ -22,14 +23,14 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import __version__
 from .client import OkLine, _safe_print
 from .endpoints import THRIFT_ENDPOINTS
-from .qrterm import print_qr
 
 
+# -- helpers ----------------------------------------------------------------
 def _load_tokens_file(path: str) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -40,26 +41,515 @@ def _load_tokens_file(path: str) -> dict:
 
 
 def _make_client(args: argparse.Namespace, *, record: bool = True) -> OkLine:
+    """Build a client from --token / --tokens-file / env / the default tokens.json.
+
+    When a session *file* is used, load via ``from_tokens_file`` so the E2EE keys
+    are restored too (enables ``chatlog`` decryption and ``send --encrypt``).
+    """
     access = getattr(args, "token", None) or os.environ.get("LINE_ACCESS_TOKEN")
     refresh = getattr(args, "refresh", None) or os.environ.get("LINE_REFRESH_TOKEN")
     tokens_file = getattr(args, "tokens_file", None)
+    redact = not getattr(args, "show_secrets", False)
+    if not tokens_file and not access and os.path.exists("tokens.json"):
+        tokens_file = "tokens.json"          # sensible default after `okline login`
+    if tokens_file and not access and os.path.exists(tokens_file):
+        return OkLine.from_tokens_file(tokens_file, record=record, redact=redact)
     if tokens_file:
         data = _load_tokens_file(tokens_file)
         access = access or data.get("accessToken") or data.get("access_token")
         refresh = refresh or data.get("refreshToken") or data.get("refresh_token")
-    return OkLine(
-        access_token=access,
-        refresh_token=refresh,
-        record=record,
-        redact=not getattr(args, "show_secrets", False),
-    )
+    return OkLine(access_token=access, refresh_token=refresh,
+                  record=record, redact=redact)
+
+
+def _go(args: argparse.Namespace, fn) -> int:
+    """Run ``fn(api)`` with a client, print errors cleanly, always close."""
+    api = _make_client(args)
+    try:
+        rv = fn(api)
+        return 0 if rv is None else int(rv)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        api.close()
 
 
 def _print_json(value: Any) -> None:
     _safe_print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
-# -- commands ---------------------------------------------------------------
+def _contact_names(api: OkLine) -> Dict[str, str]:
+    """``{mid: display name}`` for every contact (fetched in chunks)."""
+    ids = api.get_all_contact_ids() or []
+    out: Dict[str, str] = {}
+    for i in range(0, len(ids), 100):
+        res = api.get_contacts(ids[i:i + 100])
+        for mid, w in (res.get("contacts", {}) or {}).items():
+            c = w.get("contact", w) if isinstance(w, dict) else {}
+            out[mid] = c.get("displayNameOverridden") or c.get("displayName") or ""
+    return out
+
+
+def _need_auth(api: OkLine) -> None:
+    if not api.tokens.access_token:
+        raise SystemExit("error: no session — run `okline login` first "
+                         "(or pass --token / --tokens-file)")
+
+
+# -- session / identity -----------------------------------------------------
+def cmd_login(args: argparse.Namespace) -> int:
+    from .qrterm import print_qr
+    api = OkLine(record=False, redact=not args.show_secrets)
+
+    def show_qr(url: str) -> None:
+        print("\nScan with the LINE app (Settings > Add friends > QR code):\n")
+        try:
+            print_qr(url, border=2, invert=args.invert)
+        except ModuleNotFoundError:
+            print(url, "\n(pip install qrcode for an inline QR)")
+        print("\nor open:", url, "\n")
+
+    def show_pin(pin: str) -> None:
+        print(f"\n>>> Confirm this PIN on your phone:  {pin}\n")
+
+    try:
+        res = api.auth.qr_login(on_qr=show_qr, on_pin=show_pin, wait_seconds=args.wait)
+        if not res.access_token:
+            print(f"login did not complete: {res.display_message or res.type}",
+                  file=sys.stderr)
+            return 1
+        # load E2EE keys for this session, then persist everything
+        info = getattr(api.auth, "last_e2ee_login", None)
+        if info:
+            try:
+                api.e2ee.load_from_login(info["curve_key_id"], info["metadata"])
+            except Exception:  # noqa: BLE001
+                pass
+        path = args.save or "tokens.json"
+        api.save_tokens(path)
+        prof = api.get_profile()
+        name = prof.get("displayName") if isinstance(prof, dict) else None
+        mid = prof.get("mid") if isinstance(prof, dict) else None
+        print(f"\nLogged in as {name}  ({mid})")
+        print(f"E2EE keys ready: {'yes' if api.e2ee.is_ready() else 'no'}")
+        print(f"Session saved to {path} — reused by every other command.")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        api.close()
+
+
+def cmd_whoami(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        p = api.get_profile()
+        chats = api.get_all_chat_mids() or {}
+        print(f"name      : {p.get('displayName')}")
+        print(f"mid       : {p.get('mid')}")
+        print(f"userid    : {p.get('userid')}")
+        print(f"region    : {p.get('regionCode')}")
+        print(f"status    : {p.get('statusMessage')}")
+        print(f"contacts  : {len(api.get_all_contact_ids() or [])}")
+        print(f"groups    : {len(chats.get('memberChatMids', []))}"
+              f" (+{len(chats.get('invitedChatMids', []))} invited)")
+        print(f"favorites : {len(api.get_favorite_mids() or [])}")
+        print(f"blocked   : {len(api.get_blocked_contact_ids() or [])}")
+        print(f"e2ee ready: {'yes' if api.e2ee.is_ready() else 'no'}")
+    return _go(args, run)
+
+
+def cmd_profile(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        if args.mid:
+            names = _contact_names(api)
+            print(f"name   : {names.get(args.mid) or '(not in your contacts)'}")
+            print(f"mid    : {args.mid}")
+            try:
+                detail = api.get_buddy_detail(args.mid) or {}
+            except Exception:  # noqa: BLE001
+                detail = {}
+            if isinstance(detail, dict):
+                for k, v in detail.items():
+                    if v not in (None, "", [], {}):
+                        print(f"{k:7}: {v}")
+        else:
+            _print_json(api.get_profile())
+    return _go(args, run)
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    print(f"OkLine {__version__} (emulates LINE CHROMEOS 3.7.2)")
+    return 0
+
+
+def cmd_menu(args: argparse.Namespace) -> int:
+    from .menu import interactive
+    return interactive(args)
+
+
+# -- contacts / people ------------------------------------------------------
+def cmd_contacts(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        names = _contact_names(api)
+        rows = sorted(names.items(), key=lambda kv: kv[1].lower())
+        if args.search:
+            q = args.search.lower()
+            rows = [(m, n) for m, n in rows if q in n.lower()]
+        if args.csv or args.json:
+            data = [{"mid": m, "name": n} for m, n in rows]
+            if args.json:
+                with open(args.json, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, ensure_ascii=False, indent=2)
+                print(f"wrote {len(data)} contacts -> {args.json}")
+            if args.csv:
+                import csv
+                with open(args.csv, "w", encoding="utf-8-sig", newline="") as fh:
+                    w = csv.DictWriter(fh, fieldnames=["mid", "name"])
+                    w.writeheader(); w.writerows(data)
+                print(f"wrote {len(data)} contacts -> {args.csv}")
+            return
+        for m, n in rows:
+            print(f"{m}  {n}")
+        print(f"\n{len(rows)} contact(s)", file=sys.stderr)
+    return _go(args, run)
+
+
+def cmd_find(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        q = args.query.lower()
+        hits = [(m, n) for m, n in _contact_names(api).items() if q in n.lower()]
+        for m, n in hits:
+            print(f"{m}  {n}")
+        if not hits:
+            print(f"no contact matching {args.query!r}")
+    return _go(args, run)
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        c = api.find_contact_by_userid(args.userid) or {}
+        if not isinstance(c, dict) or not c.get("mid"):
+            print(f"no user found for {args.userid!r}"); return 1
+        print(f"mid    : {c.get('mid')}")
+        print(f"name   : {c.get('displayName')}")
+        print(f"status : {c.get('statusMessage')}")
+        if args.add:
+            api.add_friend_by_mid(c["mid"])
+            print(f"added  : {c['mid']}")
+    return _go(args, run)
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        who = args.who
+        if who[:1].lower() == "u" and len(who) >= 32:
+            mid = who
+        else:
+            c = api.find_contact_by_userid(who) or {}
+            mid = c.get("mid") if isinstance(c, dict) else None
+            if not mid:
+                print(f"no user found for {who!r}"); return 1
+            print(f"resolved: {who} -> {mid} ({c.get('displayName')})")
+        api.add_friend_by_mid(mid)
+        print(f"added: {mid}")
+    return _go(args, run)
+
+
+def cmd_block(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        if args.action == "list":
+            names = _contact_names(api)
+            for mid in (api.get_blocked_contact_ids() or []):
+                print(f"{mid}  {names.get(mid, '')}")
+        elif args.action == "add":
+            api.block_contact(args.mid); print(f"blocked {args.mid}")
+        else:
+            api.unblock_contact(args.mid); print(f"unblocked {args.mid}")
+    return _go(args, run)
+
+
+def cmd_favorites(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        if args.action == "list":
+            names = _contact_names(api)
+            for mid in (api.get_favorite_mids() or []):
+                print(f"{mid}  {names.get(mid, '')}")
+        elif args.action == "add":
+            api.set_chat_favorite(args.mid, 1); print(f"favorited {args.mid}")
+        else:
+            api.set_chat_favorite(args.mid, 0); print(f"unfavorited {args.mid}")
+    return _go(args, run)
+
+
+# -- groups / chats ---------------------------------------------------------
+def cmd_groups(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        from .entities import Group
+        _need_auth(api)
+        chats = api.get_all_chat_mids() or {}
+        member = chats.get("memberChatMids", [])
+        print(f"member  : {len(member)}    invited : {len(chats.get('invitedChatMids', []))}\n")
+        if member:
+            for g in (api.get_chats(member).get("chats", []) or []):
+                grp = Group.from_dict(g)
+                print(f"{grp.chat_mid}  ({grp.member_count:>3})  {grp.name}")
+    return _go(args, run)
+
+
+def cmd_members(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        from .entities import Group
+        _need_auth(api)
+        chats = api.get_chats([args.group_mid]).get("chats", [])
+        if not chats:
+            print("group not found"); return 1
+        grp = Group.from_dict(chats[0])
+        print(f"# {grp.name}  ({grp.member_count} members)\n")
+        names: Dict[str, str] = {}
+        members = grp.member_mids
+        for i in range(0, len(members), 100):
+            res = api.get_contacts(members[i:i + 100])
+            for mid, w in (res.get("contacts", {}) or {}).items():
+                c = w.get("contact", w) if isinstance(w, dict) else {}
+                names[mid] = c.get("displayNameOverridden") or c.get("displayName") or ""
+        for mid in members:
+            print(f"  {mid}  {names.get(mid, '(unknown)')}")
+    return _go(args, run)
+
+
+def cmd_leave(args: argparse.Namespace) -> int:
+    return _go(args, lambda api: (_need_auth(api), api.leave_chat(args.chat_mid),
+                                  print(f"left {args.chat_mid}")) and None)
+
+
+def cmd_accept(args: argparse.Namespace) -> int:
+    return _go(args, lambda api: (_need_auth(api), api.accept_chat_invitation(args.chat_mid),
+                                  print(f"accepted {args.chat_mid}")) and None)
+
+
+# -- messaging --------------------------------------------------------------
+def cmd_send(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        if args.image:
+            res = api.send_image(args.to, args.image)
+        elif args.file:
+            res = api.send_file(args.to, args.file)
+        elif args.sticker:
+            res = api.send_sticker(args.to, args.sticker[0], args.sticker[1])
+        elif args.location:
+            res = api.send_location(args.to, args.location[0], args.location[1],
+                                    title=args.title or "")
+        elif args.text:
+            res = (api.send_encrypted_text if args.encrypt else api.send_text)(args.to, args.text)
+        else:
+            print("error: provide TEXT or --image/--file/--sticker/--location",
+                  file=sys.stderr); return 2
+        mid = res.get("id") if isinstance(res, dict) else res
+        print("sent; message id:", mid)
+    return _go(args, run)
+
+
+def cmd_react(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        from .enums import PredefinedReactionType
+        _need_auth(api)
+        api.react(args.message_id, int(PredefinedReactionType[args.reaction]))
+        print("ok")
+    return _go(args, run)
+
+
+def cmd_unsend(args: argparse.Namespace) -> int:
+    return _go(args, lambda api: (_need_auth(api), api.unsend_message(args.message_id),
+                                  print("ok")) and None)
+
+
+def cmd_broadcast(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        from .ratelimit import RateLimiter
+        _need_auth(api)
+        api.transport.rate_limiter = RateLimiter(rate=args.rate, per=1.0)
+        print(f"sending to {len(args.to)} target(s): {args.message!r}")
+        if not args.yes and input("proceed? [y/N] ").strip().lower() != "y":
+            print("cancelled"); return
+        ok = 0
+        for mid in args.to:
+            try:
+                api.send_text(mid, args.message); ok += 1; print(f"  sent -> {mid}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"  FAIL -> {mid}: {exc}")
+        print(f"\n{ok}/{len(args.to)} delivered")
+    return _go(args, run)
+
+
+def cmd_set_name(args: argparse.Namespace) -> int:
+    return _go(args, lambda api: (_need_auth(api), api.set_display_name(args.name),
+                                  print(f"display name -> {args.name!r}")) and None)
+
+
+def cmd_set_status(args: argparse.Namespace) -> int:
+    return _go(args, lambda api: (_need_auth(api), api.set_status_message(args.text),
+                                  print(f"status -> {args.text!r}")) and None)
+
+
+# -- reading ----------------------------------------------------------------
+def cmd_boxes(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        boxes = api.get_message_boxes(limit=args.limit)
+        for b in (boxes.get("messageBoxes", []) if isinstance(boxes, dict) else []):
+            if isinstance(b, dict):
+                print(f"{b.get('id')}  unread={b.get('unreadCount', '?')}")
+    return _go(args, run)
+
+
+def cmd_chatlog(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        names = _contact_names(api)
+        msgs = api.get_recent_messages(args.chat_mid, args.count) or []
+        for m in reversed(msgs):
+            if not isinstance(m, dict):
+                continue
+            text = m.get("text")
+            if m.get("chunks"):
+                if api.e2ee.is_ready():
+                    try:
+                        text = api.decrypt_message(m).get("text")
+                    except Exception:  # noqa: BLE001
+                        text = "[encrypted — could not decrypt]"
+                else:
+                    text = "[encrypted — run `okline login` to load keys]"
+            sender = m.get("from") or ""
+            who = names.get(sender) or sender[:10]
+            ct = m.get("contentType")
+            body = text if text else (f"<{_ct_name(ct)}>" if ct else "<empty>")
+            print(f"{who:>16}: {body}")
+    return _go(args, run)
+
+
+def _ct_name(ct: Any) -> str:
+    try:
+        from .enums import ContentType
+        return ContentType(int(ct)).name.lower()
+    except Exception:  # noqa: BLE001
+        return f"type{ct}"
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        _need_auth(api)
+        out = args.output or f"{args.chat_mid}.json"
+        messages: list = []
+        messages.extend(api.get_recent_messages(args.chat_mid, min(args.count, 200)) or [])
+        while len(messages) < args.count and messages:
+            oldest = messages[-1]
+            page = api.get_previous_messages(
+                args.chat_mid, oldest.get("id"),
+                int(oldest.get("deliveredTime") or oldest.get("createdTime") or 0),
+                count=min(args.count - len(messages), 200)) or []
+            if not page:
+                break
+            messages.extend(page)
+        messages = messages[:args.count]
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump(messages, fh, ensure_ascii=False, indent=2)
+        print(f"saved {len(messages)} messages -> {out}")
+    return _go(args, run)
+
+
+# -- live / bots ------------------------------------------------------------
+def cmd_watch(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        from .bot import Bot
+        _need_auth(api)
+        bot = Bot(api)
+
+        @bot.on_message
+        def _on(ctx):
+            where = "group" if ctx.is_group else "dm"
+            print(f"[{where}] {ctx.sender}: {ctx.text!r}")
+            if args.echo and ctx.text:
+                ctx.reply(f"you said: {ctx.text}")
+
+        print("watching for messages... (Ctrl-C to stop)")
+        try:
+            bot.run()
+        except KeyboardInterrupt:
+            print("\nstopped")
+    return _go(args, run)
+
+
+def cmd_autoreply(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        from .bot import Bot
+        _need_auth(api)
+        rules = {}
+        for r in (args.rule or []):
+            if "=" in r:
+                k, v = r.split("=", 1)
+                rules[k.strip()] = v.strip()
+        if not rules:
+            print("error: add at least one --rule \"keyword=reply\"", file=sys.stderr)
+            return 2
+        bot = Bot(api)
+
+        @bot.on_message
+        def _on(ctx):
+            if not ctx.text:
+                return
+            hay = ctx.text.lower() if args.ignore_case else ctx.text
+            for kw, reply in rules.items():
+                k = kw.lower() if args.ignore_case else kw
+                if k in hay:
+                    ctx.reply(reply)
+                    print(f"matched {kw!r} -> replied")
+                    break
+
+        print(f"auto-reply running with {len(rules)} rule(s)... (Ctrl-C to stop)")
+        try:
+            bot.run()
+        except KeyboardInterrupt:
+            print("\nstopped")
+    return _go(args, run)
+
+
+def cmd_notify(args: argparse.Namespace) -> int:
+    def run(api: OkLine):
+        from .bot import Bot
+        _need_auth(api)
+        bot = Bot(api)
+
+        @bot.on_message
+        def _on(ctx):
+            if args.group_only and not ctx.is_group:
+                return
+            if args.dm_only and ctx.is_group:
+                return
+            if args.keyword and (args.keyword.lower() not in (ctx.text or "").lower()):
+                return
+            where = "group" if ctx.is_group else "dm"
+            print(f"[{where}] {ctx.sender}: {ctx.text or '<non-text>'}")
+
+        print("watching... (Ctrl-C to stop)")
+        try:
+            bot.run()
+        except KeyboardInterrupt:
+            print("\nstopped")
+    return _go(args, run)
+
+
+# -- advanced ---------------------------------------------------------------
 def cmd_endpoints(args: argparse.Namespace) -> int:
     keys = sorted(THRIFT_ENDPOINTS)
     if args.grep:
@@ -74,92 +564,25 @@ def cmd_call(args: argparse.Namespace) -> int:
     try:
         parsed: List[Any] = json.loads(args.args) if args.args else []
     except ValueError as exc:
-        print(f"error: --args must be a JSON array: {exc}", file=sys.stderr)
-        return 2
+        print(f"error: args must be a JSON array: {exc}", file=sys.stderr); return 2
     if not isinstance(parsed, list):
         print("error: args JSON must be an array of positional thrift args",
-              file=sys.stderr)
-        return 2
+              file=sys.stderr); return 2
     if args.endpoint not in THRIFT_ENDPOINTS:
-        print(f"error: unknown endpoint {args.endpoint!r} "
-              f"(try `python -m okline endpoints`)", file=sys.stderr)
-        return 2
-
+        print(f"error: unknown endpoint {args.endpoint!r} (try `okline endpoints`)",
+              file=sys.stderr); return 2
     api = _make_client(args)
     try:
-        require_auth = not args.no_auth
-        result = api.transport.call(args.endpoint, parsed, require_auth=require_auth)
+        result = api.transport.call(args.endpoint, parsed, require_auth=not args.no_auth)
         if args.raw and api.last:
             _safe_print(api.last.pretty(redact=not args.show_secrets))
         else:
             _print_json(result)
         return 0
-    except Exception as exc:  # noqa: BLE001 - surface any failure cleanly
+    except Exception as exc:  # noqa: BLE001
         print(f"error: {exc}", file=sys.stderr)
         if args.raw and api.last:
             _safe_print(api.last.pretty(redact=not args.show_secrets))
-        return 1
-    finally:
-        api.close()
-
-
-def cmd_profile(args: argparse.Namespace) -> int:
-    api = _make_client(args)
-    try:
-        prof = api.get_profile()
-        _print_json(prof)
-        if args.raw:
-            _safe_print(api.last.pretty(redact=not args.show_secrets))
-        return 0
-    except Exception as exc:  # noqa: BLE001
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        api.close()
-
-
-def cmd_qr_login(args: argparse.Namespace) -> int:
-    api = OkLine(record=True, redact=not args.show_secrets)
-
-    def show_qr(url: str) -> None:
-        print("\nScan with LINE app (Add friends > QR code):\n")
-        print_qr(url, border=2, invert=args.invert)
-        print("\nor open:", url, "\n")
-
-    def show_pin(pin: str) -> None:
-        print(f"\n>>> Enter / confirm this PIN on your phone: {pin}\n")
-
-    try:
-        result = api.auth.qr_login(on_qr=show_qr, on_pin=show_pin,
-                                   wait_seconds=args.wait)
-        if not result.access_token:
-            print(f"login did not complete: type={result.type} "
-                  f"{result.display_message or ''}", file=sys.stderr)
-            return 1
-        print("login OK.")
-        tokens = {
-            "accessToken": result.access_token,
-            "refreshToken": result.refresh_token,
-            "certificate": result.certificate,
-            "mid": api.tokens.mid,
-        }
-        try:
-            prof = api.get_profile()
-            tokens["mid"] = prof.get("mid") if isinstance(prof, dict) else None
-            print("profile:")
-            _print_json(prof)
-        except Exception:  # noqa: BLE001
-            pass
-        if args.save:
-            with open(args.save, "w", encoding="utf-8") as fh:
-                json.dump(tokens, fh, ensure_ascii=False, indent=2)
-            print(f"tokens saved to {args.save}")
-        else:
-            print("\ntokens (keep these secret):")
-            _print_json(tokens)
-        return 0
-    except Exception as exc:  # noqa: BLE001
-        print(f"error: {exc}", file=sys.stderr)
         return 1
     finally:
         api.close()
@@ -169,117 +592,135 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     from .selftest import print_results, run_selftest
     api = _make_client(args)
     if not api.tokens.access_token:
-        print("error: selftest needs a token (--token or LINE_ACCESS_TOKEN)",
-              file=sys.stderr)
-        return 2
+        print("error: selftest needs a session (okline login)", file=sys.stderr); return 2
     try:
-        results = run_selftest(api, verbose=args.verbose)
-        fails = print_results(results)
+        fails = print_results(run_selftest(api, verbose=args.verbose))
         if args.save:
             api.save_log(args.save, fmt="text", redact=not args.show_secrets)
             print(f"\nfull transcript saved to {args.save}")
         return 1 if fails else 0
     except Exception as exc:  # noqa: BLE001
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+        print(f"error: {exc}", file=sys.stderr); return 1
     finally:
         api.close()
-
-
-def cmd_send(args: argparse.Namespace) -> int:
-    api = _make_client(args)
-    if not api.tokens.access_token:
-        print("error: send needs a token (--token / --tokens-file)", file=sys.stderr)
-        return 2
-    try:
-        if args.image:
-            res = api.send_image(args.to, args.image)
-        elif args.file:
-            res = api.send_file(args.to, args.file)
-        else:
-            if not args.text:
-                print("error: provide TEXT, or --image/--file", file=sys.stderr)
-                return 2
-            res = api.send_text(args.to, args.text)
-        _print_json(res)
-        if args.raw:
-            _safe_print(api.last.pretty(redact=not args.show_secrets))
-        return 0
-    except Exception as exc:  # noqa: BLE001
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        api.close()
-
-
-def cmd_version(args: argparse.Namespace) -> int:
-    print(f"OkLine {__version__} (emulates LINE CHROMEOS 3.7.2)")
-    return 0
 
 
 # -- parser -----------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="okline", description="OkLine — LINE Chrome API client")
+    p = argparse.ArgumentParser(
+        prog="okline", description="OkLine — a full LINE client in your terminal")
 
-    # Shared auth options — attached to every subcommand so they work *after*
-    # the subcommand name (e.g. `okline selftest --tokens-file tokens.json`).
     auth = argparse.ArgumentParser(add_help=False)
     auth.add_argument("--token", help="X-Line-Access token (or env LINE_ACCESS_TOKEN)")
     auth.add_argument("--refresh", help="refresh token (or env LINE_REFRESH_TOKEN)")
-    auth.add_argument("--tokens-file", help="JSON file with accessToken/refreshToken "
-                      "(as written by `qr-login --save`)")
+    auth.add_argument("--tokens-file", help="session JSON (default: ./tokens.json)")
     auth.add_argument("--show-secrets", action="store_true",
                       help="do not redact tokens/secrets in transcripts")
 
-    sub = p.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="command", required=False, metavar="<command>")
 
-    e = sub.add_parser("endpoints", parents=[auth], help="list all endpoint keys")
-    e.add_argument("grep", nargs="?", help="filter substring")
-    e.set_defaults(func=cmd_endpoints)
+    def add(name, fn, help, *, parents=(auth,)):
+        s = sub.add_parser(name, parents=list(parents), help=help)
+        s.set_defaults(func=fn)
+        return s
 
-    c = sub.add_parser("call", parents=[auth],
-                       help="call any endpoint and print its response")
-    c.add_argument("endpoint", help="Namespace.Service.method (see `endpoints`)")
-    c.add_argument("args", nargs="?", default="[]",
-                   help='positional thrift args as a JSON array, e.g. "[2]"')
-    c.add_argument("--raw", action="store_true", help="print the full HTTP transcript")
-    c.add_argument("--no-auth", action="store_true",
-                   help="do not require/send an access token (pre-login endpoints)")
-    c.set_defaults(func=cmd_call)
+    # interactive UI (also the default when run with no command)
+    add("menu", cmd_menu, "interactive menu UI (the default — just run `okline`)")
 
-    pr = sub.add_parser("profile", parents=[auth], help="fetch and print your profile")
-    pr.add_argument("--raw", action="store_true")
-    pr.set_defaults(func=cmd_profile)
+    # session / identity
+    s = add("login", cmd_login, "scan a QR to log in and save the session")
+    s.add_argument("--save", help="session file to write (default tokens.json)")
+    s.add_argument("--wait", type=float, default=180.0, help="seconds to wait for scan/PIN")
+    s.add_argument("--invert", action="store_true", help="invert QR colours (light terminal)")
+    add("whoami", cmd_whoami, "your profile + account stats")
+    s = add("profile", cmd_profile, "print your profile, or another user's by mid")
+    s.add_argument("mid", nargs="?", help="a user mid to look up (default: yourself)")
+    add("version", cmd_version, "print the OkLine version")
 
-    q = sub.add_parser("qr-login", parents=[auth],
-                       help="log in by scanning a terminal QR code")
-    q.add_argument("--save", help="write the issued tokens to this JSON file")
-    q.add_argument("--wait", type=float, default=180.0, help="seconds to wait for scan/PIN")
-    q.add_argument("--invert", action="store_true", help="invert QR colours (light terminal)")
-    q.set_defaults(func=cmd_qr_login)
+    # contacts / people
+    s = add("contacts", cmd_contacts, "list/search/export your contacts")
+    s.add_argument("--search", help="filter by display-name substring")
+    s.add_argument("--csv", help="write results to a CSV file")
+    s.add_argument("--json", help="write results to a JSON file")
+    s = add("find", cmd_find, "find a contact's mid by display name")
+    s.add_argument("query")
+    s = add("search", cmd_search, "find a user by public LINE ID (--add to friend)")
+    s.add_argument("userid"); s.add_argument("--add", action="store_true")
+    s = add("add", cmd_add, "add a friend by mid or LINE ID")
+    s.add_argument("who")
+    s = add("block", cmd_block, "list / add / remove blocked contacts")
+    s.add_argument("action", choices=["list", "add", "remove"])
+    s.add_argument("mid", nargs="?")
+    s = add("favorites", cmd_favorites, "list / add / remove favorite chats")
+    s.add_argument("action", choices=["list", "add", "remove"])
+    s.add_argument("mid", nargs="?")
 
-    sd = sub.add_parser("send", parents=[auth], help="send a text/image/file message")
-    sd.add_argument("to", help="destination mid (u…/c…/r…)")
-    sd.add_argument("text", nargs="?", help="message text")
-    sd.add_argument("--image", help="path to an image to send")
-    sd.add_argument("--file", help="path to a file to send")
-    sd.add_argument("--raw", action="store_true", help="print the full transcript")
-    sd.set_defaults(func=cmd_send)
+    # groups / chats
+    add("groups", cmd_groups, "list your groups (+ invited)")
+    s = add("members", cmd_members, "list a group's members with names")
+    s.add_argument("group_mid")
+    s = add("leave", cmd_leave, "leave a group/room")
+    s.add_argument("chat_mid")
+    s = add("accept", cmd_accept, "accept a group invitation")
+    s.add_argument("chat_mid")
 
-    st = sub.add_parser("selftest", parents=[auth],
-                        help="call every read-only endpoint and report pass/fail")
-    st.add_argument("--verbose", action="store_true", help="print each check as it runs")
-    st.add_argument("--save", help="save the full transcript to this file")
-    st.set_defaults(func=cmd_selftest)
+    # messaging
+    s = add("send", cmd_send, "send text / sticker / location / image / file")
+    s.add_argument("to"); s.add_argument("text", nargs="?")
+    s.add_argument("--encrypt", action="store_true", help="send as an E2EE message")
+    s.add_argument("--image"); s.add_argument("--file")
+    s.add_argument("--sticker", nargs=2, metavar=("PKG", "STK"))
+    s.add_argument("--location", nargs=2, type=float, metavar=("LAT", "LON"))
+    s.add_argument("--title", help="location title")
+    s = add("react", cmd_react, "react to a message")
+    s.add_argument("message_id")
+    s.add_argument("--reaction", default="NICE",
+                   choices=["NICE", "LOVE", "FUN", "AMAZING", "SAD", "OMG"])
+    s = add("unsend", cmd_unsend, "recall one of your messages")
+    s.add_argument("message_id")
+    s = add("broadcast", cmd_broadcast, "send one text to many chats")
+    s.add_argument("message"); s.add_argument("--to", nargs="+", required=True)
+    s.add_argument("--rate", type=float, default=3.0); s.add_argument("--yes", action="store_true")
+    s = add("set-name", cmd_set_name, "change your display name")
+    s.add_argument("name")
+    s = add("set-status", cmd_set_status, "change your status message")
+    s.add_argument("text")
 
-    v = sub.add_parser("version", parents=[auth], help="print version")
-    v.set_defaults(func=cmd_version)
+    # reading
+    s = add("boxes", cmd_boxes, "list your message boxes")
+    s.add_argument("--limit", type=int, default=20)
+    s = add("chatlog", cmd_chatlog, "print a chat's recent messages (decrypts E2EE)")
+    s.add_argument("chat_mid"); s.add_argument("-n", "--count", type=int, default=30)
+    s = add("backup", cmd_backup, "save a chat's recent messages to JSON")
+    s.add_argument("chat_mid"); s.add_argument("-n", "--count", type=int, default=200)
+    s.add_argument("-o", "--output")
+
+    # live / bots
+    s = add("watch", cmd_watch, "print incoming messages live (--echo to reply)")
+    s.add_argument("--echo", action="store_true")
+    s = add("autoreply", cmd_autoreply, "keyword auto-reply bot (--rule kw=reply)")
+    s.add_argument("--rule", action="append"); s.add_argument("--ignore-case", action="store_true")
+    s = add("notify", cmd_notify, "alert on incoming messages")
+    s.add_argument("--keyword"); s.add_argument("--group-only", action="store_true")
+    s.add_argument("--dm-only", action="store_true")
+
+    # advanced
+    s = add("endpoints", cmd_endpoints, "list all 77 endpoint keys")
+    s.add_argument("grep", nargs="?")
+    s = add("call", cmd_call, "call any endpoint and print its response")
+    s.add_argument("endpoint"); s.add_argument("args", nargs="?", default="[]")
+    s.add_argument("--raw", action="store_true"); s.add_argument("--no-auth", action="store_true")
+    s = add("selftest", cmd_selftest, "exercise every read-only endpoint")
+    s.add_argument("--verbose", action="store_true"); s.add_argument("--save")
     return p
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    args = build_parser().parse_args(argv)
+    if getattr(args, "func", None) is None:    # `okline` with no command -> menu
+        from .menu import interactive
+        return interactive(argparse.Namespace(
+            token=None, refresh=None, tokens_file=None, show_secrets=False))
     return args.func(args)
 
 

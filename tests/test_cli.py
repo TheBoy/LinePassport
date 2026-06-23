@@ -48,10 +48,14 @@ class FakeOkLine:
     instances = []
 
     def __init__(self, **kwargs):
+        import types
         self.init_kwargs = kwargs
         self.transport = FakeTransport(self.result)
         self.last = None  # cmd_call only touches .last when --raw is given
         self.closed = False
+        # commands that require auth check .tokens.access_token
+        self.tokens = types.SimpleNamespace(
+            access_token=kwargs.get("access_token") or "TKN", mid=None)
         FakeOkLine.instances.append(self)
 
     def get_profile(self):
@@ -59,6 +63,11 @@ class FakeOkLine:
 
     def close(self):
         self.closed = True
+
+    @classmethod
+    def from_tokens_file(cls, path, **kwargs):
+        # the CLI may load a session file (and restore E2EE) instead of raw tokens
+        return cls(**kwargs)
 
 
 @pytest.fixture
@@ -115,11 +124,11 @@ def test_parser_call_args_default_is_empty_array():
     assert args.no_auth is False
 
 
-def test_parser_qr_login_defaults():
-    """`qr-login` exposes save/wait/invert with sensible defaults."""
-    args = cli.build_parser().parse_args(["qr-login"])
-    assert args.command == "qr-login"
-    assert args.func is cli.cmd_qr_login
+def test_parser_login_defaults():
+    """`login` exposes save/wait/invert with sensible defaults."""
+    args = cli.build_parser().parse_args(["login"])
+    assert args.command == "login"
+    assert args.func is cli.cmd_login
     assert args.save is None
     assert args.wait == pytest.approx(180.0)
     assert args.invert is False
@@ -146,10 +155,10 @@ def test_parser_auth_flags_after_subcommand():
     assert args.show_secrets is True
 
 
-def test_parser_requires_a_subcommand():
-    """A bare invocation with no subcommand is rejected by argparse."""
-    with pytest.raises(SystemExit):
-        cli.build_parser().parse_args([])
+def test_parser_no_subcommand_defaults_to_menu():
+    """A bare invocation parses with no func; main() then launches the menu."""
+    args = cli.build_parser().parse_args([])
+    assert getattr(args, "func", None) is None
 
 
 # ---------------------------------------------------------------------------

@@ -67,8 +67,19 @@ pip install -e .          # editable install of the okline package + deps
 **First login** (do this once; the session is then reusable):
 
 ```bash
-python -m okline qr-login --save tokens.json     # scan the QR with the LINE app
-python -m okline profile --tokens-file tokens.json
+okline login                 # scan the QR with the LINE app — saves tokens.json
+```
+
+Then just run `okline` for an **interactive, menu-driven UI** (pick actions by
+number), or use any of the ~30 subcommands directly:
+
+```bash
+okline                       # interactive menu (soft colours, no setup)
+okline whoami
+okline send <mid> "hello"
+okline contacts --search soda
+okline chatlog <chat-mid>    # reads and decrypts recent messages
+okline -h                    # full command list
 ```
 
 ## Quick start

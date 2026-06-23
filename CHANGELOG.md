@@ -4,6 +4,22 @@ All notable changes to OkLine are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] - 2026-06-23
+
+### Added
+- **Interactive terminal UI** — run `okline` with no arguments for a soft-coloured,
+  menu-driven console: pick actions by number, no commands to memorise. It logs in
+  by QR on first use and saves the session. New `okline.ui` toolkit (muted palette,
+  TTY-aware, ASCII fallback) + `okline.menu`.
+- **Full CLI** — `okline <command>` now covers ~30 actions: `login`, `whoami`,
+  `profile`, `contacts` (search/export), `find`, `search`, `add`, `block`,
+  `favorites`, `groups`, `members`, `leave`, `accept`, `send` (text/sticker/
+  location/image/file/`--encrypt`), `react`, `unsend`, `broadcast`, `set-name`,
+  `set-status`, `boxes`, `chatlog` (decrypts E2EE), `backup`, `watch`, `autoreply`,
+  `notify`, plus the existing `endpoints`/`call`/`selftest`.
+- Every command reuses a saved `tokens.json` by default (and restores E2EE keys),
+  so after `okline login` the rest "just work".
+
 ## [2.4.0] - 2026-06-23
 
 ### Added
