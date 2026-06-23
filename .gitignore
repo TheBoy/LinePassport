@@ -43,3 +43,9 @@ line_login_qr.png
 
 # OkLine live-test reports
 live_test_report.*
+
+# example tool outputs (personal data)
+contacts.csv
+chat.json
+friends.json
+*.csv
