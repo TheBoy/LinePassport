@@ -104,29 +104,33 @@ class OperationReceiver:
         event_name = ""
         data_lines: list[str] = []
         last_id: Optional[str] = None
-        for raw_line in resp.iter_lines(decode_unicode=True):
-            if raw_line is None:
-                continue
-            line = raw_line.rstrip("\r")
-            if line == "":
-                # dispatch
-                if data_lines:
-                    data_str = "\n".join(data_lines)
-                    yield SSEEvent(event_name or "message",
-                                   _maybe_json(data_str), id=last_id, raw=data_str)
-                event_name, data_lines = "", []
-                continue
-            if line.startswith(":"):
-                continue  # comment / keep-alive
-            field, _, value = line.partition(":")
-            if value.startswith(" "):
-                value = value[1:]
-            if field == "event":
-                event_name = value
-            elif field == "data":
-                data_lines.append(value)
-            elif field == "id":
-                last_id = value
+        try:
+            for raw_line in resp.iter_lines(decode_unicode=True):
+                if raw_line is None:
+                    continue
+                line = raw_line.rstrip("\r")
+                if line == "":
+                    # dispatch
+                    if data_lines:
+                        data_str = "\n".join(data_lines)
+                        yield SSEEvent(event_name or "message",
+                                       _maybe_json(data_str), id=last_id, raw=data_str)
+                    event_name, data_lines = "", []
+                    continue
+                if line.startswith(":"):
+                    continue  # comment / keep-alive
+                key, _, value = line.partition(":")
+                if value.startswith(" "):
+                    value = value[1:]
+                if key == "event":
+                    event_name = value
+                elif key == "data":
+                    data_lines.append(value)
+                elif key == "id":
+                    last_id = value
+        finally:
+            # release the connection when the generator is closed/exhausted/raises
+            resp.close()
 
     def iter_operations(self, *, reconnect: bool = True) -> Iterator[Operation]:
         """Convenience: yield individual :class:`Operation` objects from SSE."""

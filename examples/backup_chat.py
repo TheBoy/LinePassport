@@ -20,7 +20,7 @@ def main() -> None:
     api = load(args)
     try:
         out = args.output or f"{args.chat_mid}.json"
-        messages, fetched, end_id, end_time = [], None, None, None
+        messages: list = []
         # page backwards until we have `count` (or run out)
         recent = api.get_recent_messages(args.chat_mid, min(args.count, 200)) or []
         messages.extend(recent)

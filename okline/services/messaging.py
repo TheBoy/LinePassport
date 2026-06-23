@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Optional
 
-from ..enums import ContentType, PredefinedReactionType, SyncReason
+from ..enums import PredefinedReactionType, SyncReason
 from ..exceptions import LineApiError
 from ..models import Message
 

@@ -82,7 +82,7 @@ class LtsmBridge:
             ) from exc
 
         # wait for the readiness line
-        ready_line = self._readline(timeout=self.start_timeout)
+        ready_line = self._readline()
         try:
             msg = json.loads(ready_line)
         except (TypeError, ValueError):
@@ -90,7 +90,7 @@ class LtsmBridge:
         if not msg.get("ready"):
             raise HmacSignerError(f"bridge init failed: {msg.get('error')}")
 
-    def _readline(self, timeout: Optional[float] = None) -> str:
+    def _readline(self) -> str:
         assert self._proc and self._proc.stdout
         # readline() blocks; the bridge always responds promptly so we rely on
         # the OS pipe.  (A watchdog could be added if needed.)

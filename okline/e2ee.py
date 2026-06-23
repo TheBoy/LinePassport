@@ -26,7 +26,6 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 
 from . import e2ee_crypto as fr
-from .enums import ContentType
 
 log = logging.getLogger("okline.e2ee")
 

@@ -135,7 +135,7 @@ setGlobal('XMLHttpRequest', class XMLHttpRequest {
   addEventListener(t, cb) { if (t === 'load') this.onload = cb; if (t === 'error') this.onerror = cb; }
   send() {
     if (this._rt === 'arraybuffer') this.response = wasmAB;
-    else { this.responseText = Buffer.from(wasmBytes).toString('binary'); this.response = this.responseText; }
+    else { this.responseText = wasmBytes.toString('binary'); this.response = this.responseText; }  // already a Buffer
     this.status = 200; this.readyState = 4;
     if (this.onreadystatechange) this.onreadystatechange();
     if (this.onload) this.onload();

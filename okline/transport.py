@@ -247,13 +247,13 @@ class Transport:
         is_gateway = base is None or base == self.config.gateway_base
         url = (base or self.config.gateway_base) + path
         headers = self.base_headers(with_access=require_auth)
+        # axios signs GETs too; the signed path includes the query string, the
+        # body is the empty string. Compute it once and reuse for signing+record.
+        sig_path = path
+        if params:
+            from urllib.parse import urlencode
+            sig_path = path + "?" + urlencode(params)
         if is_gateway and sign:
-            # axios signs GETs too; the signed path includes the query string,
-            # the body is the empty string.
-            sig_path = path
-            if params:
-                from urllib.parse import urlencode
-                sig_path = path + "?" + urlencode(params)
             self._sign(headers, sig_path, "")
         if extra_headers:
             headers.update(extra_headers)
@@ -262,10 +262,6 @@ class Transport:
         resp = self._send("GET", url, headers=headers, params=params,
                           stream=stream, timeout=timeout)
         if not stream:  # never consume a streamed (SSE) body
-            sig_path = path
-            if params:
-                from urllib.parse import urlencode
-                sig_path = path + "?" + urlencode(params)
             self._record_exchange("GET", url, sig_path, None, headers, None,
                                   resp, None, None, t0, started, decode_text=True)
         return resp

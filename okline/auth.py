@@ -35,7 +35,7 @@ from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from . import endpoints as ep
-from .crypto import RSAKeyInfo, gen_uuid_hex, rsa_encrypt_credentials
+from .crypto import RSAKeyInfo, rsa_encrypt_credentials
 from .enums import IdentityProvider, LoginResultType, LoginType
 from .exceptions import LineApiError, LineAuthError, LineTransportError
 from .transport import Transport

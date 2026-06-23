@@ -17,6 +17,7 @@ by default; pass ``redact=False`` to reveal them.
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -143,12 +144,12 @@ class Recorder:
     def __init__(self, capacity: int = 500, redact: bool = True) -> None:
         self.capacity = capacity
         self.redact = redact
-        self._entries: List[Exchange] = []
+        # a bounded deque drops the oldest entry in O(1) on append — no per-record
+        # O(n) list re-slice once we hit capacity.
+        self._entries: "deque[Exchange]" = deque(maxlen=capacity)
 
     def record(self, ex: Exchange) -> None:
         self._entries.append(ex)
-        if len(self._entries) > self.capacity:
-            del self._entries[: len(self._entries) - self.capacity]
 
     @property
     def entries(self) -> List[Exchange]:

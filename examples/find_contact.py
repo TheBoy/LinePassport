@@ -17,8 +17,10 @@ def main() -> None:
     api = load(args)
     try:
         q = args.query.lower()
-        hits = [(mid, contact_name(w)) for mid, w in all_contacts(api).items()
-                if q in contact_name(w).lower()]
+        hits = [(mid, name)
+                for mid, name in ((m, contact_name(w))
+                                  for m, w in all_contacts(api).items())
+                if q in name.lower()]
         if not hits:
             print(f"no contact matching {args.query!r}")
             return

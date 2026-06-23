@@ -38,10 +38,15 @@ from .operations import Operation
 log = logging.getLogger("okline.bot")
 
 
+def _is_group_mid(mid: Optional[str]) -> bool:
+    """True for a group/room/square mid (C/R/S prefix, any case)."""
+    return (mid or "")[:1].lower() in ("c", "r", "s")
+
+
 def _reply_target(message: dict) -> Optional[str]:
     """Where a reply should go: the group/room if any, else the sender."""
     to = message.get("to") or ""
-    if to[:1].lower() in ("c", "r", "s"):  # group / room / square chat
+    if _is_group_mid(to):
         return to
     return message.get("from") or to or None
 
@@ -79,7 +84,7 @@ class MessageContext(EventContext):
 
     @property
     def is_group(self) -> bool:
-        return (self.to or "")[:1].lower() in ("c", "r", "s")
+        return _is_group_mid(self.to)
 
     @property
     def reply_target(self) -> Optional[str]:

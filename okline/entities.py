@@ -118,8 +118,8 @@ class Group:
         d = d or {}
         extra = _g(d, "extra", default={}) or {}
         gx = extra.get("groupExtra", {}) if isinstance(extra, dict) else {}
-        members = list(gx.get("memberMids", {}) or [])
-        invitees = list(gx.get("inviteeMids", {}) or [])
+        members = list(gx.get("memberMids", []) or [])
+        invitees = list(gx.get("inviteeMids", []) or [])
         return cls(
             chat_mid=_g(d, "chatMid", "mid", default=""),
             name=_g(d, "chatName", "name", default=""),
