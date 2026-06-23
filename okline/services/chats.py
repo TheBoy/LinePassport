@@ -131,14 +131,34 @@ class ChatsMixin:
             "withInvitedChats": with_invited_chats,
         }, sync_reason])
 
+    #: The server rejects ``getChats`` with more than this many mids per call
+    #: (``Invalid Length`` / code 6), so requests are chunked.
+    GET_CHATS_LIMIT = 100
+
     def get_chats(self, chat_mids: Iterable[str], *, with_members: bool = True,
                   with_invitees: bool = True) -> Any:
-        """``getChats(request)`` -> ``{chats: [Chat]}``."""
-        return self.transport.call("Talk.TalkService.getChats", [{
-            "chatMids": list(chat_mids),
-            "withMembers": with_members,
-            "withInvitees": with_invitees,
-        }])
+        """``getChats(request)`` -> ``{chats: [Chat]}``.
+
+        Automatically chunked at :attr:`GET_CHATS_LIMIT` mids per request and the
+        ``chats`` lists merged, so you can pass an unbounded number of chat mids.
+        """
+        mids = list(chat_mids)
+
+        def _call(batch):
+            return self.transport.call("Talk.TalkService.getChats", [{
+                "chatMids": batch,
+                "withMembers": with_members,
+                "withInvitees": with_invitees,
+            }])
+
+        if len(mids) <= self.GET_CHATS_LIMIT:
+            return _call(mids)
+        merged: list = []
+        for i in range(0, len(mids), self.GET_CHATS_LIMIT):
+            res = _call(mids[i:i + self.GET_CHATS_LIMIT])
+            if isinstance(res, dict):
+                merged.extend(res.get("chats", []) or [])
+        return {"chats": merged}
 
     # -- legacy rooms --------------------------------------------------------
     def invite_into_room(self, room_mid: str, contact_ids: Iterable[str],

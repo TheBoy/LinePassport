@@ -4,6 +4,15 @@ All notable changes to OkLine are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.5.2] - 2026-06-23
+
+### Fixed
+- `get_chats` now **auto-chunks** at 100 mids per request (and merges the results)
+  — large accounts hit `Invalid Length` (code 6) listing groups. Fixes
+  `okline groups` / the menu for 100+ chats.
+- The CLI now forces UTF-8 stdout, so non-ASCII (e.g. Thai) group/contact names no
+  longer raise `UnicodeEncodeError` on Windows code pages.
+
 ## [2.5.1] - 2026-06-23
 
 ### Changed

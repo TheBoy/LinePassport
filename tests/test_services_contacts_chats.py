@@ -407,6 +407,28 @@ class TestChatListing:
         assert body["withMembers"] is False
         assert body["withInvitees"] is False
 
+    def test_get_chats_chunks_over_the_limit(self, make_api):
+        """>100 chat mids are split into <=100-mid requests and merged.
+
+        The gateway rejects a longer list with ``Invalid Length`` (code 6).
+        """
+        api = make_api()
+        sizes = []
+
+        def fake_call(endpoint, args, **kw):
+            mids = args[0]["chatMids"]
+            sizes.append(len(mids))
+            return {"chats": [{"chatMid": m} for m in mids]}
+
+        api.transport.call = fake_call
+        res = api.get_chats([f"C{i}" for i in range(230)])
+        assert sizes == [100, 100, 30]            # chunked at GET_CHATS_LIMIT
+        assert len(res["chats"]) == 230           # merged back together
+
+        sizes.clear()
+        api.get_chats([f"C{i}" for i in range(50)])
+        assert sizes == [50]                      # <= limit -> a single request
+
 
 # ===========================================================================
 # chats.py -- legacy rooms

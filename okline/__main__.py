@@ -716,6 +716,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    try:  # Thai / emoji / box glyphs regardless of the OS code page
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
     args = build_parser().parse_args(argv)
     if getattr(args, "func", None) is None:    # `okline` with no command -> menu
         from .menu import interactive
