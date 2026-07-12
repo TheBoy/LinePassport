@@ -111,6 +111,7 @@ documentShim.location = windowShim.location;
 setGlobal('window', windowShim);
 setGlobal('self', windowShim);
 setGlobal('document', documentShim);
+setGlobal('crypto', CRYPTO, true);
 setGlobal('atob', ATOB);
 setGlobal('btoa', BTOA);
 setGlobal('location', windowShim.location);
@@ -169,7 +170,15 @@ try { if (global.Node && !global.Node.ELEMENT_NODE) { global.Node.ELEMENT_NODE =
 // ---------------------------------------------------------------------------
 // Load the real sandbox bundle and drive its message protocol.
 // ---------------------------------------------------------------------------
-require(path.join(DIR, 'ltsmSandbox.js'));
+try {
+  require(path.join(DIR, 'ltsmSandbox.js'));
+} catch (error) {
+  process.stdout.write(JSON.stringify({
+    ready: false,
+    error: error && error.message ? error.message : String(error),
+  }) + '\n');
+  process.exit(1);
+}
 (docListeners['DOMContentLoaded'] || []).forEach((cb) => cb());
 
 function send(data) {
