@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OKLINE_STATE_DIR=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates nodejs tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates curl nodejs tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
