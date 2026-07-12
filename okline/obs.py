@@ -74,10 +74,19 @@ class ObsClient:
         url = f"{self._t.config.obs_base}/r/{service}/{sid}/{oid}"
         headers = self._t.base_headers()
         headers["X-Obs-Params"] = encode_obs_params(obs_params)
-        headers.pop("content-type", None)
+        headers["content-type"] = "application/octet-stream"
+        headers["content-length"] = str(len(data))
+        headers["connection"] = "close"
         if offset is not None and total is not None:
             headers["range"] = f"bytes {offset}-{total - 1}/{total}"
-        resp = self._t._send("POST", url, headers=headers, data=data)
+        resp = self._t._send(
+            "POST",
+            url,
+            headers=headers,
+            data=data,
+            max_retries=self._t.config.obs_max_retries,
+            retry_backoff=self._t.config.obs_retry_backoff,
+        )
         return _json(resp)
 
     def download_object(
@@ -117,15 +126,26 @@ class ObsClient:
             params["cat"] = cat
         url = f"{self._t.config.obs_base}/r/{service}/{sid}/{oid}"
         headers = self._t.base_headers()
-        headers.pop("content-type", None)
+        headers["content-type"] = "application/octet-stream"
+        headers["content-length"] = str(len(data))
+        headers["connection"] = "close"
         headers["X-Obs-Params"] = encode_obs_params(params)
+        if data:
+            headers["range"] = f"bytes 0-{len(data) - 1}/{len(data)}"
         if enc_token:  # OBS auth = encrypted access token
             headers["X-Line-Access"] = enc_token
         import time
 
         t0 = time.monotonic()
         started = time.time()
-        resp = self._t._send("POST", url, headers=headers, data=data)
+        resp = self._t._send(
+            "POST",
+            url,
+            headers=headers,
+            data=data,
+            max_retries=self._t.config.obs_max_retries,
+            retry_backoff=self._t.config.obs_retry_backoff,
+        )
         err = None
         if resp.status_code >= 400:
             from .exceptions import LineApiError

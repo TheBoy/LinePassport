@@ -82,7 +82,11 @@ class LineConfig:
     locale: str = "en-US"  # Accept-Language / X-LAL
     timeout: float = 30.0
     long_poll_timeout: float = 180.0  # X-LST default is 180000 ms
-    max_retries: int = 2  # transport-level retries on 5xx
+    max_retries: int = 2  # default transport-level retries on 5xx/network errors
+    retry_backoff: float = 0.0
+    retry_backoff_max: float = 5.0
+    obs_max_retries: int = 4  # media uploads are more prone to transient TLS resets
+    obs_retry_backoff: float = 0.75
     verify_tls: bool = True
     proxies: Mapping[str, str] | None = None
     enable_hmac: bool = True  # attach the required X-Hmac header
@@ -390,12 +394,15 @@ class Transport:
 
     # -- internals -----------------------------------------------------------
     def _send(self, method: str, url: str, **kw: Any) -> requests.Response:
+        max_retries = int(kw.pop("max_retries", self.config.max_retries))
+        retry_backoff = float(kw.pop("retry_backoff", self.config.retry_backoff))
+        retry_backoff_max = float(kw.pop("retry_backoff_max", self.config.retry_backoff_max))
         kw.setdefault("timeout", self.config.timeout)
         kw.setdefault("verify", self.config.verify_tls)
         if self.rate_limiter is not None and not kw.get("stream"):
             self.rate_limiter.acquire()
         last_exc: Exception | None = None
-        attempts = max(1, self.config.max_retries + 1)
+        attempts = max(1, max_retries + 1)
         for attempt in range(attempts):
             try:
                 log.debug("%s %s", method, url)
@@ -405,13 +412,24 @@ class Transport:
                     last_exc = LineTransportError(
                         f"server error {resp.status_code}", status=resp.status_code
                     )
+                    self._sleep_before_retry(attempt, retry_backoff, retry_backoff_max)
                     continue
                 return resp
             except requests.RequestException as exc:  # pragma: no cover - network
                 last_exc = exc
                 if attempt >= attempts - 1:
                     break
+                self._sleep_before_retry(attempt, retry_backoff, retry_backoff_max)
         raise LineTransportError(f"request to {url} failed: {last_exc}") from last_exc
+
+    @staticmethod
+    def _sleep_before_retry(attempt: int, backoff: float, max_backoff: float) -> None:
+        if backoff <= 0:
+            return
+        delay = backoff * (2**attempt)
+        if max_backoff > 0:
+            delay = min(delay, max_backoff)
+        time.sleep(delay)
 
     def _decode(self, resp: requests.Response, *, path: str, endpoint_key: str | None) -> Any:
         text = resp.text

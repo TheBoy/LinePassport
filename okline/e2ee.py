@@ -168,6 +168,25 @@ class E2EEManager:
             raise RuntimeError(f"no public key for sender {sender_mid}")
         return self._bridge.e2ee_create_channel_with_pubkey(my_handle, pub_b64)
 
+    def _channel_for_self(
+        self, peer_mid: str, sender_key_id: int, receiver_key_id: int
+    ) -> int:
+        """ECDH channel to decrypt a message **we sent ourselves**: our own
+        private key at ``sender_key_id`` against the recipient's public key at
+        ``receiver_key_id`` (the mirror of :meth:`_channel_for_send`).  Needed
+        because a self-sent message carries the peer's key as ``receiver_key_id``,
+        for which we hold no private key."""
+        my_handle = self.my_keys.get(sender_key_id) or self.my_keys.get(
+            self.latest_key_id or 0
+        )
+        if my_handle is None:
+            raise RuntimeError("no local E2EE key to decrypt our own message")
+        peer_pub = self.api.get_e2ee_public_key(peer_mid, 1, receiver_key_id)
+        pub_b64 = peer_pub.get("keyData") if isinstance(peer_pub, dict) else None
+        if not pub_b64:
+            raise RuntimeError(f"no public key for recipient {peer_mid}")
+        return self._bridge.e2ee_create_channel_with_pubkey(my_handle, pub_b64)
+
     # -- encrypt / decrypt (routers) -----------------------------------------
     @staticmethod
     def _is_group(message: dict[str, Any]) -> bool:
@@ -231,7 +250,14 @@ class E2EEManager:
         sender, to = message.get("from") or "", message.get("to") or ""
         parse = fr.parse_chunks_v1 if version == 1 else fr.parse_chunks
         ciphertext, sender_key_id, receiver_key_id = parse(chunks)
-        channel = self._channel_for_receive(sender, sender_key_id or 0, receiver_key_id or 0)
+        if sender and sender == self.my_mid:
+            # a message we sent ourselves — decrypt with our own private key and
+            # the recipient's public key (roles are mirrored vs a received msg).
+            channel = self._channel_for_self(to, sender_key_id or 0, receiver_key_id or 0)
+        else:
+            channel = self._channel_for_receive(
+                sender, sender_key_id or 0, receiver_key_id or 0
+            )
         ct_b64 = base64.b64encode(ciphertext).decode("ascii")
         if version == 1:
             pt_b64 = self._bridge.e2ee_decrypt_v1(channel, ciphertext_b64=ct_b64)

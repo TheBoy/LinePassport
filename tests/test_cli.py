@@ -57,10 +57,33 @@ class FakeOkLine:
         self.tokens = types.SimpleNamespace(
             access_token=kwargs.get("access_token") or "TKN", mid=None
         )
+        # per-instance recorders for the (formerly stub) mutating commands
+        self.calls: dict[str, list] = {
+            "leave_chat": [],
+            "accept_chat_invitation": [],
+            "unsend_message": [],
+            "set_display_name": [],
+            "set_status_message": [],
+        }
         FakeOkLine.instances.append(self)
 
     def get_profile(self):
         return self.transport.call("Talk.TalkService.getProfile", [2])
+
+    def leave_chat(self, chat_mid):
+        self.calls["leave_chat"].append(chat_mid)
+
+    def accept_chat_invitation(self, chat_mid):
+        self.calls["accept_chat_invitation"].append(chat_mid)
+
+    def unsend_message(self, message_id):
+        self.calls["unsend_message"].append(message_id)
+
+    def set_display_name(self, name):
+        self.calls["set_display_name"].append(name)
+
+    def set_status_message(self, message):
+        self.calls["set_status_message"].append(message)
 
     def close(self):
         self.closed = True
@@ -133,6 +156,31 @@ def test_parser_login_defaults():
     assert args.invert is False
 
 
+def test_parser_web_defaults_and_flags():
+    """`web` starts the local browser UI with host/port/open-browser options."""
+    args = cli.build_parser().parse_args(
+        [
+            "web",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8766",
+            "--state-dir",
+            ".okline-test",
+            "--database-url",
+            "postgresql://okline:okline@localhost/okline",
+            "--no-open",
+        ]
+    )
+    assert args.command == "web"
+    assert args.func is cli.cmd_web
+    assert args.host == "127.0.0.1"
+    assert args.port == 8766
+    assert args.state_dir == ".okline-test"
+    assert args.database_url == "postgresql://okline:okline@localhost/okline"
+    assert args.no_open is True
+
+
 def test_parser_profile_and_version():
     """`profile` and `version` dispatch to their handlers."""
     prof = cli.build_parser().parse_args(["profile"])
@@ -166,6 +214,23 @@ def test_parser_no_subcommand_defaults_to_menu():
     """A bare invocation parses with no func; main() then launches the menu."""
     args = cli.build_parser().parse_args([])
     assert getattr(args, "func", None) is None
+
+
+def test_parser_auth_flags_at_top_level_without_subcommand():
+    """`okline --token X` (no subcommand) parses the auth flags at the top level
+    so main() can forward them to the menu."""
+    args = cli.build_parser().parse_args(["--token", "TKN", "--show-secrets"])
+    assert getattr(args, "func", None) is None
+    assert args.token == "TKN"
+    assert args.show_secrets is True
+
+
+def test_parser_auth_flags_before_subcommand_not_clobbered():
+    """A flag given *before* the subcommand survives (SUPPRESS default keeps the
+    subparser from resetting it to None)."""
+    args = cli.build_parser().parse_args(["--token", "TKN", "profile"])
+    assert args.command == "profile"
+    assert args.token == "TKN"
 
 
 # ---------------------------------------------------------------------------
@@ -358,14 +423,124 @@ def test_cmd_call_transport_failure_returns_1(fake_okline, capsys):
 # ---------------------------------------------------------------------------
 # cmd_profile (uses the same fake client)
 # ---------------------------------------------------------------------------
-def test_cmd_profile_prints_profile(fake_okline, capsys):
-    """profile fetches via the client and prints the JSON result."""
-    fake_okline.result = {"mid": "u123", "displayName": "Tester"}
+def test_cmd_profile_default_prints_formatted(fake_okline, capsys):
+    """`profile` (own, no --json) prints a clean key:value subset, not raw JSON."""
+    fake_okline.result = {
+        "mid": "u123",
+        "displayName": "Tester",
+        "userid": "tester1",
+        "regionCode": "JP",
+        "statusMessage": "hi there",
+    }
     code = run(["profile"])
+    out = capsys.readouterr().out
+    assert code == 0
+    # The chosen subset is present, formatted as "key : value" lines.
+    assert "Tester" in out
+    assert "u123" in out
+    assert "tester1" in out
+    assert "JP" in out
+    assert "hi there" in out
+    # It is deliberately *not* a raw JSON dump anymore.
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(out)
+    assert fake_okline.instances[0].closed is True
+
+
+def test_cmd_profile_json_flag_dumps_raw(fake_okline, capsys):
+    """`profile --json` still emits the raw JSON profile for scripting."""
+    fake_okline.result = {"mid": "u123", "displayName": "Tester"}
+    code = run(["profile", "--json"])
     out = capsys.readouterr().out
     assert code == 0
     assert json.loads(out) == fake_okline.result
     assert fake_okline.instances[0].closed is True
+
+
+# ---------------------------------------------------------------------------
+# Mutating commands that used to be silent no-op stubs (now wired to the client)
+# ---------------------------------------------------------------------------
+def test_cmd_leave_calls_client(fake_okline, capsys):
+    """`leave <mid>` invokes api.leave_chat with the chat mid and confirms."""
+    mid = "c" + "0" * 32
+    code = run(["leave", mid])
+    out = capsys.readouterr().out
+    assert code == 0
+    client = fake_okline.instances[0]
+    assert client.calls["leave_chat"] == [mid]
+    assert mid in out and "left" in out.lower()
+    assert client.closed is True
+
+
+def test_cmd_accept_calls_client(fake_okline, capsys):
+    """`accept <mid>` invokes api.accept_chat_invitation with the chat mid."""
+    mid = "c" + "1" * 32
+    code = run(["accept", mid])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert fake_okline.instances[0].calls["accept_chat_invitation"] == [mid]
+    assert "accept" in out.lower()
+
+
+def test_cmd_unsend_calls_client(fake_okline, capsys):
+    """`unsend <id>` invokes api.unsend_message with the message id."""
+    code = run(["unsend", "MSG-123"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert fake_okline.instances[0].calls["unsend_message"] == ["MSG-123"]
+    assert "unsent" in out.lower()
+
+
+def test_cmd_set_name_calls_client(fake_okline, capsys):
+    """`set-name <name>` invokes api.set_display_name with the new name."""
+    code = run(["set-name", "New Name"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert fake_okline.instances[0].calls["set_display_name"] == ["New Name"]
+    assert "New Name" in out
+
+
+def test_cmd_set_status_calls_client(fake_okline, capsys):
+    """`set-status <text>` invokes api.set_status_message with the new text."""
+    code = run(["set-status", "out to lunch"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert fake_okline.instances[0].calls["set_status_message"] == ["out to lunch"]
+    assert "out to lunch" in out
+
+
+# ---------------------------------------------------------------------------
+# _need_auth — commands surface a clean error (exit 1) when there is no session
+# ---------------------------------------------------------------------------
+def test_need_auth_missing_session_exits_1(fake_okline, monkeypatch, capsys):
+    """A command requiring auth prints a clear message and exits 1 (not a raw
+    SystemExit) when there is no access token."""
+
+    class NoSession(FakeOkLine):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.tokens.access_token = None  # simulate a fresh machine
+
+    monkeypatch.setattr(cli, "OkLine", NoSession)
+    code = run(["whoami"])
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "no session" in captured.err
+    # It went through _go's handler (AuthError, not SystemExit), so the client
+    # was still closed in the finally block.
+    assert fake_okline.instances[-1].closed is True
+
+
+def test_send_without_content_errors_before_resolving(fake_okline, capsys):
+    """`send <name>` with no text/media returns the usage error (exit 2) *before*
+    resolving the recipient — otherwise the missing contact lookup on the fake
+    client would surface as a different (exit 1) error."""
+    code = run(["send", "Some Contact Name"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "provide TEXT" in err
+    # Resolution never ran, so the transport was never touched.
+    assert fake_okline.instances[0].transport.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -384,3 +559,41 @@ def test_main_call_roundtrip(fake_okline, capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert json.loads(out) == fake_okline.result
+
+
+def test_main_no_command_forwards_parsed_args_to_menu(monkeypatch):
+    """`okline` with no subcommand forwards the *real* parsed args (auth flags
+    included) to the menu — not a hardcoded empty namespace."""
+    import okline.menu as menu
+
+    seen = {}
+
+    def fake_interactive(args):
+        seen["args"] = args
+        return 0
+
+    monkeypatch.setattr(menu, "interactive", fake_interactive)
+    code = cli.main(["--token", "FLAGTKN", "--show-secrets"])
+    assert code == 0
+    ns = seen["args"]
+    assert ns.token == "FLAGTKN"
+    assert ns.show_secrets is True
+
+
+def test_main_no_command_forwards_env_token(monkeypatch):
+    """With no flags and no subcommand, the parsed args still reach the menu,
+    which resolves LINE_ACCESS_TOKEN from the environment via _make_client."""
+    import okline.menu as menu
+
+    seen = {}
+
+    def fake_interactive(args):
+        seen["args"] = args
+        return 0
+
+    monkeypatch.setattr(menu, "interactive", fake_interactive)
+    monkeypatch.setenv("LINE_ACCESS_TOKEN", "ENVTKN")
+    code = cli.main([])
+    assert code == 0
+    # The forwarded namespace is a real parsed Namespace (menu reads env itself).
+    assert getattr(seen["args"], "func", None) is None

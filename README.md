@@ -5,8 +5,10 @@
 [![PyPI](https://img.shields.io/pypi/v/okline.svg)](https://pypi.org/project/okline/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-430%20passing-brightgreen.svg)](tests/)
-[![Endpoints](https://img.shields.io/badge/endpoints-77-blue.svg)](docs/ENDPOINTS.md)
+[![Tests](https://img.shields.io/badge/tests-485%20passing-brightgreen.svg)](tests/)
+[![Endpoints](https://img.shields.io/badge/endpoints-77%20Thrift-blue.svg)](docs/ENDPOINTS.md)
+
+**[🇹🇭 อ่านภาษาไทย → README.th.md](README.th.md)**
 
 OkLine reproduces the API of the official **LINE Chrome extension** (`CHROMEOS`
 3.7.2) — send and receive messages, log in by **QR** or **e‑mail**, and automate
@@ -14,17 +16,25 @@ your own account from Python. The protocol is reproduced faithfully, including
 the mandatory `X-Hmac` signature (computed by LINE's real `ltsm.wasm`), so
 requests are byte‑for‑byte what the real client sends.
 
-```python
-from okline import OkLine
+You don't need any tokens to start — log in by scanning a QR, the same
+zero-knowledge way the real app does:
 
-api = OkLine(access_token="…", refresh_token="…")
-print(api.get_profile())
-api.send_text("u0123456789abcdef0123456789abcdef", "hello from python")
+```bash
+pip install okline           # needs Python 3.9+ and Node.js 18+ on your PATH
+
+okline web                   # LinePassport: scan the QR, then send — no terminal needed
+# ...or straight from the terminal:
+okline login                 # scan the QR once — saves ./tokens.json
+okline send <mid> "hello from okline"
 ```
+
+Prefer Python? Jump to [Quick start](#quick-start) below.
 
 ## Features
 
-- **All 77 endpoints** — typed methods, or call any of them generically.
+- **All 77 typed Thrift endpoints** — plus the SSE, long-poll, OBS-media and
+  token-refresh helpers (88 endpoints audited in total); call any of them
+  generically too.
 - **QR & e‑mail login** — QR rendered as ASCII right in your terminal.
 - **`X-Hmac` signing** — handled automatically via the bundled WASM module.
 - **Bot framework** — `@bot.on_message`, typed models, session persistence.
@@ -38,8 +48,8 @@ pip install okline
 ```
 
 The bundled `ltsm.wasm` (for `X-Hmac` signing) ships inside the wheel, so that's
-all you need from Python. Optionally `pip install qrcode` to render the QR-login
-code in your terminal.
+all you need from Python. Optionally `pip install "okline[qr]"` to render the
+QR-login code inline in your terminal.
 
 **Prerequisites**
 
@@ -75,6 +85,7 @@ number), or use any of the ~30 subcommands directly:
 
 ```bash
 okline                       # interactive menu (soft colours, no setup)
+okline web                   # LinePassport + guided QR login (see docs/web.md)
 okline whoami
 okline send <mid> "hello"
 okline contacts --search soda
@@ -86,10 +97,11 @@ okline -h                    # full command list
 
 ```python
 from okline import OkLine, Bot
+from okline.qrterm import print_qr
 
 # log in once, reuse the session forever
 api = OkLine()
-api.auth.qr_login(on_qr=print)        # scan the QR with your phone
+api.qr_login(on_qr=print_qr)          # scan the QR with your phone (loads E2EE keys too)
 api.save_tokens("session.json")
 
 # next time
@@ -100,6 +112,17 @@ api.send_text("c…group…mid", "hi from python")
 bot = Bot(api)
 bot.on_message(lambda ctx: ctx.reply(f"you said: {ctx.text}"))
 bot.run()
+```
+
+Already hold an access token (e.g. captured from the extension)? Build the client
+directly — no QR needed:
+
+```python
+from okline import OkLine
+
+api = OkLine(access_token="…", refresh_token="…")
+print(api.get_profile())
+api.send_text("u0123456789abcdef0123456789abcdef", "hello from python")
 ```
 
 From the shell — `okline login` once, then everything reuses the session:
@@ -117,6 +140,7 @@ Full docs in [`docs/`](docs/index.md):
 | Guide | |
 |-------|---|
 | [Getting started](docs/getting-started.md) | install, `okline login`, the menu, first Python call |
+| [LinePassport](docs/web.md) | the `okline web` browser UI + guided QR login |
 | [Authentication](docs/authentication.md) | token reuse, e‑mail (RSA), QR login, refresh, logout |
 | [Sending messages](docs/messaging.md) | text, stickers, location, contacts, flex, reactions |
 | [Media](docs/media.md) · [E2EE](docs/e2ee.md) | send images/files · encrypt & decrypt (1:1 + group) |

@@ -44,6 +44,11 @@ api.save_tokens("tokens.json")   # writes credentials + E2EE keychain
 `api.qr_login(...)` (on the `OkLine` object) drives the QR flow **and** loads
 your E2EE keys for this session, so a following `save_tokens()` persists them.
 
+> ⚠️ The lower-level `api.auth.qr_login(...)` performs the QR handshake **only** —
+> it does **not** load the E2EE (Letter Sealing) keychain. Prefer
+> `api.qr_login(...)` on the `OkLine` object (as above) unless you are deliberately
+> managing E2EE yourself; otherwise encrypted chats won't decrypt this session.
+
 ### Reuse it next time — instant, no scan
 
 ```python

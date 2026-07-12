@@ -36,6 +36,7 @@ Thumbs.db
 # OkLine — local secrets and session logs (never commit these!)
 tokens.json
 *.tokens.json
+.okline/
 okline_session.*
 *.har
 line_login_qr.png

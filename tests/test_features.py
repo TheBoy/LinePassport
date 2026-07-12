@@ -209,9 +209,41 @@ def test_send_image_flow(make_api):
     assert obs, "OBS upload to /r/talk/m/<messageId> not made"
     h = obs[0]["headers"]
     assert h["X-Line-Access"] == "ENCTOK"  # encrypted OBS token
+    assert h["content-type"] == "application/octet-stream"
+    assert h["content-length"] == "12"
+    assert h["connection"] == "close"
+    assert h["range"] == "bytes 0-11/12"
     params = _json.loads(base64.b64decode(h["X-Obs-Params"]))
     assert params == {"ver": "2.0", "name": "pic.jpg", "type": "image", "cat": "original"}
     assert obs[0]["data"] == b"\xff\xd8imagebytes"
+
+
+def test_send_image_retries_transient_obs_ssl_error(make_api):
+    import requests
+    from conftest import FakeResp
+
+    obs_attempts = 0
+
+    def responder(method, url, kw):
+        nonlocal obs_attempts
+        if url.endswith("sendMessage"):
+            return enveloped({"id": "15001", "text": ""})
+        if url.endswith("acquireEncryptedAccessToken"):
+            return enveloped("meta\x1eENCTOK")
+        if "/r/talk/m/" in url:
+            obs_attempts += 1
+            if obs_attempts < 5:
+                raise requests.exceptions.SSLError("EOF occurred in violation of protocol")
+            return FakeResp(200, {"ok": True})
+        return enveloped({})
+
+    api = make_api(responder)
+    api.transport.config.max_retries = 0
+    api.transport.config.obs_max_retries = 4
+    api.transport.config.obs_retry_backoff = 0
+    api.send_image(USER_MID, b"\xff\xd8imagebytes", name="pic.jpg")
+
+    assert obs_attempts == 5
 
 
 def test_cli_has_send_command():

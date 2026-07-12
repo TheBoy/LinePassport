@@ -22,6 +22,7 @@ Every request and response is recorded so you can inspect or paste it.
 - **Bot framework** — `@bot.on_message`, `@bot.command`, `@bot.on(OpType)`; messages are auto-decrypted for you.
 - **Full recording** — `api.last`, `api.history`, `api.dump()`, and export to text / JSON / HAR (secrets redacted by default).
 - **Interactive menu** (just run `okline`) plus a complete **CLI** of ~30 commands.
+- **LinePassport** — `okline web` opens the browser app with a guided QR-login wizard, chat and sending ([web](./web.md)).
 - **22 runnable examples** in the [cookbook](./cookbook.md) to copy-paste from.
 
 ## Start here
@@ -59,6 +60,7 @@ New to OkLine? Start with **[Getting started](./getting-started.md)**.
 | Page | What's inside |
 |------|---------------|
 | [Getting started](./getting-started.md) | Install, `okline login`, the interactive menu, your first Python call |
+| [LinePassport](./web.md) | The `okline web` browser UI: guided QR login, contacts, chat, sending, flags |
 | [Authentication](./authentication.md) | QR login, e-mail (RSA) login, token reuse & refresh, logout |
 | [Sending messages](./messaging.md) | Text, replies, stickers, location, contacts, flex, reactions |
 | [Media](./media.md) | Send images, video, audio and files via OBS |

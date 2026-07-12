@@ -184,9 +184,10 @@ def prompt(label: str, default: str = "") -> str:
     return v or default
 
 
-def pause() -> None:
+def pause(msg: str = "") -> None:
+    text = msg or ("press Enter to continue" + GLYPH["ell"])
     try:
-        input("\n" + dim("  press Enter to continue" + GLYPH["ell"]))
+        input("\n" + dim("  " + text))
     except (EOFError, KeyboardInterrupt):
         pass
 

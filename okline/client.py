@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from typing import Any, Callable
 
 from ._util import reconfigure_stdout_utf8
@@ -22,6 +23,13 @@ from .services import AllServices
 from .transport import LineConfig, Tokens, Transport
 
 log = logging.getLogger("okline")
+
+_REQ_SEQ_MOD = 2_000_000_000
+
+
+def _initial_req_seq() -> int:
+    """Start reqSeq away from zero so restarts don't replay old LINE sends."""
+    return int(time.time() * 1000) % _REQ_SEQ_MOD
 
 
 class OkLine(AllServices):
@@ -82,7 +90,7 @@ class OkLine(AllServices):
         from .e2ee import E2EEManager
 
         self.e2ee = E2EEManager(self)  # Letter Sealing (ready after qr_login)
-        self._reqseq = 0
+        self._reqseq = _initial_req_seq()
 
         # Response recording.
         self.recorder: Recorder | None = (
@@ -171,7 +179,9 @@ class OkLine(AllServices):
         return api
 
     def next_req_seq(self) -> int:
-        self._reqseq += 1
+        self._reqseq = (self._reqseq + 1) % _REQ_SEQ_MOD
+        if self._reqseq <= 0:
+            self._reqseq = 1
         return self._reqseq
 
     # -- generic escape hatch ------------------------------------------------

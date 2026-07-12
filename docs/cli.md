@@ -32,6 +32,28 @@ session it goes straight to QR login.
 okline            # opens the interactive menu (or `okline menu`)
 ```
 
+## LinePassport
+
+Prefer a browser to a terminal? `okline web` starts LinePassport with a
+**guided QR-login wizard**, contacts/groups, a chat view and sending:
+
+```bash
+okline web                          # serves http://127.0.0.1:8765 and opens your browser
+okline web --port 9000 --no-open    # pick a port, don't auto-open the browser
+okline web --host 0.0.0.0           # expose on the LAN (see the security note in the web docs)
+```
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--host HOST` | `127.0.0.1` | bind address (loopback by default) |
+| `--port PORT` | `8765` | bind port (falls forward if busy; `0` = any free port) |
+| `--state-dir DIR` | `.okline` | where the web UI keeps its state |
+| `--database-url URL` | *(none)* | optional PostgreSQL persistence (`pip install "okline[web]"`) |
+| `--no-open` | *(off)* | don't open the browser automatically |
+
+Full walkthrough, the login steps and the security notes are in
+[LinePassport](./web.md).
+
 ## How a command finds your session
 
 Every command resolves credentials in this order: `--token` → `--tokens-file`

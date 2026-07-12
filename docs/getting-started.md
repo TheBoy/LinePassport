@@ -39,6 +39,12 @@ environment variable (e.g. `LINE_NODE=/full/path/to/node`).
 
 ## 2. Log in once
 
+> **Not comfortable in a terminal? Start here.** The friendliest first run is the
+> LinePassport: just run **`okline web`**, and a guided wizard opens in your browser
+> and walks you through scanning the QR — no commands to learn. Full walkthrough in
+> **[LinePassport](./web.md)**. The terminal `okline login` below does the same login
+> without a browser; use whichever you prefer.
+
 Run the login command and scan the QR with the LINE app
 (**Settings › Add friends › QR code**), then confirm the PIN it shows on your
 phone:
@@ -72,21 +78,28 @@ actions by number, nothing to memorise:
 okline
 ```
 
+The menu is **categorised** into **8 sections**; pick a section by number to open
+its sub-menu of actions:
+
 ```text
 OkLine  ·  LINE in your terminal
   Your Name   u0123...        e2ee ready
 
-   1  Who am I  ·  stats
-   2  Contacts  ·  list / search
-   3  Find a contact by name
-   4  Send a message
-   5  Groups  ·  list
-   6  Group members
-   7  Chat log  ·  reads & decrypts E2EE
-   ...
+   1  Me & account          — profile, name, status, settings, logout
+   2  Contacts & people     — list/search, find, add, block, favorites, export
+   3  Groups & chats        — groups, members, leave/accept, message boxes
+   4  Send a message        — text, sticker, location, media, reply, react, broadcast
+   5  Read & history        — chat log (decrypts E2EE), raw, search, backup
+   6  Live & bots           — watch, auto-reply, keyword notifier
+   7  E2EE / Letter Sealing — status, encrypt, decrypt, round-trip test
+   8  Advanced / developer  — call any endpoint, list, self-test, recording
 
  choose:
 ```
+
+Each section opens a sub-menu with **Back** and **Quit** entries, so you can
+explore all ~40 actions without memorising anything. The menu can also display
+in **Thai**. (Exact labels may differ slightly by version/language.)
 
 If you haven't logged in yet, running `okline` goes straight to QR login first.
 Type `q` (or `0`) to quit.

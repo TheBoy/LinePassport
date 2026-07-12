@@ -22,8 +22,10 @@ from __future__ import annotations
 import json
 
 import pytest
+import requests
 from conftest import FakeResp, FakeSession, build_api, enveloped, route
 
+from okline import transport as transport_module
 from okline.exceptions import (
     LineApiError,
     LineAuthError,
@@ -250,6 +252,38 @@ class TestErrorMapping:
         assert type(ei.value) is LineApiError
         assert ei.value.code == 42
         assert ei.value.status == 500
+
+    def test_request_exception_retries_can_recover(self):
+        attempts = 0
+
+        def responder(method, url, kw):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise requests.exceptions.SSLError("EOF occurred in violation of protocol")
+            return FakeResp(200, {"ok": True})
+
+        t = make_transport(responder, max_retries=2, retry_backoff=0)
+        resp = t.get("/api/ping", require_auth=False)
+
+        assert resp.status_code == 200
+        assert attempts == 3
+
+    def test_retry_backoff_is_applied_between_attempts(self, monkeypatch):
+        sleeps = []
+
+        monkeypatch.setattr(transport_module.time, "sleep", sleeps.append)
+        t = make_transport(
+            lambda m, u, kw: FakeResp(500, {"error": {"message": "boom"}}),
+            max_retries=2,
+            retry_backoff=0.5,
+            retry_backoff_max=0.75,
+        )
+
+        with pytest.raises(LineApiError):
+            t.post_json("/api/foo", [], require_auth=False)
+
+        assert sleeps == [0.5, 0.75]
 
     def test_error_code_from_response_header(self):
         """When the body has no code, ``x-line-resp-code`` supplies it."""

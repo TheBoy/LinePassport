@@ -57,7 +57,10 @@ def example_qr_login() -> OkLine:
     def show_pin(pin: str) -> None:
         print("Enter this PIN on your phone:", pin)
 
-    result = api.auth.qr_login(on_qr=show_qr, on_pin=show_pin)
+    # Use the high-level api.qr_login (on the OkLine object): it drives the QR
+    # handshake AND loads your E2EE (Letter Sealing) keychain for this session.
+    # The low-level api.auth.qr_login does the handshake only (no E2EE keys).
+    result = api.qr_login(on_qr=show_qr, on_pin=show_pin)
     print("QR login result:", "OK" if result.access_token else result.type)
     return api
 

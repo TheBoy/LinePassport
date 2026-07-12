@@ -97,6 +97,27 @@ def test_reqseq_auto_increments_across_calls(api, last_request):
     assert second == first + 1
 
 
+def test_reqseq_starts_from_time_to_avoid_replay_after_restart(
+    monkeypatch, make_api, last_request
+):
+    import okline.client as client_mod
+
+    monkeypatch.setattr(client_mod.time, "time", lambda: 1234.567)
+    api = make_api()
+
+    api.send_text(USER_MID, "fresh")
+
+    expected_seed = int(1234.567 * 1000) % client_mod._REQ_SEQ_MOD
+    assert last_request(api)[0] == expected_seed + 1
+
+
+def test_reqseq_wraps_to_positive_value(api):
+    import okline.client as client_mod
+
+    api._reqseq = client_mod._REQ_SEQ_MOD - 1
+    assert api.next_req_seq() == 1
+
+
 # ---------------------------------------------------------------------------
 # send_sticker
 # ---------------------------------------------------------------------------

@@ -4,6 +4,44 @@ All notable changes to OkLine are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.8.0] - 2026-07-08
+
+### Added
+- **`okline web` — LinePassport.** A new subcommand starts a self-hosted
+  web app (default `http://127.0.0.1:8765`, opens your browser automatically)
+  with a **guided 4-step QR login wizard** (Start → Scan QR → Confirm PIN →
+  Done), contacts/groups browsing, a chat view, sending (text + E2EE), and an
+  auto-bot scheduler. Flags: `--host`, `--port`, `--state-dir`, `--database-url`,
+  `--no-open`. It binds to `127.0.0.1` by default. See [docs/web.md](docs/web.md).
+- **AI images in the web UI.** A new top-level **AI Settings** tab stores an image
+  API key locally, and the auto-bot scheduler gains an **“AI image”** content
+  type: the bot sends your text prompt to the AI and posts the generated image to
+  the target. The AI Settings tab includes a one-click **Generate image** test.
+  Two **providers** are supported and switchable per-key: **Google Gemini**
+  (“Nano Banana”, called directly) and **nanobananaapi.ai** (a hosted async
+  service — OkLine submits the task, polls it to completion, and downloads the
+  result). Each provider's key is stored separately under `--state-dir` and is
+  never returned to the browser (only a masked preview is).
+- **Optional PostgreSQL persistence for the web UI** via `--database-url` (or the
+  `OKLINE_DATABASE_URL` / `DATABASE_URL` env vars). Requires the new `web` extra
+  (`pip install "okline[web]"`); without it the UI stores state as on-disk JSON.
+- **Thai localization** of both the interactive terminal menu and the web UI, so
+  non-English users can drive OkLine in their own language.
+- **README.th.md** — a Thai quick-start guide.
+
+### Changed
+- **`psycopg` is no longer a hard dependency.** It moved from the required
+  `dependencies` to a new `web` optional-dependency extra, since it is only used
+  (via a lazy import) by the web UI's PostgreSQL store. A plain `pip install
+  okline` no longer pulls in `psycopg`.
+
+### Fixed
+- **Five CLI subcommands that were previously no-ops now work** as documented.
+- Documentation now covers `okline web` (previously undocumented) and corrects the
+  README quick-start to use `api.qr_login(on_qr=print_qr)` — the high-level call
+  that also loads your E2EE (Letter Sealing) keychain — instead of the low-level
+  `api.auth.qr_login(on_qr=print)`.
+
 ## [2.7.0] - 2026-06-23
 
 ### Added
