@@ -5381,13 +5381,13 @@ INDEX_HTML = r"""<!doctype html>
         meta.textContent = parts.filter(Boolean).join(" · ");
         meta.title = parts.filter(Boolean).join(" · ");
         main.append(title, meta);
-        const promptDetail = log.action === "content.ai.start" && log.data
+        const promptDetail = ["content.ai.start", "content.ai.request"].includes(log.action) && log.data
           ? String(log.data.prompt || "").trim()
           : "";
         const logDetail = promptDetail || log.detail;
         if (logDetail) {
           const detail = document.createElement("span");
-          const showFullDetail = log.action === "content.ai.start"
+          const showFullDetail = ["content.ai.start", "content.ai.request"].includes(log.action)
             || log.action === "content.ai.error";
           detail.className = "log-detail" + (showFullDetail ? " log-full-detail" : "");
           detail.textContent = logDetail;
@@ -10682,6 +10682,7 @@ def _generate_ai_image(
 
     Returns a dict ``{"data": bytes, "mime": str, "name": str}``.
     """
+    prompt = _prepare_ai_image_prompt(prompt)
     provider = (provider or "google").strip().lower()
     if provider == "nanobananaapi":
         return _generate_nbapi_image(
@@ -10739,7 +10740,7 @@ def _generate_gemini_image(
         log,
         "content.ai.request",
         f"Google Gemini · {model}",
-        data={"provider": "google", "model": model, "endpoint": url},
+        data={"provider": "google", "model": model, "endpoint": url, "prompt": prompt},
     )
     try:
         resp = requests.post(
@@ -10949,6 +10950,7 @@ def _generate_fal_image(
             "price": FAL_MODEL_PRICES.get(model, ""),
             "imageSize": image_size,
             "endpoint": endpoint,
+            "prompt": prompt,
         },
     )
     try:
@@ -11203,6 +11205,7 @@ def _nbapi_create_task(
             "model": model,
             "aspectRatio": aspect_ratio,
             "endpoint": endpoint,
+            "prompt": str(body.get("prompt") or ""),
         },
     )
     try:

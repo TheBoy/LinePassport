@@ -1564,6 +1564,7 @@ def test_resolve_job_contents_ai_image_logs_generation_steps(monkeypatch):
     assert events[0][1] == expected_prompt
     assert events[0][3]["prompt"] == expected_prompt
     assert events[1][3]["provider"] == "nanobananaapi"
+    assert events[1][3]["prompt"] == expected_prompt
     assert events[2][1] == "task-123"
     assert events[4][1] == "attempt 2: ready"
 
@@ -1643,7 +1644,8 @@ def test_generate_ai_image_extracts_inline_image(monkeypatch):
         "/v1beta/models/gemini-2.5-flash-image:generateContent"
     )
     assert captured["headers"]["x-goog-api-key"] == "secret"
-    assert captured["body"]["contents"][0]["parts"][0]["text"] == "a cat"
+    expected_prompt = webapp_module._prepare_ai_image_prompt("a cat")
+    assert captured["body"]["contents"][0]["parts"][0]["text"] == expected_prompt
     assert events == [
         (
             "content.ai.request",
@@ -1653,6 +1655,7 @@ def test_generate_ai_image_extracts_inline_image(monkeypatch):
                 "provider": "google",
                 "model": "gemini-2.5-flash-image",
                 "endpoint": captured["url"],
+                "prompt": expected_prompt,
             },
         )
     ]
@@ -1686,6 +1689,7 @@ def test_generate_nbapi_image_polls_then_downloads(monkeypatch):
         assert url.endswith("/api/v1/nanobanana/generate")
         assert headers["Authorization"] == "Bearer nb-key"
         assert json["type"] == "TEXTTOIAMGE"  # the vendor's verbatim typo
+        assert json["prompt"] == webapp_module._prepare_ai_image_prompt("a dog")
         assert json["callBackUrl"]  # required field is always sent
         assert json["image_size"] == "16:9"  # a concrete size passes through
 
@@ -1905,7 +1909,7 @@ def test_generate_fal_image_uses_queue_and_downloads_result(monkeypatch):
     assert captured["url"] == "https://queue.fal.run/fal-ai/flux/dev"
     assert captured["headers"]["Authorization"] == "Key fal-key"
     assert captured["body"] == {
-        "prompt": "a green city",
+        "prompt": webapp_module._prepare_ai_image_prompt("a green city"),
         "image_size": "square_hd",
         "num_images": 1,
         "enable_safety_checker": True,
