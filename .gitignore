@@ -41,6 +41,8 @@ okline_session.*
 *.har
 line_login_qr.png
 .env
+ssh_key/
+.codex-*
 
 # OkLine live-test reports
 live_test_report.*
