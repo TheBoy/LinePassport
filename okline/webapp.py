@@ -395,52 +395,148 @@ INDEX_HTML = r"""<!doctype html>
       font-size: 12px;
     }
 
+    .bot-terminal {
+      overflow: hidden;
+      border: 1px solid #263244;
+      border-radius: 8px;
+      background: #0b111b;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .bot-terminal-bar {
+      display: flex;
+      min-height: 42px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid #263244;
+      background: #121a27;
+      padding: 0 14px;
+      color: #d7e0ec;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    .bot-terminal-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      font-weight: 700;
+    }
+
+    .bot-terminal-prompt { color: #65d987; }
+
+    .bot-terminal-live {
+      flex: 0 0 auto;
+      color: #76e398;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
     .bot-log-list {
-      max-height: 460px;
+      display: block;
+      min-height: 360px;
+      max-height: min(620px, calc(100dvh - 330px));
+      overflow: auto;
+      padding: 6px 0;
+      background: #0b111b;
+      color: #cbd5e1;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      scrollbar-color: #475569 #0b111b;
+    }
+
+    .bot-log-list:focus-visible {
+      outline: 2px solid #65d987;
+      outline-offset: -2px;
     }
 
     .bot-log-item {
-      display: flex;
-      align-items: start;
-      gap: 8px;
-      min-height: 74px;
-      padding: 11px 12px;
+      min-width: 0;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+      padding: 9px 14px 10px;
+      line-height: 1.45;
     }
 
+    .bot-log-item:last-child { border-bottom: 0; }
+
+    .bot-log-item:hover { background: rgba(148, 163, 184, 0.06); }
+
     .bot-log-item .log-main {
-      display: flex;
-      flex: 1 1 auto;
-      flex-direction: column;
-      gap: 4px;
+      display: grid;
+      gap: 5px;
       min-width: 0;
     }
 
-    .bot-log-item .log-meta {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .bot-log-item .log-line {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 6px 9px;
+      min-width: 0;
     }
 
-    .bot-log-item .log-detail {
-      color: #46524e;
+    .bot-log-item .log-time {
+      flex: 0 0 auto;
+      color: #7f8da3;
       font-size: 12px;
-      line-height: 1.4;
-      max-height: 2.8em;
-      overflow: hidden;
-      overflow-wrap: anywhere;
-    }
-
-    .bot-log-item .log-detail.log-full-detail {
-      color: #27322e;
-      max-height: none;
-      overflow: visible;
-      white-space: pre-wrap;
+      font-variant-numeric: tabular-nums;
     }
 
     .bot-log-item .log-status {
       flex: 0 0 auto;
-      justify-self: end;
-      font-size: 11px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .bot-log-item .log-status.ok { color: #65d987; }
+    .bot-log-item .log-status.warn { color: #ff8181; }
+
+    .bot-log-item .log-action {
+      color: #f3f7fb;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .bot-log-item .log-meta {
+      min-width: 0;
+      color: #9ba8b9;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .bot-log-item .log-detail {
+      margin: 0;
+      color: #b7c3d4;
+      font: inherit;
+      font-size: 12px;
+      line-height: 1.55;
+      max-height: 3.1em;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+
+    .bot-log-item .log-detail::before {
+      content: "> ";
+      color: #5fce80;
+    }
+
+    .bot-log-item .log-detail.log-full-detail {
+      max-height: none;
+      overflow: visible;
+    }
+
+    .bot-log-list .terminal-empty {
+      display: block;
+      padding: 18px 14px;
+      color: #7f8da3;
+      font-size: 12px;
+    }
+
+    .bot-log-list .terminal-empty::before {
+      content: "$ ";
+      color: #65d987;
     }
 
     .mono {
@@ -2521,7 +2617,13 @@ INDEX_HTML = r"""<!doctype html>
               </div>
             </div>
             <div class="section-body">
-              <div class="list bot-log-list" id="botLogList"></div>
+              <div class="bot-terminal">
+                <div class="bot-terminal-bar" aria-hidden="true">
+                  <span class="bot-terminal-title"><span class="bot-terminal-prompt">&gt;_</span> linepassport/bot.log</span>
+                  <span class="bot-terminal-live">LIVE</span>
+                </div>
+                <div class="bot-log-list" id="botLogList" role="log" aria-live="polite" aria-relevant="additions text" tabindex="0"></div>
+              </div>
             </div>
           </section>
           </div>
@@ -5366,27 +5468,40 @@ INDEX_HTML = r"""<!doctype html>
       list.replaceChildren();
       for (const log of state.botLogs || []) {
         const item = document.createElement("div");
-        item.className = "item bot-log-item";
+        item.className = "bot-log-item";
+        item.setAttribute("role", "listitem");
 
         const main = document.createElement("div");
         main.className = "log-main";
+        const line = document.createElement("div");
+        line.className = "log-line";
+        const ts = log.ts ? Number(log.ts) * 1000 : Date.parse(log.at || "");
+        const time = document.createElement("time");
+        time.className = "log-time";
+        time.textContent = "[" + fmtTime(ts) + "]";
+        if (Number.isFinite(ts)) time.dateTime = new Date(ts).toISOString();
+        const status = document.createElement("span");
+        status.className = "log-status " + (log.ok === false ? "warn" : "ok");
+        status.textContent = log.ok === false ? "[ERR]" : "[OK]";
         const title = document.createElement("strong");
+        title.className = "log-action";
         title.textContent = botActionLabel(log.action);
         const meta = document.createElement("span");
-        meta.className = "muted log-meta";
-        const ts = log.ts ? Number(log.ts) * 1000 : Date.parse(log.at || "");
-        const parts = [fmtTime(ts)];
+        meta.className = "log-meta";
+        const parts = [];
         if (log.scheduleName) parts.push(log.scheduleName);
         if (log.target) parts.push(compactLogValue(log.target, 22));
-        meta.textContent = parts.filter(Boolean).join(" · ");
-        meta.title = parts.filter(Boolean).join(" · ");
-        main.append(title, meta);
+        meta.textContent = parts.length ? "-- " + parts.filter(Boolean).join(" / ") : "";
+        meta.title = parts.filter(Boolean).join(" / ");
+        line.append(time, status, title);
+        if (parts.length) line.appendChild(meta);
+        main.appendChild(line);
         const promptDetail = ["content.ai.start", "content.ai.request"].includes(log.action) && log.data
           ? String(log.data.prompt || "").trim()
           : "";
         const logDetail = promptDetail || log.detail;
         if (logDetail) {
-          const detail = document.createElement("span");
+          const detail = document.createElement("pre");
           const showFullDetail = ["content.ai.start", "content.ai.request"].includes(log.action)
             || log.action === "content.ai.error";
           detail.className = "log-detail" + (showFullDetail ? " log-full-detail" : "");
@@ -5394,14 +5509,10 @@ INDEX_HTML = r"""<!doctype html>
           detail.title = logDetail;
           main.appendChild(detail);
         }
-
-        const status = document.createElement("span");
-        status.className = "pill log-status " + (log.ok === false ? "warn" : "ok");
-        status.textContent = log.ok === false ? t("botlog.fail") : t("botlog.ok");
-        item.append(main, status);
+        item.appendChild(main);
         list.appendChild(item);
       }
-      if (!list.children.length) list.appendChild(textSpan(t("botlog.none"), "muted"));
+      if (!list.children.length) list.appendChild(textSpan(t("botlog.none"), "terminal-empty"));
       if (preserveScroll) {
         const heightChange = list.scrollHeight - previousHeight;
         list.scrollTop = wasAtTop ? 0 : Math.max(0, previousTop + heightChange);

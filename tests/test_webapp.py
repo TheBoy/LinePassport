@@ -244,7 +244,11 @@ def test_web_ui_has_bot_log_panel():
     assert 'id="botLogClearButton"' in INDEX_HTML
     assert "compactLogValue" in INDEX_HTML
     assert "log-detail" in INDEX_HTML
-    assert ".bot-log-item {\n      display: flex;" in INDEX_HTML
+    assert 'class="bot-terminal"' in INDEX_HTML
+    assert 'role="log"' in INDEX_HTML
+    assert "linepassport/bot.log" in INDEX_HTML
+    assert 'status.textContent = log.ok === false ? "[ERR]" : "[OK]";' in INDEX_HTML
+    assert ".bot-log-list {\n      display: block;" in INDEX_HTML
     assert "-webkit-line-clamp" not in INDEX_HTML
     assert "/api/bot/logs" in INDEX_HTML
 
