@@ -1977,9 +1977,22 @@ INDEX_HTML = r"""<!doctype html>
     }
     .msg-file:hover { text-decoration: underline; }
     .msg-file svg { width: 20px; height: 20px; flex: 0 0 auto; }
-    .ph-help { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+    .ph-help { display: grid; gap: 5px; min-width: 0; }
     .ph-help .muted { font-size: 12px; }
+    .ph-chips {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 5px;
+      min-width: 0;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .ph-chips::-webkit-scrollbar { display: none; }
     .ph-chip {
+      flex: 0 0 auto;
+      width: auto;
       min-height: 0;
       padding: 2px 8px;
       font-size: 12px;
@@ -2050,6 +2063,7 @@ INDEX_HTML = r"""<!doctype html>
     #patternCategoryManageList { max-height: none; overflow: visible; }
     #patternManageList .item { padding: 14px; gap: 6px; }
     #patternCategoryManageList .item { padding: 14px; gap: 6px; }
+    .pattern-item-actions { align-items: center; }
     .pattern-category-badge {
       display: inline-flex;
       width: fit-content;
@@ -2092,6 +2106,106 @@ INDEX_HTML = r"""<!doctype html>
       background: var(--surface-2);
       color: var(--ink);
     }
+
+    @media (max-width: 620px) {
+      /* Keep navigation controls as horizontal tab rows on phones. The generic
+         mobile button rule intentionally stretches form actions, but must not
+         turn each tab into a full-width row. */
+      .tabbar,
+      .bot-page-nav {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .tabbar::-webkit-scrollbar,
+      .bot-page-nav::-webkit-scrollbar { display: none; }
+
+      .tabbar .tab,
+      .bot-page-nav button {
+        width: auto;
+        flex: 1 0 auto;
+        white-space: nowrap;
+      }
+
+      .top-actions {
+        flex-wrap: nowrap;
+        width: 100%;
+      }
+
+      .top-actions > #refreshAllButton {
+        width: auto;
+        flex: 1 1 auto;
+      }
+
+      .top-actions .settings-wrap,
+      .top-actions .settings-wrap > button {
+        width: auto;
+        flex: 0 0 auto;
+      }
+
+      .scheduler-list-head {
+        align-items: center;
+        flex-direction: row;
+      }
+
+      .scheduler-list-head > h2 {
+        flex: 1 1 auto;
+      }
+
+      .scheduler-list-actions {
+        width: auto;
+        flex: 0 0 auto;
+        flex-direction: row;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      /* These destinations already exist in the Bot tab row immediately
+         above. Avoid showing the same navigation a second time. */
+      .scheduler-list-actions #openBotLogsButton,
+      .scheduler-list-actions #openPatternsButton,
+      .scheduler-list-actions #scheduleFormToggle {
+        display: none;
+      }
+
+      .scheduler-list-actions #clearStuckSchedulesButton {
+        width: auto;
+      }
+
+      .schedule-item .item-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      #patternManageList .pattern-item-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      /* The old 46vh cap clipped the contact rows after the profile, tabs and
+         search consumed the available height. Let the pane size naturally and
+         keep the rows themselves as the only scrolling region. */
+      .tab-panel[data-tab-panel="line"].active .line-list {
+        max-height: none;
+        overflow: visible;
+        gap: 0;
+        padding: 0;
+      }
+
+      .tab-panel[data-tab-panel="line"].active .line-rows {
+        flex: 0 1 auto;
+        min-height: 260px;
+        max-height: min(58dvh, 520px);
+        overflow-y: auto;
+        overscroll-behavior-y: contain;
+      }
+    }
+
     .bot-page {
       display: grid;
       gap: 12px;
@@ -2424,10 +2538,10 @@ INDEX_HTML = r"""<!doctype html>
             <button type="button" id="botNavLogs" data-bot-page-target="logs" role="tab" aria-selected="false" data-requires-account data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
           </div>
           <div id="botScheduler" class="bot-page" data-bot-page="schedules">
-          <section class="section">
-            <div class="section-head">
+          <section class="section scheduler-list-panel">
+            <div class="section-head scheduler-list-head">
               <h2 data-i18n="scheduler.title">Scheduler</h2>
-              <div class="row compact">
+              <div class="row compact scheduler-list-actions">
                 <span class="pill" id="scheduleCount">0</span>
                 <button id="openBotLogsButton" type="button" data-requires-account data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
                 <button id="clearStuckSchedulesButton" type="button" class="danger hidden" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.clear_stuck">Clear stuck jobs</button>
@@ -2482,12 +2596,14 @@ INDEX_HTML = r"""<!doctype html>
                 </label>
                 <div class="ph-help" id="scheduleTextHelp">
                   <span class="muted" data-i18n="scheduler.ph_hint">Insert (random on every send):</span>
-                  <button type="button" class="ph-chip" data-ph="{1D}">{1D}</button>
-                  <button type="button" class="ph-chip" data-ph="{2D}">{2D}</button>
-                  <button type="button" class="ph-chip" data-ph="{3D}">{3D}</button>
-                  <button type="button" class="ph-chip" data-ph="{date}">{date}</button>
-                  <button type="button" class="ph-chip" data-ph="{time}">{time}</button>
-                  <button type="button" class="ph-chip" data-ph="{rand:1-100}">{rand:1-100}</button>
+                  <div class="ph-chips">
+                    <button type="button" class="ph-chip" data-ph="{1D}">{1D}</button>
+                    <button type="button" class="ph-chip" data-ph="{2D}">{2D}</button>
+                    <button type="button" class="ph-chip" data-ph="{3D}">{3D}</button>
+                    <button type="button" class="ph-chip" data-ph="{date}">{date}</button>
+                    <button type="button" class="ph-chip" data-ph="{time}">{time}</button>
+                    <button type="button" class="ph-chip" data-ph="{rand:1-100}">{rand:1-100}</button>
+                  </div>
                 </div>
                 <div class="ph-preview muted" id="scheduleTextPreview"></div>
                 <label id="scheduleImageLabel" style="display:none">
@@ -2649,7 +2765,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="pattern-main-column">
               <section class="section hidden" id="patternFormSection">
                 <div class="section-head">
-                  <h3 data-i18n="patterns.create_title">Create pattern</h3>
+                  <h3 id="patternFormTitle" data-i18n="patterns.create_title">Create pattern</h3>
                   <button id="cancelPatternFormButton" type="button" data-i18n="common.cancel">Cancel</button>
                 </div>
                 <div class="section-body">
@@ -2668,12 +2784,14 @@ INDEX_HTML = r"""<!doctype html>
                     </label>
                     <div class="ph-help" id="patternTextHelp">
                       <span class="muted" data-i18n="scheduler.ph_hint">Insert (random on every send):</span>
-                      <button type="button" class="ph-chip" data-ph="{1D}">{1D}</button>
-                      <button type="button" class="ph-chip" data-ph="{2D}">{2D}</button>
-                      <button type="button" class="ph-chip" data-ph="{3D}">{3D}</button>
-                      <button type="button" class="ph-chip" data-ph="{date}">{date}</button>
-                      <button type="button" class="ph-chip" data-ph="{time}">{time}</button>
-                      <button type="button" class="ph-chip" data-ph="{rand:1-100}">{rand:1-100}</button>
+                      <div class="ph-chips">
+                        <button type="button" class="ph-chip" data-ph="{1D}">{1D}</button>
+                        <button type="button" class="ph-chip" data-ph="{2D}">{2D}</button>
+                        <button type="button" class="ph-chip" data-ph="{3D}">{3D}</button>
+                        <button type="button" class="ph-chip" data-ph="{date}">{date}</button>
+                        <button type="button" class="ph-chip" data-ph="{time}">{time}</button>
+                        <button type="button" class="ph-chip" data-ph="{rand:1-100}">{rand:1-100}</button>
+                      </div>
                     </div>
                     <div class="row pattern-form-actions">
                       <button id="createPatternButton" class="primary" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.add_pattern">Add pattern</button>
@@ -3279,6 +3397,7 @@ INDEX_HTML = r"""<!doctype html>
       patterns: [],
       patternCategories: [],
       patternCategoryFilter: "all",
+      editingPatternId: null,
       lang: "th",
       advanced: true,
       tab: "line",
@@ -3305,6 +3424,8 @@ INDEX_HTML = r"""<!doctype html>
       "patterns.edit_category": {th: "แก้ไขหมวดหมู่", en: "Edit category"},
       "patterns.category_updated": {th: "แก้ไขหมวดหมู่แล้ว", en: "Category updated"},
       "patterns.create_title": {th: "สร้างแพทเทิร์นใหม่", en: "Create pattern"},
+      "patterns.edit_title": {th: "แก้ไขแพทเทิร์น", en: "Edit pattern"},
+      "patterns.updated": {th: "แก้ไขแพทเทิร์นแล้ว", en: "Pattern updated"},
       "patterns.list_title": {th: "รายการแพทเทิร์น", en: "Patterns"},
       "patterns.category_filter": {th: "กรองตามหมวดหมู่", en: "Filter by category"},
       "patterns.general": {th: "ทั่วไป", en: "General"},
@@ -3319,6 +3440,7 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.pattern.category.create": {th: "เพิ่มหมวดหมู่แพทเทิร์น", en: "Pattern category created"},
       "botlog.action.pattern.category.delete": {th: "ลบหมวดหมู่แพทเทิร์น", en: "Pattern category deleted"},
       "botlog.action.pattern.category.update": {th: "แก้ไขหมวดหมู่แพทเทิร์น", en: "Pattern category updated"},
+      "botlog.action.pattern.update": {th: "แก้ไขแพทเทิร์น", en: "Pattern updated"},
       "gate.none_shared_title": {th: "ยังไม่มีบัญชี LINE", en: "No LINE account yet"},
       "gate.none_shared_body": {th: "เพิ่มบัญชี LINE ของคุณได้จากเมนูตั้งค่า", en: "Add your own LINE account from Settings."},
       "settings.subtitle_users": {th: "จัดการสมาชิก บทบาท และตรวจดูพื้นที่ใช้งานของแต่ละคน", en: "Manage members, roles, and inspect each private workspace."},
@@ -3354,6 +3476,7 @@ INDEX_HTML = r"""<!doctype html>
       updateMenuToggleLabels();
       renderSchedules();
       renderBotLogs();
+      syncPatternFormMode();
       updateScheduleSummary();
       renderAuthMode();
       if (state.aiSettings) renderAiSettings(state.aiSettings);
@@ -4800,7 +4923,7 @@ INDEX_HTML = r"""<!doctype html>
       $("runAtWrap").style.display = repeat ? "none" : "grid";
       const source = $("scheduleContentSource").value;
       $("scheduleTextLabel").style.display = source === "text" ? "grid" : "none";
-      $("scheduleTextHelp").style.display = source === "text" ? "flex" : "none";
+      $("scheduleTextHelp").style.display = source === "text" ? "grid" : "none";
       // Message patterns drive the text OR the AI image prompt.
       $("patternRow").style.display = (source === "text" || source === "ai_image") ? "grid" : "none";
       $("scheduleImageLabel").style.display = source === "image" ? "grid" : "none";
@@ -4956,6 +5079,23 @@ INDEX_HTML = r"""<!doctype html>
       state.selectedPatternIds = [...s];
     }
 
+    function syncPatternFormMode() {
+      const editing = Boolean(state.editingPatternId);
+      $("patternFormTitle").textContent = t(editing ? "patterns.edit_title" : "patterns.create_title");
+      $("createPatternButton").dataset.i18n = editing ? "common.save" : "scheduler.add_pattern";
+      $("createPatternButton").textContent = t(editing ? "common.save" : "scheduler.add_pattern");
+    }
+
+    function resetPatternForm() {
+      state.editingPatternId = null;
+      $("newPatternName").value = "";
+      $("newPatternText").value = "";
+      if (Array.from($("newPatternCategory").options).some((option) => option.value === "general")) {
+        $("newPatternCategory").value = "general";
+      }
+      syncPatternFormMode();
+    }
+
     async function createPattern() {
       const name = $("newPatternName").value.trim();
       const text = $("newPatternText").value;
@@ -4963,13 +5103,33 @@ INDEX_HTML = r"""<!doctype html>
       const accountId = selectedAccountId();
       if (!name) { toast(t("toast.pattern_name_required"), true); return; }
       if (!text.trim()) { toast(t("toast.message_required"), true); return; }
-      await post("/api/patterns/create", {name, text, categoryId, accountId});
-      $("newPatternName").value = "";
-      $("newPatternText").value = "";
+      const editingPatternId = state.editingPatternId;
+      await post(editingPatternId ? "/api/patterns/update" : "/api/patterns/create", {
+        id: editingPatternId,
+        name,
+        text,
+        categoryId,
+        accountId
+      });
+      resetPatternForm();
       await loadPatterns();
       await loadBotLogs();
       setPatternFormOpen(false);
-      toast(t("toast.pattern_saved"));
+      toast(t(editingPatternId ? "patterns.updated" : "toast.pattern_saved"));
+    }
+
+    function editPattern(pattern) {
+      if (!pattern || !pattern.id) return;
+      state.editingPatternId = pattern.id;
+      $("newPatternName").value = pattern.name || "";
+      $("newPatternText").value = pattern.text || "";
+      const categoryId = pattern.categoryId || "general";
+      $("newPatternCategory").value = Array.from($("newPatternCategory").options).some(
+        (option) => option.value === categoryId
+      ) ? categoryId : "general";
+      syncPatternFormMode();
+      setPatternFormOpen(true);
+      $("patternFormSection").scrollIntoView({block: "start", behavior: "smooth"});
     }
 
     function renderPatternManageList() {
@@ -4997,12 +5157,17 @@ INDEX_HTML = r"""<!doctype html>
         category.className = "pattern-category-badge";
         category.textContent = patternCategoryName(p.categoryId || "general");
         const actions = document.createElement("div");
-        actions.className = "item-actions";
+        actions.className = "item-actions pattern-item-actions";
+        const edit = document.createElement("button");
+        edit.textContent = t("common.edit");
+        edit.disabled = !hasPermission("schedule");
+        edit.addEventListener("click", () => editPattern(p));
         const del = document.createElement("button");
         del.className = "danger";
         del.textContent = t("scheduler.delete");
+        del.disabled = !hasPermission("schedule");
         del.addEventListener("click", () => deletePattern(p.id).catch(toastError));
-        actions.append(del);
+        actions.append(edit, del);
         item.append(name, category, preview, actions);
         box.appendChild(item);
       }
@@ -5113,7 +5278,14 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function togglePatternForm() {
-      setPatternFormOpen($("patternFormSection").classList.contains("hidden"));
+      const open = $("patternFormSection").classList.contains("hidden");
+      if (open) resetPatternForm();
+      setPatternFormOpen(open);
+    }
+
+    function cancelPatternForm() {
+      resetPatternForm();
+      setPatternFormOpen(false);
     }
 
     function openPatternsPage() {
@@ -5139,6 +5311,7 @@ INDEX_HTML = r"""<!doctype html>
       if (!id) return;
       if (!confirm(t("confirm.delete_pattern"))) return;
       await post("/api/patterns/delete", {id, accountId: selectedAccountId()});
+      if (state.editingPatternId === id) cancelPatternForm();
       state.selectedPatternIds = (state.selectedPatternIds || []).filter((x) => x !== id);
       await loadPatterns();
       await loadBotLogs();
@@ -5397,7 +5570,7 @@ INDEX_HTML = r"""<!doctype html>
       list.replaceChildren();
       for (const job of state.schedules) {
         const item = document.createElement("div");
-        item.className = "item";
+        item.className = "item schedule-item";
 
         const title = document.createElement("strong");
         title.textContent = job.name || t("scheduler.default_name");
@@ -5932,7 +6105,7 @@ INDEX_HTML = r"""<!doctype html>
     $("clearStuckSchedulesButton").addEventListener("click", () => clearStuckSchedules().catch(toastError));
     $("scheduleText").addEventListener("input", updateTextPreview);
     $("patternFormToggle").addEventListener("click", togglePatternForm);
-    $("cancelPatternFormButton").addEventListener("click", () => setPatternFormOpen(false));
+    $("cancelPatternFormButton").addEventListener("click", cancelPatternForm);
     $("openPatternsButton").addEventListener("click", openPatternsPage);
     $("closePatternsButton").addEventListener("click", closePatternsPage);
     $("openPatternCategoriesButton").addEventListener("click", openPatternCategoriesPage);
@@ -6222,7 +6395,6 @@ GOD_HTML = r"""<!doctype html>
 <body>
   <section class="auth-view" id="loginView">
     <form class="login-panel" id="loginForm">
-      <div class="brand-mark">G</div>
       <h1>LinePassport God</h1>
       <p class="muted">User Management</p>
       <label class="field">God login<input id="godUsername" autocomplete="username" required></label>
@@ -8770,6 +8942,69 @@ class WebState:
             )
         return {"ok": True, "pattern": item}
 
+    def update_pattern(
+        self, body: dict[str, Any], user: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        pattern_id = str(body.get("id") or "").strip()
+        name = str(body.get("name") or "").strip()
+        text = str(body.get("text") or "")
+        category_id = str(
+            body.get("categoryId") or DEFAULT_PATTERN_CATEGORY_ID
+        ).strip()
+        if not pattern_id:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Pattern id is required.")
+        if not name:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Pattern name is required.")
+        if not text.strip():
+            raise WebError(HTTPStatus.BAD_REQUEST, "Pattern text is required.")
+        owner_id = str((user or {}).get("id") or "")
+        with self.schedule_lock:
+            data = self.store.get("patterns", {"patterns": [], "categories": []})
+            items = data.get("patterns", []) if isinstance(data, dict) else []
+            categories = data.get("categories", []) if isinstance(data, dict) else []
+            if not isinstance(items, list):
+                items = []
+            if not isinstance(categories, list):
+                categories = []
+            pattern = next(
+                (
+                    item
+                    for item in items
+                    if isinstance(item, dict)
+                    and str(item.get("id") or "") == pattern_id
+                    and str(item.get("ownerId") or "") == owner_id
+                ),
+                None,
+            )
+            if pattern is None:
+                raise WebError(HTTPStatus.NOT_FOUND, "Pattern not found.")
+            category_exists = category_id == DEFAULT_PATTERN_CATEGORY_ID or any(
+                isinstance(category, dict)
+                and str(category.get("id") or "") == category_id
+                and str(category.get("ownerId") or "") == owner_id
+                for category in categories
+            )
+            if not category_exists:
+                raise WebError(HTTPStatus.BAD_REQUEST, "Pattern category is invalid.")
+            old_name = str(pattern.get("name") or "")
+            pattern.update(
+                {
+                    "name": name,
+                    "text": text,
+                    "categoryId": category_id,
+                    "updatedAt": _now_iso(),
+                }
+            )
+            self.store.set(
+                "patterns", {"patterns": items, "categories": categories}
+            )
+            self.append_bot_log(
+                "pattern.update",
+                account_id=str(body.get("accountId") or ""),
+                detail=f"{old_name} -> {name}",
+            )
+        return {"ok": True, "pattern": dict(pattern)}
+
     def delete_pattern(
         self,
         pattern_id: str,
@@ -9438,6 +9673,13 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             if account_id:
                 self._require_account_access(account_id)
             return self.state.create_pattern(body, self.current_user)
+        if method == "POST" and path == "/api/patterns/update":
+            self._require_permission("schedule")
+            body = self._read_json()
+            account_id = str(body.get("accountId") or "")
+            if account_id:
+                self._require_account_access(account_id)
+            return self.state.update_pattern(body, self.current_user)
         if method == "POST" and path == "/api/patterns/delete":
             self._require_permission("schedule")
             body = self._read_json()

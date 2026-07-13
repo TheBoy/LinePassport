@@ -150,6 +150,10 @@ def test_add_account_wizard_uses_line_name_and_large_pin_display():
     assert "OkLine Web" not in INDEX_HTML
     assert "OkLine God" not in GOD_HTML
     assert "LinePassport God" in GOD_HTML
+    login_form = GOD_HTML.split('<form class="login-panel" id="loginForm">', 1)[1].split(
+        "</form>", 1
+    )[0]
+    assert "brand-mark" not in login_form
     assert 'id="accountNameInput"' not in INDEX_HTML
     assert 'id="loginPin"' not in INDEX_HTML
     assert 'class="pin-display mono" id="loginPinReview"' in INDEX_HTML
@@ -238,6 +242,17 @@ def test_web_ui_has_pattern_category_management():
     assert "pattern-page-grid" not in INDEX_HTML
 
 
+def test_web_ui_has_pattern_edit_and_delete_actions():
+    assert 'editingPatternId: null' in INDEX_HTML
+    assert 'id="patternFormTitle"' in INDEX_HTML
+    assert '"/api/patterns/update"' in INDEX_HTML
+    assert "function editPattern(pattern)" in INDEX_HTML
+    assert 'actions.className = "item-actions pattern-item-actions";' in INDEX_HTML
+    assert "actions.append(edit, del);" in INDEX_HTML
+    assert "#patternManageList .pattern-item-actions {" in INDEX_HTML
+    assert '"botlog.action.pattern.update"' in INDEX_HTML
+
+
 def test_web_ui_has_bot_log_panel():
     assert 'id="botLogList"' in INDEX_HTML
     assert 'id="botLogRefreshButton"' in INDEX_HTML
@@ -265,6 +280,32 @@ def test_web_ui_has_bot_log_panel():
     # The redundant single-user identity pills are gone from the header.
     assert 'id="userNamePill"' not in INDEX_HTML
     assert 'id="userRolePill"' not in INDEX_HTML
+
+
+def test_mobile_workspace_keeps_tabs_inline_and_contacts_scrollable():
+    assert ".tabbar,\n      .bot-page-nav {\n        flex-wrap: nowrap;" in INDEX_HTML
+    assert ".tabbar .tab,\n      .bot-page-nav button {\n        width: auto;" in INDEX_HTML
+    assert '.tab-panel[data-tab-panel="line"].active .line-list {' in INDEX_HTML
+    assert "max-height: none;\n        overflow: visible;" in INDEX_HTML
+    assert '.tab-panel[data-tab-panel="line"].active .line-rows {' in INDEX_HTML
+    assert "min-height: 260px;\n        max-height: min(58dvh, 520px);" in INDEX_HTML
+
+
+def test_mobile_scheduler_uses_primary_tabs_and_compact_job_actions():
+    assert 'class="section-head scheduler-list-head"' in INDEX_HTML
+    assert 'class="row compact scheduler-list-actions"' in INDEX_HTML
+    assert ".scheduler-list-actions #openBotLogsButton," in INDEX_HTML
+    assert ".scheduler-list-actions #scheduleFormToggle {\n        display: none;" in INDEX_HTML
+    assert ".schedule-item .item-actions {\n        display: grid;" in INDEX_HTML
+    assert 'item.className = "item schedule-item";' in INDEX_HTML
+
+
+def test_placeholder_chips_stay_in_one_scrollable_row_on_mobile():
+    assert INDEX_HTML.count('class="ph-chips"') == 2
+    assert ".ph-chips {\n      display: flex;\n      flex-wrap: nowrap;" in INDEX_HTML
+    assert "overflow-x: auto;" in INDEX_HTML
+    assert ".ph-chip {\n      flex: 0 0 auto;\n      width: auto;" in INDEX_HTML
+    assert '$("scheduleTextHelp").style.display = source === "text" ? "grid" : "none";' in INDEX_HTML
 
 
 def test_web_ui_tab_panels_are_siblings():
@@ -907,10 +948,27 @@ def test_message_patterns_crud(web_state):
     assert len(items) == 1
     assert items[0]["name"] == "greeting"
     assert items[0]["text"] == "hi {1D}"
+    updated = web_state.update_pattern(
+        {
+            "id": pid,
+            "name": "welcome",
+            "text": "hello {2D}",
+            "categoryId": "general",
+        }
+    )["pattern"]
+    assert updated["id"] == pid
+    assert updated["name"] == "welcome"
+    assert updated["text"] == "hello {2D}"
+    assert updated["categoryId"] == "general"
+    assert updated["updatedAt"]
     with pytest.raises(WebError):
         web_state.create_pattern({"name": "", "text": "x"})
     with pytest.raises(WebError):
         web_state.create_pattern({"name": "x", "text": "  "})
+    with pytest.raises(WebError):
+        web_state.update_pattern({"id": pid, "name": "", "text": "x"})
+    with pytest.raises(WebError):
+        web_state.update_pattern({"id": "nope", "name": "x", "text": "y"})
     web_state.delete_pattern(pid)
     assert web_state.list_patterns()["patterns"] == []
     with pytest.raises(WebError):
@@ -965,6 +1023,9 @@ def test_pattern_categories_are_tenant_owned(web_state):
     category_a = web_state.create_pattern_category(
         {"name": "Private A"}, member_a
     )["category"]
+    pattern_a = web_state.create_pattern(
+        {"name": "Member A pattern", "text": "private"}, member_a
+    )["pattern"]
     assert [item["name"] for item in web_state.list_patterns(member_b)["categories"]] == [
         "General"
     ]
@@ -972,6 +1033,10 @@ def test_pattern_categories_are_tenant_owned(web_state):
         web_state.create_pattern(
             {"name": "Wrong tenant", "text": "x", "categoryId": category_a["id"]},
             member_b,
+        )
+    with pytest.raises(WebError):
+        web_state.update_pattern(
+            {"id": pattern_a["id"], "name": "Hijacked", "text": "x"}, member_b
         )
 
 
@@ -994,13 +1059,22 @@ def test_bot_logs_record_schedule_and_pattern_actions(web_state):
     pattern = web_state.create_pattern(
         {"accountId": "acct", "name": "greeting", "text": "hi"}
     )["pattern"]
+    web_state.update_pattern(
+        {
+            "id": pattern["id"],
+            "accountId": "acct",
+            "name": "updated greeting",
+            "text": "hello",
+        }
+    )
     web_state.delete_pattern(pattern["id"], "acct")
 
     logs = web_state.list_bot_logs(
         "acct", {"role": "admin", "accountIds": ["acct"]}
     )["logs"]
-    assert [log["action"] for log in logs[:4]] == [
+    assert [log["action"] for log in logs[:5]] == [
         "pattern.delete",
+        "pattern.update",
         "pattern.create",
         "schedule.pause",
         "schedule.create",
