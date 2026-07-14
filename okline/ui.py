@@ -21,7 +21,10 @@ def _enable_windows_vt() -> None:
     try:  # turn on ANSI escape processing on Windows 10+ consoles
         import ctypes
 
-        k = ctypes.windll.kernel32
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            return
+        k = windll.kernel32
         k.SetConsoleMode(k.GetStdHandle(-11), 7)
     except Exception:  # pragma: no cover
         pass

@@ -7619,7 +7619,7 @@ def _public_http_target(url: str) -> tuple[str, tuple[str, ...]]:
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
         addresses = {
-            ipaddress.ip_address(item[4][0].split("%", 1)[0])
+            ipaddress.ip_address(str(item[4][0]).split("%", 1)[0])
             for item in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
         }
     except (OSError, ValueError) as exc:
