@@ -33,7 +33,7 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
@@ -12527,7 +12527,7 @@ def _append_history(job: dict[str, Any], entry: dict[str, Any]) -> None:
     del history[:-20]
 
 
-BotLogFn = Callable[[str, str, bool, dict[str, Any] | None], None]
+BotLogFn = Callable[[str, str, bool, Optional[dict[str, Any]]], None]
 
 
 def _bot_log(
