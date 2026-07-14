@@ -11146,10 +11146,10 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
     server_version = "LinePassport"
     sys_version = ""
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         self._handle("GET")
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         self._handle("POST")
 
     def log_message(self, fmt: str, *args: Any) -> None:
