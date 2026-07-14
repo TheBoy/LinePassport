@@ -280,7 +280,7 @@ class TestErrorMapping:
     def test_retry_backoff_is_applied_between_attempts(self, monkeypatch):
         sleeps = []
 
-        monkeypatch.setattr(transport_module.time, "sleep", sleeps.append)
+        monkeypatch.setattr(transport_module, "_sleep", sleeps.append)
         t = make_transport(
             lambda m, u, kw: FakeResp(500, {"error": {"message": "boom"}}),
             max_retries=2,

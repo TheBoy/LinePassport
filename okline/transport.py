@@ -29,6 +29,7 @@ import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from time import sleep as _sleep
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
@@ -446,7 +447,7 @@ class Transport:
         delay = backoff * (2**attempt)
         if max_backoff > 0:
             delay = min(delay, max_backoff)
-        time.sleep(delay)
+        _sleep(delay)
 
     def _decode(self, resp: requests.Response, *, path: str, endpoint_key: str | None) -> Any:
         text = resp.text
