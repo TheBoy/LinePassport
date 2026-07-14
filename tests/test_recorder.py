@@ -130,6 +130,26 @@ def test_pretty_marks_errors():
     assert "error: boom" in out
 
 
+def test_error_exports_redact_bearer_and_url_query_secrets():
+    error = (
+        "request failed with Bearer secret-token at "
+        "https://example.test/path?accessToken=query-secret&ok=1"
+    )
+    ex = make_exchange(ok=False, status=500, error=error)
+
+    pretty = ex.pretty(redact=True)
+    exported = ex.to_dict(redact=True)["error"]
+
+    for output in (pretty, exported):
+        assert "secret-token" not in output
+        assert "query-secret" not in output
+        assert "ok=1" in output
+        assert _MASK in output
+
+    assert "secret-token" in ex.pretty(redact=False)
+    assert "query-secret" in ex.to_dict(redact=False)["error"]
+
+
 # ---------------------------------------------------------------------------
 # Exchange.to_dict() redaction
 # ---------------------------------------------------------------------------
@@ -177,6 +197,28 @@ def test_to_har_entry_shape_and_redaction():
     assert hdrs["X-Line-Access"] == _MASK
     assert entry["request"]["method"] == "POST"
     assert entry["response"]["status"] == 200
+
+
+def test_har_redacts_response_cookie_and_raw_json_secrets():
+    ex = make_exchange(
+        response_text=json.dumps(
+            {"accessToken": "secret-token", "apiKey": "secret-api-key", "ok": True}
+        ),
+    )
+    ex.response_body = None
+    ex.response_headers = {
+        "content-type": "application/json",
+        "Set-Cookie": "session=secret-cookie; HttpOnly",
+    }
+
+    entry = ex.to_har_entry(redact=True)
+    headers = {item["name"]: item["value"] for item in entry["response"]["headers"]}
+    text = entry["response"]["content"]["text"]
+
+    assert headers["Set-Cookie"] == _MASK
+    assert "secret-token" not in text
+    assert "secret-api-key" not in text
+    assert text.count(_MASK) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +286,7 @@ def test_save_text(tmp_path):
     # redaction (the recorder's default) is applied.
     assert "SECRET-TOKEN" not in text
     assert "AT-123" not in text
+    assert not (tmp_path / "session.txt.tmp").exists()
 
 
 def test_save_json_is_parseable_and_redacted(tmp_path):

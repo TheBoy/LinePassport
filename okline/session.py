@@ -18,6 +18,7 @@ token is refreshed, so the session stays valid across runs.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,8 +63,24 @@ class Session:
         )
 
     def save(self, path: str) -> None:
-        with open(path, "w", encoding="utf-8") as fh:
+        target = os.fspath(path)
+        parent = os.path.dirname(target)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = f"{target}.tmp-{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(self.to_dict(), fh, ensure_ascii=False, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, target)
+        try:
+            os.chmod(target, 0o600)
+        except OSError:
+            pass
 
     @classmethod
     def load(cls, path: str) -> Session:

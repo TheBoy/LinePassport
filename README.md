@@ -1,4 +1,4 @@
-# OkLine
+# LinePassport (OkLine SDK)
 
 **A high-level Python client / SDK for the LINE Chrome messaging API.**
 

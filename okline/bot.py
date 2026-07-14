@@ -152,22 +152,26 @@ class Bot:
             self._safe(fn, EventContext(self.api, self, op))
 
         if op.type == OpType.RECEIVE_MESSAGE and op.message:
+            message = op.message
             if (
                 self.ignore_self
                 and self._self_mid
-                and op.message.get("from") == self._self_mid
+                and message.get("from") == self._self_mid
             ):
                 return
             # transparently decrypt Letter-Sealed messages so ctx.text is the
             # plaintext (the ciphertext lives in `chunks`, not `text`).
-            if op.message.get("chunks"):
+            if message.get("chunks"):
                 e2ee = getattr(self.api, "e2ee", None)
                 if e2ee is not None and e2ee.is_ready():
                     try:
-                        op.message = self.api.decrypt_message(op.message)
+                        decrypted = self.api.decrypt_message(message)
+                        if isinstance(decrypted, dict):
+                            message = decrypted
+                            op.message = decrypted
                     except Exception as exc:
                         log.debug("bot: could not decrypt message: %s", exc)
-            ctx = MessageContext(self.api, self, op, message=op.message)
+            ctx = MessageContext(self.api, self, op, message=message)
             if self.auto_mark_read:
                 self._safe(ctx.mark_read)
             # command routing

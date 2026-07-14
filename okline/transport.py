@@ -30,8 +30,21 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.parse import urlsplit, urlunsplit
 
 _DEBUG = bool(os.environ.get("LINE_DEBUG"))
+
+
+def _safe_url_for_error(url: str) -> str:
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname or ""
+        if parsed.port is not None:
+            host = f"{host}:{parsed.port}"
+        return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+    except ValueError:
+        return "<invalid-url>"
+
 
 try:
     import requests
@@ -405,13 +418,16 @@ class Transport:
         attempts = max(1, max_retries + 1)
         for attempt in range(attempts):
             try:
-                log.debug("%s %s", method, url)
+                log.debug("%s %s", method, _safe_url_for_error(url))
                 resp = self.session.request(method, url, **kw)
                 # Retry only on transient 5xx (never on a streamed response).
                 if resp.status_code >= 500 and not kw.get("stream") and attempt < attempts - 1:
                     last_exc = LineTransportError(
                         f"server error {resp.status_code}", status=resp.status_code
                     )
+                    close = getattr(resp, "close", None)
+                    if callable(close):
+                        close()
                     self._sleep_before_retry(attempt, retry_backoff, retry_backoff_max)
                     continue
                 return resp
@@ -420,7 +436,8 @@ class Transport:
                 if attempt >= attempts - 1:
                     break
                 self._sleep_before_retry(attempt, retry_backoff, retry_backoff_max)
-        raise LineTransportError(f"request to {url} failed: {last_exc}") from last_exc
+        safe_url = _safe_url_for_error(url)
+        raise LineTransportError(f"request to {safe_url} failed: {last_exc}") from last_exc
 
     @staticmethod
     def _sleep_before_retry(attempt: int, backoff: float, max_backoff: float) -> None:

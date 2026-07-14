@@ -102,6 +102,7 @@ class OkLine(AllServices):
 
         # When loaded from a session file, persist refreshed tokens back to it.
         self._session_path: str | None = None
+        self._session_save_hook: Callable[[], None] | None = None
 
         # Auto-refresh the access token on a 401 if we hold a refresh token.
         self.transport._refresh_hook = self._auto_refresh
@@ -124,7 +125,9 @@ class OkLine(AllServices):
         try:
             self.auth.refresh_access_token()
             log.info("access token refreshed")
-            if self._session_path:  # persist the new token
+            if self._session_save_hook is not None:
+                self._session_save_hook()
+            elif self._session_path:  # persist the new token
                 self.save_tokens(self._session_path)
             return True
         except Exception as exc:  # pragma: no cover - network
@@ -353,13 +356,13 @@ def _ct():
     return ContentType
 
 
-def _read_media(file: Any, name: str | None, default: str):
+def _read_media(file: Any, name: str | None, default: str) -> tuple[bytes, str]:
     """Accept a path (str/Path) or raw bytes; return (data, name)."""
     import os
 
     if isinstance(file, (bytes, bytearray)):
         return bytes(file), (name or default)
-    path = os.fspath(file)
+    path = os.fsdecode(os.fspath(file))
     with open(path, "rb") as fh:
         data = fh.read()
     return data, (name or os.path.basename(path) or default)

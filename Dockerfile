@@ -23,4 +23,7 @@ USER linepassport
 EXPOSE 8765
 VOLUME ["/data"]
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl --fail --silent http://127.0.0.1:${PORT:-8765}/healthz || exit 1
+
 CMD ["sh", "-c", "exec okline web --host 0.0.0.0 --port \"${PORT:-8765}\" --state-dir \"${OKLINE_STATE_DIR:-/data}\" --no-open"]

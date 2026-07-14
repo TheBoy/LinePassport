@@ -39,11 +39,19 @@ from okline.transport import (
     LineConfig,
     Tokens,
     Transport,
+    _safe_url_for_error,
 )
 
 # A real Thrift endpoint key used throughout for ``call``-based tests.
 PROFILE = "Talk.TalkService.getProfile"
 PROFILE_PATH = "/api/talk/thrift/Talk/TalkService/getProfile"
+
+
+def test_safe_url_for_error_removes_credentials_query_and_fragment():
+    safe = _safe_url_for_error(
+        "https://user:password@example.test:8443/path?token=secret#fragment"
+    )
+    assert safe == "https://example.test:8443/path"
 
 
 # ---------------------------------------------------------------------------

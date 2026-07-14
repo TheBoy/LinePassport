@@ -17,9 +17,12 @@ by default; pass ``redact=False`` to reveal them.
 from __future__ import annotations
 
 import json
+import os
+import re
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # Header / body keys whose values are masked unless redaction is disabled.
 _SECRET_HEADERS = {
@@ -32,10 +35,18 @@ _SECRET_HEADERS = {
 }
 _SECRET_BODY_KEYS = {
     "password",
-    "accessToken",
-    "refreshToken",
+    "passwordconfirm",
+    "currentpassword",
+    "newpassword",
+    "accesstoken",
+    "refreshtoken",
+    "encryptedaccesstoken",
+    "apikey",
+    "api_key",
+    "token",
     "secret",
-    "encryptedKeyChain",
+    "encryptedkeychain",
+    "enc_km",
     "verifier",
     "certificate",
 }
@@ -57,12 +68,60 @@ def _redact_body(body: Any, redact: bool) -> Any:
         return body
     if isinstance(body, dict):
         return {
-            k: (_MASK if k in _SECRET_BODY_KEYS and v else _redact_body(v, redact))
+            k: (
+                _MASK
+                if str(k).casefold() in _SECRET_BODY_KEYS and v
+                else _redact_body(v, redact)
+            )
             for k, v in body.items()
         }
     if isinstance(body, list):
         return [_redact_body(x, redact) for x in body]
     return body
+
+
+def _redact_url(url: str, redact: bool) -> str:
+    if not redact:
+        return url
+    try:
+        parsed = urlsplit(url)
+        query = urlencode(
+            [
+                (key, _MASK if key.casefold() in _SECRET_BODY_KEYS and value else value)
+                for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            ]
+        )
+        host = parsed.hostname or ""
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        return urlunsplit((parsed.scheme, host, parsed.path, query, parsed.fragment))
+    except (TypeError, ValueError):
+        return url
+
+
+def _redact_text(text: str, redact: bool) -> str:
+    if not redact or not text:
+        return text
+    try:
+        return _fmt(_redact_body(json.loads(text), True))
+    except (TypeError, ValueError):
+        value = re.sub(
+            r"(?i)\b(Bearer|Key)\s+[A-Za-z0-9._~+/=-]+",
+            lambda match: f"{match.group(1)} {_MASK}",
+            text,
+        )
+        for key in sorted(_SECRET_BODY_KEYS, key=len, reverse=True):
+            value = re.sub(
+                rf'(?i)(["\']?{re.escape(key)}["\']?\s*[:=]\s*["\']?)([^"\'\s,;&}}]+)',
+                rf"\1{_MASK}",
+                value,
+            )
+        value = re.sub(
+            r"https?://[^\s<>\"']+",
+            lambda match: _redact_url(match.group(0), True),
+            value,
+        )
+        return value
 
 
 @dataclass
@@ -97,7 +156,7 @@ class Exchange:
             head += f"   ({self.endpoint})"
         lines.append(head)
         lines.append("=" * min(len(head), 70))
-        lines.append(f"  -> {self.method} {self.url}")
+        lines.append(f"  -> {self.method} {_redact_url(self.url, redact)}")
         for k, v in rh.items():
             lines.append(f"  >  {k}: {v}")
         if rb is not None and rb != "":
@@ -107,10 +166,14 @@ class Exchange:
         for k, v in self.response_headers.items():
             if k.lower() in ("content-type", "x-line-resp-code", "content-length"):
                 lines.append(f"  <  {k}: {v}")
-        body_out = self.response_body if self.response_body is not None else self.response_text
-        lines.append("  <  resp: " + _truncate(_fmt(_redact_body(body_out, redact)), max_body))
+        body_out = (
+            _fmt(_redact_body(self.response_body, redact))
+            if self.response_body is not None
+            else _redact_text(self.response_text, redact)
+        )
+        lines.append("  <  resp: " + _truncate(body_out, max_body))
         if self.error:
-            lines.append(f"  !  error: {self.error}")
+            lines.append(f"  !  error: {_redact_text(self.error, redact)}")
         lines.append("")
         return "\n".join(lines)
 
@@ -118,29 +181,35 @@ class Exchange:
         return {
             "seq": self.seq,
             "method": self.method,
-            "url": self.url,
+            "url": _redact_url(self.url, redact),
             "path": self.path,
             "endpoint": self.endpoint,
             "request_headers": _redact_headers(self.request_headers, redact),
             "request_body": _redact_body(self.request_body, redact),
             "status": self.status,
-            "response_headers": self.response_headers,
+            "response_headers": _redact_headers(self.response_headers, redact),
             "response_body": _redact_body(self.response_body, redact),
             "duration_ms": self.duration_ms,
             "ok": self.ok,
-            "error": self.error,
+            "error": _redact_text(self.error, redact) if self.error else self.error,
             "started_at": self.started_at,
         }
 
     def to_har_entry(self, *, redact: bool = True) -> dict:
         rh = _redact_headers(self.request_headers, redact)
+        response_headers = _redact_headers(self.response_headers, redact)
         body_s = _fmt(_redact_body(self.request_body, redact))
+        response_s = (
+            _fmt(_redact_body(self.response_body, redact))
+            if self.response_body is not None
+            else _redact_text(self.response_text, redact)
+        )
         return {
             "startedDateTime": _iso(self.started_at),
             "time": self.duration_ms,
             "request": {
                 "method": self.method,
-                "url": self.url,
+                "url": _redact_url(self.url, redact),
                 "httpVersion": "HTTP/2",
                 "headers": [{"name": k, "value": str(v)} for k, v in rh.items()],
                 "queryString": [],
@@ -154,17 +223,17 @@ class Exchange:
                 "statusText": "" if self.ok else "ERROR",
                 "httpVersion": "HTTP/2",
                 "headers": [
-                    {"name": k, "value": str(v)} for k, v in self.response_headers.items()
+                    {"name": k, "value": str(v)} for k, v in response_headers.items()
                 ],
                 "cookies": [],
                 "content": {
-                    "size": len(self.response_text),
+                    "size": len(response_s),
                     "mimeType": "application/json",
-                    "text": self.response_text,
+                    "text": response_s,
                 },
                 "redirectURL": "",
                 "headersSize": -1,
-                "bodySize": len(self.response_text),
+                "bodySize": len(response_s),
             },
             "cache": {},
             "timings": {"send": 0, "wait": self.duration_ms, "receive": 0},
@@ -226,8 +295,22 @@ class Recorder:
             data = self.to_json(redact=redact)
         else:
             data = self.dump_text(redact=redact)
-        with open(path, "w", encoding="utf-8") as fh:
+        parent = os.path.dirname(os.path.abspath(path))
+        os.makedirs(parent, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
 
 # -- helpers ----------------------------------------------------------------
@@ -252,6 +335,8 @@ def _iso(epoch: float | None) -> str:
     import datetime
 
     return (
-        datetime.datetime.utcfromtimestamp(epoch).strftime("%Y-%m-%dT%H:%M:%S.")
+        datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S."
+        )
         + f"{int((epoch % 1) * 1000):03d}Z"
     )

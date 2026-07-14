@@ -12,6 +12,7 @@ from http import HTTPStatus
 import pytest
 import requests
 
+from okline import OkLine
 from okline import webapp as webapp_module
 from okline.obs import encode_message_talk_meta
 from okline.webapp import (
@@ -145,6 +146,37 @@ def test_file_state_store_serializes_writes(tmp_path, monkeypatch):
 
     assert errors == []
     assert max_active == 1
+
+
+def test_file_state_store_set_many_rolls_back_all_files(tmp_path, monkeypatch):
+    store = webapp_module.FileStateStore(_make_config(tmp_path))
+    store.set("auth", {"value": "old-auth"})
+    store.set("accounts", {"value": "old-accounts"})
+    original = webapp_module._write_json_file
+
+    def fail_second_write(path, value):
+        if path == store.paths["accounts"]:
+            raise OSError("simulated storage failure")
+        original(path, value)
+
+    monkeypatch.setattr(webapp_module, "_write_json_file", fail_second_write)
+    with pytest.raises(OSError, match="simulated storage failure"):
+        store.set_many(
+            {
+                "auth": {"value": "new-auth"},
+                "accounts": {"value": "new-accounts"},
+            }
+        )
+
+    assert store.get("auth", {}) == {"value": "old-auth"}
+    assert store.get("accounts", {}) == {"value": "old-accounts"}
+
+
+def test_health_endpoint_is_public(live_server):
+    response = requests.get(f"{live_server}/healthz", timeout=5)
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json() == {"ok": True}
 
 
 def test_add_account_wizard_uses_line_name_and_large_pin_display():
@@ -443,6 +475,32 @@ def test_web_auth_registration_requires_unique_valid_email(tmp_path):
     assert invalid.value.code == "email_invalid"
 
 
+def test_auth_rate_limits_password_spraying_by_source(tmp_path, monkeypatch):
+    auth = WebAuth(str(tmp_path / "auth.json"))
+    auth.setup("owner@example.com", "secret-pass")
+    monkeypatch.setattr(auth, "login_max_failures", 2)
+
+    for email in ("one@example.com", "two@example.com"):
+        with pytest.raises(WebError):
+            auth.login(email, "wrong-password", source="203.0.113.10")
+
+    with pytest.raises(WebError) as caught:
+        auth.login("three@example.com", "wrong-password", source="203.0.113.10")
+    assert caught.value.status == HTTPStatus.TOO_MANY_REQUESTS
+
+
+def test_registration_rate_limit_is_per_source(tmp_path, monkeypatch):
+    auth = WebAuth(str(tmp_path / "auth.json"))
+    auth.setup("owner@example.com", "secret-pass")
+    monkeypatch.setattr(auth, "registration_max_attempts", 2)
+    auth.register("one@example.com", "member-pass", source="203.0.113.11")
+    auth.register("two@example.com", "member-pass", source="203.0.113.11")
+
+    with pytest.raises(WebError) as caught:
+        auth.register("three@example.com", "member-pass", source="203.0.113.11")
+    assert caught.value.status == HTTPStatus.TOO_MANY_REQUESTS
+
+
 def test_web_auth_legacy_username_can_still_login(tmp_path):
     auth = WebAuth(str(tmp_path / "auth.json"))
     user = auth._new_user("legacyadmin", "secret-pass", "admin", [], "Legacy Admin")
@@ -607,6 +665,151 @@ def test_member_tenant_data_is_isolated_and_god_can_inspect(web_state):
     assert member_a["id"] not in web_state.store.get("ai_settings", {})["tenants"]
 
 
+def test_delete_user_keeps_all_state_when_transaction_fails(web_state, monkeypatch):
+    auth = web_state.web_auth
+    admin_token = auth.setup("owner@example.com", "owner-pass")
+    admin = auth.current_user(WebAuth.cookie_header(admin_token))
+    member_token = auth.register("member@example.com", "member-pass", "Member")
+    member = auth.current_user(WebAuth.cookie_header(member_token))
+    assert admin and member
+    account_id = "member-line"
+    web_state.account_store.data["accounts"].append(
+        {
+            "id": account_id,
+            "label": "Member LINE",
+            "ownerId": member["id"],
+            "tokenFile": "",
+        }
+    )
+    web_state.account_store.save()
+    auth.grant_account_access(member["id"], account_id)
+
+    def fail_transaction(values):
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr(web_state.store, "set_many", fail_transaction)
+    with pytest.raises(OSError, match="database unavailable"):
+        web_state.delete_user({"id": member["id"]}, admin)
+
+    assert auth._find_user(member["id"]) is not None
+    assert web_state.account_store.get(account_id) is not None
+
+
+def test_delete_account_keeps_access_and_account_when_transaction_fails(
+    web_state, monkeypatch
+):
+    auth = web_state.web_auth
+    token = auth.setup("owner@example.com", "owner-pass")
+    owner = auth.current_user(WebAuth.cookie_header(token))
+    assert owner
+    _seed_account(web_state, "acct-rollback")
+    auth.grant_account_access(owner["id"], "acct-rollback")
+
+    def fail_transaction(values):
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr(web_state.store, "set_many", fail_transaction)
+    with pytest.raises(OSError, match="database unavailable"):
+        web_state.delete_account("acct-rollback", owner)
+
+    assert web_state.account_store.get("acct-rollback") is not None
+    assert auth.can_access_account(auth._find_user(owner["id"]), "acct-rollback") is True
+
+
+def test_web_managed_line_session_is_encrypted_and_loadable(web_state, tmp_path):
+    api = OkLine(
+        access_token="secret-access-token",
+        refresh_token="secret-refresh-token",
+        certificate="secret-certificate",
+        record=False,
+    )
+    loaded = None
+    token_file = tmp_path / "account.tokens"
+    try:
+        web_state._save_account_tokens(api, str(token_file))
+        raw = token_file.read_bytes()
+        assert raw.startswith(b"fernet:")
+        assert b"secret-access-token" not in raw
+
+        loaded = web_state._api_from_account_tokens(str(token_file), redact=True)
+        assert loaded.tokens.access_token == "secret-access-token"
+        assert loaded.tokens.refresh_token == "secret-refresh-token"
+        assert loaded.tokens.certificate == "secret-certificate"
+    finally:
+        if loaded is not None:
+            loaded.close()
+        api.close()
+
+
+def test_web_session_keeps_stored_e2ee_when_restored_key_cannot_export(
+    web_state, tmp_path
+):
+    class RestoredE2EE:
+        @staticmethod
+        def is_ready():
+            return True
+
+        @staticmethod
+        def export_keys():
+            return {"mid": "u123", "latestKeyId": 7, "keys": {}}
+
+    api = OkLine(access_token="updated-token", record=False)
+    token_file = tmp_path / "account.tokens"
+    original_e2ee = {
+        "mid": "u123",
+        "latestKeyId": 7,
+        "keys": {"7": "private-key-blob"},
+    }
+    try:
+        web_state._save_account_tokens(
+            api,
+            str(token_file),
+            fallback_e2ee=original_e2ee,
+        )
+        api.e2ee = RestoredE2EE()
+
+        web_state._save_account_tokens(api, str(token_file))
+
+        raw = token_file.read_bytes()
+        payload = web_state.secret_cipher.decrypt(raw[len(b"fernet:") :])
+        stored = json.loads(payload.decode("utf-8"))
+        assert stored["accessToken"] == "updated-token"
+        assert stored["e2ee"] == original_e2ee
+    finally:
+        api.close()
+
+
+def test_legacy_web_session_migration_preserves_e2ee(
+    web_state, tmp_path, monkeypatch
+):
+    from okline.session import Session
+
+    token_file = tmp_path / "legacy-session.json"
+    original_e2ee = {
+        "mid": "u123",
+        "latestKeyId": 7,
+        "keys": {"7": "private-key-blob"},
+    }
+    Session(access_token="legacy-token", e2ee=original_e2ee).save(str(token_file))
+    api = OkLine(access_token="legacy-token", record=False)
+    monkeypatch.setattr(
+        OkLine,
+        "from_tokens_file",
+        classmethod(lambda cls, path, **kwargs: api),
+    )
+
+    loaded = web_state._api_from_account_tokens(str(token_file), redact=True)
+    try:
+        raw = token_file.read_bytes()
+        assert raw.startswith(b"fernet:")
+        payload = web_state.secret_cipher.decrypt(raw[len(b"fernet:") :])
+        stored = json.loads(payload.decode("utf-8"))
+        assert stored["accessToken"] == "legacy-token"
+        assert stored["e2ee"] == original_e2ee
+    finally:
+        loaded.close()
+
+
 class _RecentChatFakeApi:
     def __init__(self):
         self.checked = None
@@ -735,6 +938,12 @@ def test_web_ui_shows_unread_conversation_previews():
     assert "function clearUnreadForTarget(mid)" in INDEX_HTML
 
 
+def test_web_ui_only_treats_line_file_content_type_as_downloadable():
+    assert 'const isFile = ct === 14 || ct === "14";' in INDEX_HTML
+    assert 'm.contentType === "18") return chatEventLabel(m);' in INDEX_HTML
+    assert '13: "content.contact"' in INDEX_HTML
+
+
 def test_web_ui_combines_contacts_and_groups_in_leftmost_all_tab():
     all_tab = INDEX_HTML.index('id="loadAllButton"')
     contacts_tab = INDEX_HTML.index('id="loadContactsButton"')
@@ -777,6 +986,18 @@ def test_web_ui_notifies_only_after_conversation_baseline_is_ready():
     assert "!state.conversationBaselineReady" in INDEX_HTML
     assert "processNewMessageNotifications(accountId, conversations);" in INDEX_HTML
     assert 'document.title = unread ? `(${count}) LinePassport` : "LinePassport";' in INDEX_HTML
+
+
+def test_chat_images_open_in_accessible_modal_viewer():
+    assert 'id="imageViewer" role="dialog" aria-modal="true"' in INDEX_HTML
+    assert 'id="imageViewerImage"' in INDEX_HTML
+    assert 'id="imageViewerOriginal"' in INDEX_HTML
+    assert 'button.className = "msg-media-button";' in INDEX_HTML
+    assert "button.addEventListener(\"click\", () => openImageViewer(mediaSrc, img.alt));" in INDEX_HTML
+    assert "function openImageViewer(src, alt)" in INDEX_HTML
+    assert "function closeImageViewer()" in INDEX_HTML
+    assert 'event.key === "Escape"' in INDEX_HTML
+    assert 'event.target === $("imageViewerStage")' in INDEX_HTML
 
 
 def test_notification_service_worker_is_public(live_server):
@@ -1025,12 +1246,15 @@ def test_send_media_rejects_empty_data():
     assert api.calls == []
 
 
-def test_sniff_content_type_detects_images():
+def test_sniff_content_type_detects_media_and_documents():
     assert webapp_module._sniff_content_type(bytes.fromhex("ffd8ffe0")) == "image/jpeg"
     assert webapp_module._sniff_content_type(b"\x89PNG\r\n\x1a\n") == "image/png"
     assert webapp_module._sniff_content_type(b"GIF89a1234") == "image/gif"
     assert webapp_module._sniff_content_type(b"RIFF\x00\x00\x00\x00WEBPxxxx") == "image/webp"
+    assert webapp_module._sniff_content_type(b"%PDF-1.7") == "application/pdf"
+    assert webapp_module._sniff_content_type(b"PK\x03\x04rest") == "application/zip"
     assert webapp_module._sniff_content_type(b"nope") == "application/octet-stream"
+    assert webapp_module._message_content_type(b"nope", "notes.txt") == "text/plain"
 
 
 def test_message_summary_extracts_sticker_id():
@@ -1046,6 +1270,28 @@ def test_message_summary_extracts_sticker_id():
     # a plain image message carries no sticker id
     img = webapp_module._message_summary(None, {"id": "1", "contentType": 1}, {})
     assert img["stickerId"] is None
+
+
+def test_message_summary_exposes_chat_event_names_instead_of_a_fake_file():
+    actor = "u" + "1" * 32
+    member = "u" + "2" * 32
+    message = {
+        "id": "event-1",
+        "contentType": 18,
+        "contentMetadata": {
+            "LOC_KEY": "C_GI",
+            "LOC_ARGS": actor + "\x1e" + member,
+        },
+    }
+
+    assert webapp_module._chat_event_mids(message) == [actor, member]
+    summary = webapp_module._message_summary(
+        None, message, {actor: "Alice", member: "Bob"}
+    )
+
+    assert summary["eventKey"] == "C_GI"
+    assert summary["eventNames"] == ["Alice", "Bob"]
+    assert summary["fileName"] is None
 
 
 def test_message_summary_marks_decrypted_e2ee_image_ready_without_exposing_key():
@@ -1113,7 +1359,13 @@ def test_download_message_content_uses_e2ee_sid_oid_and_talk_meta(monkeypatch):
         @staticmethod
         def get_recent_messages(chat_mid, count):
             calls["recent"] = (chat_mid, count)
-            return [{"id": "123", "chunks": ["a", "b", "c"]}]
+            return [
+                {
+                    "id": "123",
+                    "contentType": 14,
+                    "chunks": ["a", "b", "c"],
+                }
+            ]
 
         @staticmethod
         def decrypt_message(message):
@@ -1123,6 +1375,7 @@ def test_download_message_content_uses_e2ee_sid_oid_and_talk_meta(monkeypatch):
                     "SID": "emi",
                     "OID": "encrypted-object",
                     "ENC_KM": "media-key",
+                    "FILE_NAME": "report.pdf",
                 },
             }
 
@@ -1132,7 +1385,12 @@ def test_download_message_content_uses_e2ee_sid_oid_and_talk_meta(monkeypatch):
         lambda data, key: b"plain" if (data, key) == (b"encrypted", "media-key") else b"",
     )
 
-    assert webapp_module._download_message_content(Api(), "123", "Uchat") == b"plain"
+    assert webapp_module._download_message_payload(Api(), "123", "Uchat") == (
+        b"plain",
+        "report.pdf",
+        14,
+    )
+    assert webapp_module._safe_message_filename("../report.pdf\r\n") == "report.pdf"
     assert calls["recent"] == ("Uchat", 200)
     assert calls["download"] == (
         "talk",
@@ -1140,6 +1398,67 @@ def test_download_message_content_uses_e2ee_sid_oid_and_talk_meta(monkeypatch):
         "encrypted-object",
         encode_message_talk_meta("123"),
     )
+
+
+def test_download_message_content_prefers_line_cdn_urls_for_plain_images(monkeypatch):
+    calls = []
+
+    class Obs:
+        @staticmethod
+        def download_object(*args, **kwargs):
+            raise AssertionError("OBS fallback should not be used")
+
+    class Api:
+        obs = Obs()
+
+        @staticmethod
+        def get_recent_messages(chat_mid, count):
+            assert (chat_mid, count) == ("Uchat", 200)
+            return [
+                {
+                    "id": "123",
+                    "contentType": 1,
+                    "contentMetadata": {
+                        "PREVIEW_URL": "https://manager.line-scdn.net/image/preview",
+                        "DOWNLOAD_URL": "https://manager.line-scdn.net/image/full",
+                    },
+                }
+            ]
+
+    def fake_download(url):
+        calls.append(url)
+        return b"preview" if url.endswith("preview") else b"full"
+
+    monkeypatch.setattr(webapp_module, "_download_line_media_url", fake_download)
+
+    assert webapp_module._download_message_content(
+        Api(), "123", "Uchat", preview=True
+    ) == b"preview"
+    assert webapp_module._download_message_content(Api(), "123", "Uchat") == b"full"
+    assert calls == [
+        "https://manager.line-scdn.net/image/preview",
+        "https://manager.line-scdn.net/image/full",
+    ]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://manager.line-scdn.net/image",
+        "https://line-scdn.net.evil.example/image",
+        "https://127.0.0.1/image",
+        "https://user:pass@manager.line-scdn.net/image",
+        "https://manager.line-scdn.net:444/image",
+    ],
+)
+def test_validated_line_media_url_rejects_untrusted_urls(url):
+    with pytest.raises(RuntimeError, match="LINE media URL"):
+        webapp_module._validated_line_media_url(url)
+
+
+def test_validated_line_media_url_accepts_line_cdn_https():
+    url = "https://manager.line-scdn.net/image/preview"
+    assert webapp_module._validated_line_media_url(url) == url
 
 
 def test_apply_placeholders_formats():
@@ -1551,6 +1870,106 @@ def test_cancel_login_frees_slot(web_state):
     assert web_state.login["id"] != "stale-id"
 
 
+def test_remote_first_run_requires_setup_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("OKLINE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    config = _make_config(tmp_path)
+    config.host = "0.0.0.0"
+    config.setup_token = "deploy-setup-secret"
+    server = OkLineWebServer(("127.0.0.1", 0), OkLineWebHandler)
+    server.state = WebState(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        status = requests.get(f"{base}/api/auth/status", timeout=5).json()
+        assert status["configured"] is False
+        assert status["authenticated"] is False
+        assert status["setupTokenRequired"] is True
+
+        denied = requests.post(
+            f"{base}/api/auth/setup",
+            json={
+                "email": "owner@example.com",
+                "password": "owner-pass",
+                "setupToken": "wrong",
+            },
+            timeout=5,
+        )
+        assert denied.status_code == HTTPStatus.FORBIDDEN
+
+        created = requests.post(
+            f"{base}/api/auth/setup",
+            json={
+                "email": "owner@example.com",
+                "password": "owner-pass",
+                "setupToken": "deploy-setup-secret",
+            },
+            timeout=5,
+        )
+        assert created.status_code == HTTPStatus.OK
+        assert "Secure" in created.headers["set-cookie"]
+    finally:
+        server.shutdown()
+        server.state.close()
+        server.server_close()
+
+
+def test_public_bind_fails_fast_without_first_run_setup_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("OKLINE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("LINEPASSPORT_SETUP_TOKEN", raising=False)
+    monkeypatch.delenv("OKLINE_SETUP_TOKEN", raising=False)
+    config = _make_config(tmp_path)
+    config.host = "0.0.0.0"
+
+    with pytest.raises(WebError) as caught:
+        webapp_module._bind_server(config)
+
+    assert caught.value.code == "setup_token_not_configured"
+
+
+def test_schedule_embedded_image_quota_counts_existing_jobs(monkeypatch):
+    monkeypatch.setattr(webapp_module, "MAX_SCHEDULE_IMAGE_STORAGE_PER_ACCOUNT", 10)
+    existing = [{"id": "one", "accountId": "acct", "imageData": "QUJDREVG"}]
+    candidate = {"id": "two", "accountId": "acct", "imageData": "R0hJSktM"}
+
+    with pytest.raises(WebError) as caught:
+        webapp_module._ensure_schedule_image_quota(existing, candidate)
+
+    assert caught.value.code == "schedule_storage_quota"
+
+
+def test_bot_log_retention_honors_total_byte_cap(monkeypatch):
+    monkeypatch.setattr(webapp_module, "MAX_BOT_LOG_STORAGE_BYTES", 250)
+    logs = [
+        {"id": str(index), "accountId": "acct", "detail": "x" * 100}
+        for index in range(10)
+    ]
+
+    kept = webapp_module._trim_bot_logs(logs)
+
+    assert kept[-1]["id"] == "9"
+    assert len(kept) < len(logs)
+
+
+def test_scheduler_image_source_rejects_local_file_path():
+    with pytest.raises(WebError) as exc:
+        webapp_module._image_content("pyproject.toml")
+    assert exc.value.code == "invalid_image_url"
+
+
+def test_public_url_validator_rejects_private_addresses(monkeypatch):
+    monkeypatch.setattr(
+        webapp_module.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("10.0.0.7", 80))],
+    )
+    with pytest.raises(WebError) as exc:
+        webapp_module._validate_public_http_url("http://internal.example/resource")
+    assert exc.value.code == "unsafe_url"
+
+
 # -- HTTP integration: auth, codes, permissions, new routes ---------------
 def test_simple_mode_auto_provisions_over_http(live_server):
     session = requests.Session()
@@ -1810,7 +2229,7 @@ def test_resolve_job_contents_ai_image_logs_generation_steps(monkeypatch):
     def log(action, detail="", ok=True, data=None):
         events.append((action, detail, ok, data or {}))
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
         calls["post"] += 1
 
         class R:
@@ -1821,7 +2240,7 @@ def test_resolve_job_contents_ai_image_logs_generation_steps(monkeypatch):
 
         return R()
 
-    def fake_get(url, params=None, headers=None, timeout=None):
+    def fake_get(url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None):
         calls["get"] += 1
         flag = 0 if calls["get"] == 1 else 1
 
@@ -1930,7 +2349,7 @@ def test_generate_ai_image_extracts_inline_image(monkeypatch):
                 ]
             }
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
         captured.update(url=url, body=json, headers=headers, timeout=timeout)
         return _Resp()
 
@@ -1992,7 +2411,7 @@ def test_generate_ai_image_surfaces_upstream_error(monkeypatch):
 def test_generate_nbapi_image_polls_then_downloads(monkeypatch):
     calls = {"post": 0, "get": 0}
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
         calls["post"] += 1
         assert url.endswith("/api/v1/nanobanana/generate")
         assert headers["Authorization"] == "Bearer nb-key"
@@ -2009,7 +2428,7 @@ def test_generate_nbapi_image_polls_then_downloads(monkeypatch):
 
         return R()
 
-    def fake_get(url, params=None, headers=None, timeout=None):
+    def fake_get(url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None):
         calls["get"] += 1
         assert url.endswith("/api/v1/nanobanana/record-info")
         assert params["taskId"] == "t-1"
@@ -2068,7 +2487,7 @@ def test_generate_nbapi_image_uses_selected_model_endpoint(
 ):
     captured = {}
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
         captured.update(url=url, body=json)
 
         class R:
@@ -2079,7 +2498,7 @@ def test_generate_nbapi_image_uses_selected_model_endpoint(
 
         return R()
 
-    def fake_get(url, params=None, headers=None, timeout=None):
+    def fake_get(url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None):
         class R:
             status_code = 200
 
@@ -2178,7 +2597,7 @@ def test_generate_fal_image_uses_queue_and_downloads_result(monkeypatch):
         def raise_for_status(self):
             return None
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
         captured.update(url=url, body=json, headers=headers, timeout=timeout)
         return JsonResponse(
             202,
@@ -2189,7 +2608,7 @@ def test_generate_fal_image_uses_queue_and_downloads_result(monkeypatch):
             },
         )
 
-    def fake_get(url, params=None, headers=None, timeout=None):
+    def fake_get(url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None):
         if "/status/" in url:
             calls["status"] += 1
             status = "IN_PROGRESS" if calls["status"] == 1 else "COMPLETED"
@@ -2205,6 +2624,11 @@ def test_generate_fal_image_uses_queue_and_downloads_result(monkeypatch):
     monkeypatch.setattr(webapp_module.requests, "post", fake_post)
     monkeypatch.setattr(webapp_module.requests, "get", fake_get)
     monkeypatch.setattr(webapp_module.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(
+        webapp_module,
+        "_download_image",
+        lambda url: (b"\x89PNG\r\n\x1a\nFAL", "generated.png"),
+    )
 
     result = webapp_module._generate_ai_image(
         "a green city",

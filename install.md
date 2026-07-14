@@ -1,5 +1,38 @@
 # LinePassport Installation Guide
 
+## Production-required environment
+
+When LinePassport is exposed through a public hostname, configure these values before
+the first startup:
+
+```env
+OKLINE_DATABASE_URL=postgresql://USER:PASSWORD@POSTGRES_HOST:5432/DATABASE
+LINEPASSPORT_SETUP_TOKEN=REPLACE_WITH_A_RANDOM_SETUP_TOKEN
+LINEPASSPORT_SECRET_KEY=REPLACE_WITH_A_FERNET_KEY
+LINEPASSPORT_SECURE_COOKIES=1
+LINEPASSPORT_TRUST_PROXY=1
+```
+
+Generate the two secrets locally:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+- `LINEPASSPORT_SETUP_TOKEN` protects creation of the first administrator on a public bind.
+- `LINEPASSPORT_SECRET_KEY` encrypts stored AI API keys. Keep it unchanged and back it up.
+- LINE session tokens, certificates, and E2EE key material managed by the web app are
+  encrypted with the same key. Losing the key requires adding those LINE accounts again.
+- Set `LINEPASSPORT_TRUST_PROXY=1` only when all traffic reaches the app through your
+  trusted reverse proxy. This lets rate limiting use the original client IP.
+- Mount `/data` on persistent storage because it contains LINE sessions and the fallback
+  encryption key.
+- Run exactly one application replica for each database. The app enforces this with a
+  PostgreSQL advisory lock so a second scheduler cannot send duplicate messages.
+- Put the built-in HTTP server behind an HTTPS reverse proxy; do not expose port 8765
+  directly to the Internet.
+
 คู่มือนี้ใช้สำหรับติดตั้ง **LinePassport** จากซอร์สโค้ดใน repository นี้
 
 > ห้ามใช้ `pip install okline` หากต้องการฟีเจอร์ LinePassport เวอร์ชันล่าสุด
@@ -163,6 +196,9 @@ docker run -d \
   -e PORT=8765 \
   -e OKLINE_STATE_DIR=/data \
   -e OKLINE_DATABASE_URL=postgresql://linepassport:CHANGE_THIS_PASSWORD@linepassport-db:5432/linepassport \
+  -e LINEPASSPORT_SETUP_TOKEN=REPLACE_WITH_A_RANDOM_SETUP_TOKEN \
+  -e LINEPASSPORT_SECRET_KEY=REPLACE_WITH_A_FERNET_KEY \
+  -e LINEPASSPORT_SECURE_COOKIES=0 \
   -v linepassport-data:/data \
   linepassport:local
 ```
@@ -194,6 +230,10 @@ docker logs -f linepassport
    PORT=8765
    OKLINE_STATE_DIR=/data
    OKLINE_DATABASE_URL=postgresql://USER:PASSWORD@POSTGRES_HOST:5432/DATABASE
+   LINEPASSPORT_SETUP_TOKEN=REPLACE_WITH_A_RANDOM_SETUP_TOKEN
+   LINEPASSPORT_SECRET_KEY=REPLACE_WITH_A_FERNET_KEY
+   LINEPASSPORT_SECURE_COOKIES=1
+   LINEPASSPORT_TRUST_PROXY=1
    ```
 
 7. เชื่อมโดเมนและเปิด HTTPS
@@ -290,4 +330,3 @@ node --version
 - จำกัดสิทธิ์และบัญชี LINE ที่สมาชิกแต่ละคนเข้าถึงได้
 - ห้ามเปิด PostgreSQL สู่ Internet
 - สำรอง PostgreSQL และ `/data` เป็นประจำ
-

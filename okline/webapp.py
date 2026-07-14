@@ -8,29 +8,38 @@ so it can run from a source checkout without adding a web framework dependency.
 from __future__ import annotations
 
 import base64
+import copy
 import datetime as _dt
 import hashlib
 import hmac
 import io
+import ipaddress
 import json
+import mimetypes
 import os
 import random
 import re
 import secrets
+import socket
 import threading
 import time
 import traceback
 import uuid
 import webbrowser
+from collections.abc import Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
+from cryptography.fernet import Fernet, InvalidToken
+from requests.adapters import HTTPAdapter
+from urllib3 import HTTPConnectionPool, HTTPSConnectionPool
 
 from . import __version__
 from . import e2ee_crypto as e2ee_frame
@@ -63,6 +72,18 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     * { box-sizing: border-box; }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
 
     html, body { height: 100%; }
 
@@ -1986,8 +2007,22 @@ INDEX_HTML = r"""<!doctype html>
       display: block;
       max-width: min(240px, 60vw);
       max-height: 280px;
-      border-radius: 12px;
-      cursor: pointer;
+      border-radius: 8px;
+      object-fit: cover;
+    }
+    .msg-media-button {
+      min-height: 0;
+      display: block;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      padding: 0;
+      overflow: hidden;
+    }
+    .msg-media-button:hover { border-color: transparent; }
+    .msg-media-button:focus-visible {
+      outline: 3px solid rgba(6, 199, 85, .45);
+      outline-offset: 3px;
     }
     .msg-sticker { display: block; width: 124px; height: 124px; object-fit: contain; }
     .line-messages .bubble.has-media {
@@ -2007,6 +2042,53 @@ INDEX_HTML = r"""<!doctype html>
     }
     .msg-file:hover { text-decoration: underline; }
     .msg-file svg { width: 20px; height: 20px; flex: 0 0 auto; }
+    .image-viewer {
+      position: fixed;
+      inset: 0;
+      z-index: 70;
+      display: grid;
+      grid-template-rows: 58px minmax(0, 1fr);
+      background: rgba(10, 16, 20, .94);
+    }
+    .image-viewer.hidden { display: none; }
+    .image-viewer-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 8px 14px;
+    }
+    .image-viewer-action {
+      width: 42px;
+      height: 42px;
+      min-height: 42px;
+      display: grid;
+      place-items: center;
+      border-color: rgba(255, 255, 255, .28);
+      background: rgba(255, 255, 255, .08);
+      color: #fff;
+      padding: 0;
+    }
+    .image-viewer-action:hover { border-color: rgba(255, 255, 255, .7); }
+    .image-viewer-action svg { width: 21px; height: 21px; }
+    .image-viewer-stage {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      place-items: center;
+      overflow: auto;
+      padding: 0 18px 18px;
+    }
+    .image-viewer-image {
+      display: block;
+      max-width: 100%;
+      max-height: calc(100vh - 76px);
+      object-fit: contain;
+    }
+    .image-viewer-loading {
+      color: rgba(255, 255, 255, .82);
+      font-weight: 700;
+    }
     .ph-help { display: grid; gap: 5px; min-width: 0; }
     .ph-help .muted { font-size: 12px; }
     .ph-chips {
@@ -2270,6 +2352,10 @@ INDEX_HTML = r"""<!doctype html>
       <label id="registrationNameRow" class="hidden">
         <span data-i18n="auth.displayname">Display name</span>
         <input id="registrationNameInput" type="text" autocomplete="name" maxlength="80" placeholder="Your name">
+      </label>
+      <label id="setupTokenRow" class="hidden">
+        <span>Setup token</span>
+        <input id="setupTokenInput" type="password" autocomplete="one-time-code" maxlength="256" placeholder="LINEPASSPORT_SETUP_TOKEN">
       </label>
       <label>
         <span data-i18n="auth.password">Password</span>
@@ -2613,7 +2699,7 @@ INDEX_HTML = r"""<!doctype html>
                   <span data-i18n="scheduler.lbl_source">Content type</span>
                   <select id="scheduleContentSource" data-requires-account>
                     <option value="text" data-i18n="scheduler.source_text">Text</option>
-                    <option value="image" data-i18n="scheduler.source_image">Image URL / file</option>
+                    <option value="image" data-i18n="scheduler.source_image">Image URL</option>
                     <option value="ai_image" data-i18n="scheduler.source_ai_image">AI image</option>
                     <option value="api" data-i18n="scheduler.source_api">API text / image</option>
                   </select>
@@ -2639,8 +2725,8 @@ INDEX_HTML = r"""<!doctype html>
                 </div>
                 <div class="ph-preview muted" id="scheduleTextPreview"></div>
                 <label id="scheduleImageLabel" style="display:none">
-                  <span data-i18n="scheduler.lbl_image">Image (URL / local path)</span>
-                  <input id="scheduleImageSource" data-requires-account data-i18n-ph="scheduler.image_ph" placeholder="Image URL or local path">
+                  <span data-i18n="scheduler.lbl_image">Image URL</span>
+                  <input id="scheduleImageSource" data-requires-account data-i18n-ph="scheduler.image_ph" placeholder="https://example.com/image.jpg">
                 </label>
                 <div class="row compact" id="scheduleImageUploadRow" style="display:none">
                   <input type="file" id="scheduleImageInput" accept="image/*" hidden>
@@ -2966,6 +3052,18 @@ INDEX_HTML = r"""<!doctype html>
     </div>
   </div>
 
+  <div class="image-viewer hidden" id="imageViewer" role="dialog" aria-modal="true" aria-labelledby="imageViewerTitle">
+    <div class="image-viewer-toolbar">
+      <span class="sr-only" id="imageViewerTitle" data-i18n="chat.image_preview">Image preview</span>
+      <button class="image-viewer-action" id="imageViewerOriginal" type="button" data-i18n-title="chat.open_original" title="Open original" aria-label="Open original"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg></button>
+      <button class="image-viewer-action" id="imageViewerClose" type="button" data-i18n-title="common.close" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="image-viewer-stage" id="imageViewerStage">
+      <span class="image-viewer-loading" id="imageViewerLoading" data-i18n="common.loading">Loading...</span>
+      <img class="image-viewer-image hidden" id="imageViewerImage" alt="">
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="modalOverlay">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <h3 id="modalTitle"></h3>
@@ -3210,6 +3308,9 @@ INDEX_HTML = r"""<!doctype html>
       "chat.unknown": {th: "ไม่ทราบ", en: "unknown"},
       "chat.sealed_image": {th: "🔒 รูปภาพ (เข้ารหัส — เปิดในแอป LINE)", en: "🔒 Image (encrypted — open in LINE)"},
       "chat.sealed_file": {th: "🔒 ไฟล์ (เข้ารหัส — เปิดในแอป LINE)", en: "🔒 File (encrypted — open in LINE)"},
+      "chat.image_preview": {th: "ดูรูปภาพ", en: "Image preview"},
+      "chat.open_original": {th: "เปิดรูปต้นฉบับ", en: "Open original"},
+      "chat.image_load_error": {th: "โหลดรูปภาพไม่สำเร็จ", en: "Could not load image"},
       "chat.today": {th: "วันนี้", en: "Today"},
       "chat.yesterday": {th: "เมื่อวาน", en: "Yesterday"},
       "content.image": {th: "[รูปภาพ]", en: "[image]"},
@@ -3217,6 +3318,12 @@ INDEX_HTML = r"""<!doctype html>
       "content.audio": {th: "[เสียง]", en: "[audio]"},
       "content.sticker": {th: "[สติกเกอร์]", en: "[sticker]"},
       "content.file": {th: "[ไฟล์]", en: "[file]"},
+      "content.contact": {th: "[รายชื่อติดต่อ]", en: "[contact]"},
+      "content.location": {th: "[ตำแหน่งที่ตั้ง]", en: "[location]"},
+      "content.notification": {th: "[แจ้งเตือน]", en: "[notification]"},
+      "content.chat_event": {th: "[กิจกรรมในแชท]", en: "[chat activity]"},
+      "chat.event.group_invite": {th: "{actor} เชิญ {member} เข้ากลุ่ม", en: "{actor} invited {member} to the group"},
+      "chat.event.member_join": {th: "{member} เข้าร่วมกลุ่ม", en: "{member} joined the group"},
       "content.unsupported": {th: "[ข้อความที่ไม่รองรับ]", en: "[unsupported message]"},
       "scheduler.title": {th: "ตัวตั้งเวลาส่ง / Scheduler", en: "Scheduler"},
       "bot.nav_schedules": {th: "รายการบอท", en: "Schedules"},
@@ -3228,11 +3335,11 @@ INDEX_HTML = r"""<!doctype html>
       "scheduler.name_ph": {th: "ชื่องาน", en: "Job name"},
       "scheduler.target_ph": {th: "รหัสภายใน (MID) หรือชื่อผู้ติดต่อ", en: "Target MID or contact name"},
       "scheduler.source_text": {th: "ข้อความ", en: "Text"},
-      "scheduler.source_image": {th: "รูปภาพ (URL/ไฟล์)", en: "Image URL / file"},
+      "scheduler.source_image": {th: "URL รูปภาพ", en: "Image URL"},
       "scheduler.source_ai_image": {th: "รูปภาพจาก AI", en: "AI image"},
       "scheduler.source_api": {th: "API (ข้อความ/รูป)", en: "API text / image"},
       "scheduler.message_ph": {th: "ข้อความที่จะส่ง", en: "Message to send"},
-      "scheduler.image_ph": {th: "URL รูปภาพหรือพาธไฟล์", en: "Image URL or local path"},
+      "scheduler.image_ph": {th: "https://example.com/image.jpg", en: "https://example.com/image.jpg"},
       "scheduler.api_url_ph": {th: "URL ของ API", en: "API URL"},
       "scheduler.api_body_ph": {th: "เนื้อหา JSON สำหรับ POST", en: "POST JSON body"},
       "scheduler.date_ph": {th: "วว/ดด/ปปปป", en: "dd/mm/yyyy"},
@@ -3444,6 +3551,7 @@ INDEX_HTML = r"""<!doctype html>
       notificationWorker: null,
       notificationWorkerListening: false,
       webAuthConfigured: false,
+      setupTokenRequired: false,
       authMode: "login",
       simpleMode: false,
       currentUser: null,
@@ -3705,6 +3813,7 @@ INDEX_HTML = r"""<!doctype html>
         : isRegister ? t("auth.hint_register") : t("auth.hint_signin");
       $("confirmPasswordRow").classList.toggle("hidden", !(isSetup || isRegister));
       $("registrationNameRow").classList.toggle("hidden", !isRegister);
+      $("setupTokenRow").classList.toggle("hidden", !(isSetup && state.setupTokenRequired));
       $("authIdentityLabel").textContent = t("auth.email");
       $("webUsernameInput").type = "email";
       $("webUsernameInput").placeholder = "name@example.com";
@@ -3718,6 +3827,7 @@ INDEX_HTML = r"""<!doctype html>
       state.authMode = mode === "register" ? "register" : "login";
       $("webUsernameInput").value = "";
       $("registrationNameInput").value = "";
+      $("setupTokenInput").value = "";
       $("webPasswordInput").value = "";
       $("confirmPasswordInput").value = "";
       renderAuthMode();
@@ -3982,7 +4092,7 @@ INDEX_HTML = r"""<!doctype html>
         $("confirmNewPasswordInput").focus();
         return;
       }
-      await post("/api/auth/change-password", {currentPassword, newPassword});
+      await post("/api/auth/change-password", {currentPassword, newPassword, confirmPassword: confirmNewPassword});
       $("currentPasswordInput").value = "";
       $("newPasswordInput").value = "";
       $("confirmNewPasswordInput").value = "";
@@ -4335,6 +4445,7 @@ INDEX_HTML = r"""<!doctype html>
         const data = await post(endpoint, {
           email,
           password,
+          setupToken: mode === "setup" ? $("setupTokenInput").value : "",
           displayName: mode === "register" ? $("registrationNameInput").value.trim() : ""
         });
         state.webAuthConfigured = data.configured;
@@ -4346,6 +4457,7 @@ INDEX_HTML = r"""<!doctype html>
         $("webPasswordInput").value = "";
         $("confirmPasswordInput").value = "";
         $("registrationNameInput").value = "";
+        $("setupTokenInput").value = "";
         hideToast();
         showAuthPanel(false);
         applyPermissions();
@@ -4373,6 +4485,7 @@ INDEX_HTML = r"""<!doctype html>
       }
       clearTimeout(state.authRetryTimer);
       state.webAuthConfigured = data.configured;
+      state.setupTokenRequired = !!data.setupTokenRequired;
       state.simpleMode = !!data.simpleMode;
       state.currentUser = data.user || null;
       state.roles = data.roles || {};
@@ -5095,9 +5208,23 @@ INDEX_HTML = r"""<!doctype html>
       });
     }
 
+    function chatEventLabel(m) {
+      const names = Array.isArray(m.eventNames) ? m.eventNames : [];
+      if (m.eventKey === "C_GI" && names.length >= 2) {
+        return t("chat.event.group_invite", {actor: names[0], member: names[1]});
+      }
+      if (m.eventKey === "C_MJ" && names.length >= 1) {
+        return t("chat.event.member_join", {member: names[0]});
+      }
+      return names.length
+        ? names.join(", ") + " · " + t("content.chat_event")
+        : t("content.chat_event");
+    }
+
     function contentLabel(m) {
       if (m.text) return m.text;
-      const map = {1: "content.image", 2: "content.video", 3: "content.audio", 7: "content.sticker", 13: "content.file", 14: "content.file", 16: "content.file", 18: "content.file"};
+      if (m.contentType === 18 || m.contentType === "18") return chatEventLabel(m);
+      const map = {1: "content.image", 2: "content.video", 3: "content.audio", 7: "content.sticker", 13: "content.contact", 14: "content.file", 15: "content.location", 16: "content.notification"};
       const key = map[m.contentType];
       return key ? t(key) : t("content.unsupported");
     }
@@ -5280,16 +5407,44 @@ INDEX_HTML = r"""<!doctype html>
       return d;
     }
 
+    function openImageViewer(src, alt) {
+      const viewer = $("imageViewer");
+      const image = $("imageViewerImage");
+      viewer.dataset.src = src;
+      image.alt = alt || t("content.image");
+      image.classList.add("hidden");
+      image.removeAttribute("src");
+      $("imageViewerLoading").classList.remove("hidden");
+      viewer.classList.remove("hidden");
+      requestAnimationFrame(() => {
+        image.src = src;
+        $("imageViewerClose").focus();
+      });
+    }
+
+    function closeImageViewer() {
+      const viewer = $("imageViewer");
+      viewer.classList.add("hidden");
+      viewer.dataset.src = "";
+      $("imageViewerImage").removeAttribute("src");
+    }
+
     function messageBody(m, accountId, isImage, isSticker) {
       if (isImage) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "msg-media-button";
+        button.setAttribute("aria-label", t("chat.image_preview"));
         const img = document.createElement("img");
         img.className = "msg-media";
         img.loading = "lazy";
         img.alt = t("content.image");
-        img.src = `/api/message-content?${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}&chat_mid=${encodeURIComponent(targetValue())}`;
-        img.addEventListener("click", () => window.open(img.src, "_blank", "noopener"));
-        img.addEventListener("error", () => img.replaceWith(mediaFallback(m)));
-        return img;
+        const mediaSrc = `/api/message-content?${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}&chat_mid=${encodeURIComponent(targetValue())}`;
+        img.src = `${mediaSrc}&preview=1`;
+        button.addEventListener("click", () => openImageViewer(mediaSrc, img.alt));
+        img.addEventListener("error", () => button.replaceWith(mediaFallback(m)));
+        button.appendChild(img);
+        return button;
       }
       if (isSticker) {
         const img = document.createElement("img");
@@ -5302,8 +5457,7 @@ INDEX_HTML = r"""<!doctype html>
       }
       const ct = m.contentType;
       const isImgType = ct === 1 || ct === "1";
-      const isFile = ct === 13 || ct === "13" || ct === 14 || ct === "14"
-        || ct === 16 || ct === "16" || ct === 18 || ct === "18";
+      const isFile = ct === 14 || ct === "14";
       if ((isImgType || isFile) && m.encrypted && !m.mediaReady) {
         const d = document.createElement("div");
         d.className = "msg-chip";
@@ -6648,6 +6802,27 @@ INDEX_HTML = r"""<!doctype html>
     $("loadMessagesButton").addEventListener("click", () => loadMessages().catch(toastError));
     $("reloadMessagesButton").addEventListener("click", () => loadMessages().catch(toastError));
     $("notificationButton").addEventListener("click", () => toggleNotifications().catch(toastError));
+    $("imageViewerClose").addEventListener("click", closeImageViewer);
+    $("imageViewerOriginal").addEventListener("click", () => {
+      const src = $("imageViewer").dataset.src;
+      if (src) window.open(src, "_blank", "noopener");
+    });
+    $("imageViewerStage").addEventListener("click", (event) => {
+      if (event.target === $("imageViewerStage")) closeImageViewer();
+    });
+    $("imageViewerImage").addEventListener("load", () => {
+      $("imageViewerLoading").classList.add("hidden");
+      $("imageViewerImage").classList.remove("hidden");
+    });
+    $("imageViewerImage").addEventListener("error", () => {
+      closeImageViewer();
+      toast(t("chat.image_load_error"), true);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !$("imageViewer").classList.contains("hidden")) {
+        closeImageViewer();
+      }
+    });
     $("sendButton").addEventListener("click", () => sendText(false).catch(toastError));
     $("sendEncryptedButton").addEventListener("click", () => sendText(true).catch(toastError));
     $("imageButton").addEventListener("click", () => $("imageFileInput").click());
@@ -7346,6 +7521,9 @@ class WebConfig:
     access_token: str | None = None
     refresh_token: str | None = None
     show_secrets: bool = False
+    setup_token: str | None = None
+    secure_cookies: bool | None = None
+    trust_proxy: bool = False
 
 
 @dataclass
@@ -7361,6 +7539,8 @@ _STATUS_CODES: dict[int, str] = {
     403: "forbidden",
     404: "not_found",
     409: "conflict",
+    413: "payload_too_large",
+    429: "too_many_requests",
     500: "server_error",
     502: "upstream_error",
 }
@@ -7378,6 +7558,257 @@ class WebError(Exception):
         # A stable, machine-readable code the browser localises independently
         # of the human message.  Falls back to a status-derived default.
         self.code = code or _status_code(status)
+
+
+MAX_IMAGE_BYTES = 30 * 1024 * 1024
+MAX_OUTBOUND_DOCUMENT_BYTES = 4 * 1024 * 1024
+MAX_JSON_BODY_BYTES = 1024 * 1024
+MAX_MEDIA_JSON_BODY_BYTES = 42 * 1024 * 1024
+MAX_URL_LENGTH = 2048
+MAX_REDIRECTS = 5
+MAX_TEXT_LENGTH = 20_000
+MAX_API_BODY_LENGTH = 64 * 1024
+MAX_NAME_LENGTH = 120
+MAX_PATTERN_REFERENCES = 100
+MAX_SCHEDULES_PER_ACCOUNT = 100
+MAX_SCHEDULE_IMAGE_STORAGE_PER_ACCOUNT = 100 * 1024 * 1024
+MAX_BOT_LOG_STORAGE_BYTES = 25 * 1024 * 1024
+MAX_SESSION_FILE_BYTES = 5 * 1024 * 1024
+MAX_PATTERNS_PER_USER = 500
+MAX_PATTERN_CATEGORIES_PER_USER = 100
+MAX_USERS = 1000
+MAX_ACCOUNTS_PER_USER = 20
+
+
+def _is_loopback_bind(host: str) -> bool:
+    value = (host or "").strip().lower()
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def _optional_env_bool(name: str) -> bool | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_http_url_shape(url: str) -> str:
+    value = str(url or "").strip()
+    if not value or len(value) > MAX_URL_LENGTH:
+        raise WebError(HTTPStatus.BAD_REQUEST, "URL is missing or too long.")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Only absolute HTTP(S) URLs are allowed.")
+    if parsed.username is not None or parsed.password is not None:
+        raise WebError(HTTPStatus.BAD_REQUEST, "URL credentials are not allowed.")
+    try:
+        _ = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise WebError(HTTPStatus.BAD_REQUEST, "URL port is invalid.") from exc
+    return value
+
+
+def _public_http_target(url: str) -> tuple[str, tuple[str, ...]]:
+    value = _validate_http_url_shape(url)
+    parsed = urlparse(value)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        addresses = {
+            ipaddress.ip_address(item[4][0].split("%", 1)[0])
+            for item in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+        }
+    except (OSError, ValueError) as exc:
+        raise WebError(HTTPStatus.BAD_GATEWAY, "URL host could not be resolved.") from exc
+    if not addresses or any(not address.is_global for address in addresses):
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Private, loopback, link-local, and reserved network addresses are not allowed.",
+            "unsafe_url",
+        )
+    return value, tuple(sorted(str(address) for address in addresses))
+
+
+def _validate_public_http_url(url: str) -> str:
+    value, _ = _public_http_target(url)
+    return value
+
+
+class _PinnedAddressAdapter(HTTPAdapter):
+    def __init__(self, url: str, address: str) -> None:
+        self.target = urlparse(url)
+        self.address = address
+        super().__init__(pool_connections=1, pool_maxsize=1, max_retries=0)
+
+    def get_connection_with_tls_context(
+        self,
+        request: requests.PreparedRequest,
+        verify: Any,
+        proxies: Mapping[str, str] | None = None,
+        cert: Any = None,
+    ) -> HTTPConnectionPool:
+        port = self.target.port or (443 if self.target.scheme == "https" else 80)
+        if self.target.scheme == "https":
+            _, raw_pool_kwargs = self.build_connection_pool_key_attributes(
+                request, verify, cert
+            )
+            pool_kwargs: dict[str, Any] = dict(raw_pool_kwargs)
+            pool_kwargs["assert_hostname"] = self.target.hostname
+            pool_kwargs["server_hostname"] = self.target.hostname
+            return HTTPSConnectionPool(self.address, port, **pool_kwargs)
+        return HTTPConnectionPool(self.address, port)
+
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        *args: Any,
+        **kwargs: Any,
+    ) -> requests.Response:
+        host = str(self.target.hostname or "")
+        port = self.target.port
+        default_port = 443 if self.target.scheme == "https" else 80
+        request.headers["Host"] = f"{host}:{port}" if port and port != default_port else host
+        return super().send(request, *args, **kwargs)
+
+
+def _request_public_address(
+    method: str,
+    url: str,
+    *,
+    timeout: int | float,
+    headers: dict[str, str],
+    json_data: Any,
+    data: Any,
+    params: dict[str, Any] | None,
+) -> requests.Response:
+    current, addresses = _public_http_target(url)
+    last_error: requests.RequestException | None = None
+    for address in addresses:
+        session = requests.Session()
+        session.trust_env = False
+        session.mount(f"{urlparse(current).scheme}://", _PinnedAddressAdapter(current, address))
+        try:
+            response = session.request(
+                method,
+                current,
+                timeout=timeout,
+                headers=headers,
+                json=json_data,
+                data=data,
+                params=params,
+                allow_redirects=False,
+                stream=True,
+            )
+        except requests.RequestException as exc:
+            last_error = exc
+            session.close()
+            continue
+        original_close = response.close
+
+        def close_response(
+            close: Callable[[], None] = original_close,
+            close_session: Callable[[], None] = session.close,
+        ) -> None:
+            try:
+                close()
+            finally:
+                close_session()
+
+        response.close = close_response  # type: ignore[method-assign]
+        return response
+    raise WebError(
+        HTTPStatus.BAD_GATEWAY,
+        f"Upstream connection failed: {_safe_log_detail(last_error, 500)}",
+    ) from last_error
+
+
+def _open_public_response(
+    method: str,
+    url: str,
+    *,
+    timeout: int | float,
+    headers: dict[str, str] | None = None,
+    json_data: Any = None,
+    data: Any = None,
+    params: dict[str, Any] | None = None,
+) -> tuple[requests.Response, str]:
+    current = _validate_public_http_url(url)
+    current_method = method.upper()
+    current_headers = dict(headers or {})
+    current_json = json_data
+    current_data = data
+    current_params = params
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        response = _request_public_address(
+            current_method,
+            current,
+            timeout=timeout,
+            headers=current_headers,
+            json_data=current_json,
+            data=current_data,
+            params=current_params,
+        )
+        if response.status_code not in {301, 302, 303, 307, 308}:
+            return response, current
+        location = response.headers.get("location")
+        response.close()
+        if not location:
+            raise WebError(HTTPStatus.BAD_GATEWAY, "Upstream redirect has no destination.")
+        if redirect_count >= MAX_REDIRECTS:
+            raise WebError(HTTPStatus.BAD_GATEWAY, "Upstream returned too many redirects.")
+        current = _validate_public_http_url(urljoin(current, location))
+        current_params = None
+        if response.status_code == 303 or (
+            response.status_code in {301, 302} and current_method == "POST"
+        ):
+            current_method = "GET"
+            current_json = None
+            current_data = None
+            current_headers.pop("content-type", None)
+            current_headers.pop("Content-Type", None)
+    raise WebError(HTTPStatus.BAD_GATEWAY, "Upstream returned too many redirects.")
+
+
+def _read_limited_response(response: requests.Response, max_bytes: int) -> bytes:
+    declared = response.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > max_bytes:
+                raise WebError(HTTPStatus.BAD_GATEWAY, "Upstream response is too large.")
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise WebError(HTTPStatus.BAD_GATEWAY, "Upstream response is too large.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _buffer_response_limited(response: requests.Response, max_bytes: int) -> requests.Response:
+    """Buffer a streamed response with a hard cap while preserving .json()/.text APIs."""
+    if hasattr(response, "iter_content"):
+        try:
+            raw = _read_limited_response(response, max_bytes)
+        finally:
+            response.close()
+        response._content = raw
+        response._content_consumed = True  # type: ignore[attr-defined]
+        return response
+    raw = getattr(response, "content", b"")
+    if not raw:
+        raw = str(getattr(response, "text", "") or "").encode("utf-8")
+    if len(raw) > max_bytes:
+        raise WebError(HTTPStatus.BAD_GATEWAY, "Upstream response is too large.")
+    return response
 
 
 ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -7452,7 +7883,47 @@ def _write_json_file(path: str, value: Any) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(value, fh, ensure_ascii=False, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
     os.replace(tmp, path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _write_private_bytes(path: str, value: bytes) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        _ensure_private_directory(parent)
+    tmp = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}"
+    with open(tmp, "wb") as fh:
+        fh.write(value)
+        fh.flush()
+        os.fsync(fh.fileno())
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _ensure_private_directory(path: str) -> None:
+    if not path:
+        return
+    os.makedirs(path, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
 
 
 class StateStore:
@@ -7462,8 +7933,15 @@ class StateStore:
     def set(self, key: str, value: Any) -> None:
         raise NotImplementedError
 
+    def set_many(self, values: dict[str, Any]) -> None:
+        for key, value in values.items():
+            self.set(key, value)
+
     def label(self) -> str:
         raise NotImplementedError
+
+    def close(self) -> None:
+        return
 
 
 class FileStateStore(StateStore):
@@ -7487,6 +7965,37 @@ class FileStateStore(StateStore):
         with self.lock:
             _write_json_file(self.paths[key], value)
 
+    def set_many(self, values: dict[str, Any]) -> None:
+        with self.lock:
+            backups: dict[str, bytes | None] = {}
+            for key in values:
+                path = self.paths[key]
+                backups[key] = Path(path).read_bytes() if os.path.exists(path) else None
+            try:
+                for key, value in values.items():
+                    _write_json_file(self.paths[key], value)
+            except Exception:
+                for key, raw in reversed(list(backups.items())):
+                    path = self.paths[key]
+                    try:
+                        if raw is None:
+                            if os.path.exists(path):
+                                os.remove(path)
+                        else:
+                            tmp = path + ".rollback.tmp"
+                            with open(tmp, "wb") as fh:
+                                fh.write(raw)
+                                fh.flush()
+                                os.fsync(fh.fileno())
+                            try:
+                                os.chmod(tmp, 0o600)
+                            except OSError:
+                                pass
+                            os.replace(tmp, path)
+                    except OSError:
+                        traceback.print_exc()
+                raise
+
     def label(self) -> str:
         return "file"
 
@@ -7494,8 +8003,14 @@ class FileStateStore(StateStore):
 class PostgresStateStore(StateStore):
     def __init__(self, database_url: str, config: WebConfig) -> None:
         self.database_url = database_url
+        self._instance_lock_conn = None
         self._ensure_schema()
-        self._migrate_legacy_files(config)
+        self._acquire_instance_lock()
+        try:
+            self._migrate_legacy_files(config)
+        except Exception:
+            self.close()
+            raise
 
     def _connect(self):
         try:
@@ -7518,6 +8033,24 @@ class PostgresStateStore(StateStore):
                 )
                 """
             )
+
+    def _acquire_instance_lock(self) -> None:
+        conn = self._connect()
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(%s)", (1280332624,))
+                row = cur.fetchone()
+            if not row or not bool(row[0]):
+                raise WebError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "Another LinePassport instance is already using this database. Run one replica only.",
+                    "instance_already_running",
+                )
+        except Exception:
+            conn.close()
+            raise
+        self._instance_lock_conn = conn
 
     def _migrate_legacy_files(self, config: WebConfig) -> None:
         legacy: dict[str, tuple[str, Any]] = {
@@ -7548,20 +8081,30 @@ class PostgresStateStore(StateStore):
         return value
 
     def set(self, key: str, value: Any) -> None:
-        raw = json.dumps(value, ensure_ascii=False, default=_json_default)
+        self.set_many({key: value})
+
+    def set_many(self, values: dict[str, Any]) -> None:
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO okline_web_state (key, value, updated_at)
-                VALUES (%s, %s::jsonb, now())
-                ON CONFLICT (key)
-                DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-                """,
-                (key, raw),
-            )
+            for key, value in values.items():
+                raw = json.dumps(value, ensure_ascii=False, default=_json_default)
+                cur.execute(
+                    """
+                    INSERT INTO okline_web_state (key, value, updated_at)
+                    VALUES (%s, %s::jsonb, now())
+                    ON CONFLICT (key)
+                    DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                    """,
+                    (key, raw),
+                )
 
     def label(self) -> str:
         return "postgresql"
+
+    def close(self) -> None:
+        conn = self._instance_lock_conn
+        self._instance_lock_conn = None
+        if conn is not None:
+            conn.close()
 
 
 def _make_state_store(config: WebConfig) -> StateStore:
@@ -7576,10 +8119,17 @@ def _make_state_store(config: WebConfig) -> StateStore:
 class WebAuth:
     cookie_name = "okline_web_session"
     god_cookie_name = "okline_god_session"
-    iterations = 240_000
+    legacy_iterations = 240_000
+    iterations = 600_000
+    login_window_seconds = 15 * 60
+    login_max_failures = 5
+    registration_window_seconds = 60 * 60
+    registration_max_attempts = 5
 
     def __init__(self, store: StateStore | str) -> None:
         self.lock = threading.RLock()
+        self.login_failures: dict[str, list[float]] = {}
+        self.registration_attempts: dict[str, list[float]] = {}
         if isinstance(store, str):
             self.store: StateStore = FileStateStore(
                 WebConfig(auth_file=store, accounts_file="", schedules_file="")
@@ -7685,6 +8235,7 @@ class WebAuth:
             target["email"] = username
             target["salt"] = salt
             target["passwordHash"] = self._hash_password(password, salt)
+            target["passwordIterations"] = self.iterations
             target["role"] = "admin"
             target["active"] = True
             target.pop("simple", None)
@@ -7709,37 +8260,58 @@ class WebAuth:
             self._save()
             return token
 
-    def login(self, username: str, password: str) -> str:
-        return self._login_for_portal(username, password, god_only=False)
+    def login(self, username: str, password: str, source: str = "") -> str:
+        return self._login_for_portal(username, password, god_only=False, source=source)
 
-    def login_god(self, username: str, password: str) -> str:
-        return self._login_for_portal(username, password, god_only=True)
+    def login_god(self, username: str, password: str, source: str = "") -> str:
+        return self._login_for_portal(username, password, god_only=True, source=source)
 
     def _login_for_portal(
-        self, username: str, password: str, *, god_only: bool
+        self, username: str, password: str, *, god_only: bool, source: str = ""
     ) -> str:
+        portal = "god" if god_only else "app"
+        identity_key = f"{portal}:identity:{(username or '').strip().casefold()}"
+        source_key = f"{portal}:source:{(source or 'local').strip().casefold()}"
+        rate_keys = {identity_key, source_key}
         with self.lock:
+            for key in rate_keys:
+                self._check_login_rate_limit(key)
             if not self.configured():
                 raise WebError(HTTPStatus.BAD_REQUEST, "Web auth is not configured.")
             user = self._find_user_by_username(username)
             if user is None or not self._is_active_user(user):
+                for key in rate_keys:
+                    self._record_login_failure(key)
                 raise WebError(HTTPStatus.UNAUTHORIZED, "Invalid username or password.")
             is_god = self._is_god(user)
             if is_god != god_only:
+                for key in rate_keys:
+                    self._record_login_failure(key)
                 raise WebError(HTTPStatus.UNAUTHORIZED, "Invalid username or password.")
-            expected = str(user.get("passwordHash") or "")
-            salt = str(user.get("salt") or "")
-            actual = self._hash_password(password or "", salt)
-            if not hmac.compare_digest(expected, actual):
+            if not self._password_matches(user, password or ""):
+                for key in rate_keys:
+                    self._record_login_failure(key)
                 raise WebError(HTTPStatus.UNAUTHORIZED, "Invalid username or password.")
+            self.login_failures.pop(identity_key, None)
+            if int(user.get("passwordIterations") or self.legacy_iterations) < self.iterations:
+                salt = secrets.token_hex(16)
+                user["salt"] = salt
+                user["passwordHash"] = self._hash_password(password or "", salt)
+                user["passwordIterations"] = self.iterations
+                user["updatedAt"] = _now_iso()
             token = self.create_session(str(user["id"]))
             self._save()
             return token
 
-    def register(self, username: str, password: str, display_name: str = "") -> str:
+    def register(
+        self, username: str, password: str, display_name: str = "", source: str = ""
+    ) -> str:
         username = self._normalize_email(username)
         self._validate_password(password)
+        if len(display_name) > 80:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Display name is too long.")
         with self.lock:
+            self._record_registration_attempt(source)
             if not self.configured() or self.simple_mode():
                 raise WebError(
                     HTTPStatus.BAD_REQUEST,
@@ -7748,6 +8320,8 @@ class WebAuth:
                 )
             if self._find_user_by_username(username):
                 raise WebError(HTTPStatus.CONFLICT, "Email already exists.", "email_exists")
+            if len(self.data.get("users", [])) >= MAX_USERS:
+                raise WebError(HTTPStatus.CONFLICT, "User limit reached.", "user_quota")
             user = self._new_user(username, password, "member", [], display_name or username)
             self.data.setdefault("users", []).append(user)
             token = self.create_session(str(user["id"]))
@@ -7766,6 +8340,7 @@ class WebAuth:
                 salt = secrets.token_hex(16)
                 user["salt"] = salt
                 user["passwordHash"] = self._hash_password(password, salt)
+                user["passwordIterations"] = self.iterations
                 user["role"] = "god"
                 user["active"] = True
                 user["displayName"] = user.get("displayName") or "God"
@@ -7775,6 +8350,7 @@ class WebAuth:
             return self._public_user_strict(user)
 
     def create_session(self, user_id: str) -> str:
+        self._prune_sessions()
         token = secrets.token_urlsafe(32)
         self.data.setdefault("sessions", {})[token] = {
             "userId": user_id,
@@ -7817,8 +8393,6 @@ class WebAuth:
                 self.data["sessions"].pop(token, None)
                 self._save()
                 return None
-            session["expiresAt"] = now + 12 * 60 * 60
-            self._save()
             return dict(user)
 
     def require_user(
@@ -7898,6 +8472,8 @@ class WebAuth:
         username = self._normalize_email(username)
         self._validate_password(password)
         self._validate_role(role)
+        if len(display_name) > 80:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Display name is too long.")
         if account_ids:
             raise WebError(
                 HTTPStatus.BAD_REQUEST,
@@ -7910,6 +8486,8 @@ class WebAuth:
             self._ensure_accounts_unassigned(account_ids)
             if self._find_user_by_username(username):
                 raise WebError(HTTPStatus.CONFLICT, "Email already exists.", "email_exists")
+            if len(self.data.get("users", [])) >= MAX_USERS:
+                raise WebError(HTTPStatus.CONFLICT, "User limit reached.", "user_quota")
             user = self._new_user(
                 username, password, role, account_ids, display_name or username
             )
@@ -7942,7 +8520,7 @@ class WebAuth:
                 raise WebError(HTTPStatus.FORBIDDEN, "Only God can manage God users.")
             if role == "god" and not actor_is_god:
                 raise WebError(HTTPStatus.FORBIDDEN, "Only God can assign the God role.")
-            if actor_is_god and user_id == str(actor.get("id") or ""):
+            if actor_is_god and user_id == str((actor or {}).get("id") or ""):
                 if role is not None and role != "god":
                     raise WebError(HTTPStatus.BAD_REQUEST, "God cannot demote itself.")
                 if active is False:
@@ -7959,6 +8537,8 @@ class WebAuth:
                 user["username"] = normalized
                 user["email"] = normalized
             if display_name is not None:
+                if len(display_name) > 80:
+                    raise WebError(HTTPStatus.BAD_REQUEST, "Display name is too long.")
                 user["displayName"] = (display_name or "").strip() or user["username"]
             if role is not None:
                 self._validate_role(role)
@@ -7978,6 +8558,7 @@ class WebAuth:
                 salt = secrets.token_hex(16)
                 user["salt"] = salt
                 user["passwordHash"] = self._hash_password(password, salt)
+                user["passwordIterations"] = self.iterations
             user["updatedAt"] = _now_iso()
             if not self._has_active_administrator(self.data.get("users", [])):
                 user.clear()
@@ -7993,6 +8574,8 @@ class WebAuth:
                 user.clear()
                 user.update(original)
                 raise WebError(HTTPStatus.BAD_REQUEST, "At least one active God is required.")
+            if password or active is False:
+                self._revoke_user_sessions(user_id)
             self._save()
             return self._public_user_strict(user)
 
@@ -8003,12 +8586,32 @@ class WebAuth:
         actor: dict[str, Any] | None = None,
     ) -> None:
         with self.lock:
+            updated = self.data_after_user_delete(user_id, current_user_id, actor)
+            previous = self.data
+            self.data = updated
+            try:
+                self._save()
+            except Exception:
+                self.data = previous
+                raise
+
+    def data_after_user_delete(
+        self,
+        user_id: str,
+        current_user_id: str | None = None,
+        actor: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self.lock:
             if user_id == current_user_id:
                 raise WebError(HTTPStatus.BAD_REQUEST, "You cannot delete your own user.")
             target = self._find_user(user_id)
             if target and target.get("role") == "god" and not self._is_god(actor):
                 raise WebError(HTTPStatus.FORBIDDEN, "Only God can delete God users.")
-            users = [user for user in self.data.get("users", []) if user.get("id") != user_id]
+            users = [
+                copy.deepcopy(user)
+                for user in self.data.get("users", [])
+                if user.get("id") != user_id
+            ]
             if len(users) == len(self.data.get("users", [])):
                 raise WebError(HTTPStatus.NOT_FOUND, "User not found.")
             if not self._has_active_administrator(users):
@@ -8016,36 +8619,42 @@ class WebAuth:
                     HTTPStatus.BAD_REQUEST,
                     "At least one active God or Admin is required.",
                 )
-            if any(item.get("role") == "god" for item in self.data.get("users", [])) and not any(
+            had_god = any(
+                item.get("role") == "god" for item in self.data.get("users", [])
+            )
+            has_active_god = any(
                 item.get("role") == "god" and item.get("active", True) for item in users
-            ):
+            )
+            if had_god and not has_active_god:
                 raise WebError(HTTPStatus.BAD_REQUEST, "At least one active God is required.")
-            self.data["users"] = users
-            self.data["sessions"] = {
-                token: session
+            updated = copy.deepcopy(self.data)
+            updated["users"] = users
+            updated["sessions"] = {
+                token: copy.deepcopy(session)
                 for token, session in self.data.get("sessions", {}).items()
                 if session.get("userId") != user_id
             }
-            self._save()
+            return updated
 
     def change_password(
         self, user: dict[str, Any], current_password: str, new_password: str
-    ) -> None:
+    ) -> str:
         self._validate_password(new_password)
         with self.lock:
             stored = self._find_user(str(user.get("id") or ""))
             if stored is None:
                 raise WebError(HTTPStatus.NOT_FOUND, "User not found.")
-            expected = str(stored.get("passwordHash") or "")
-            salt = str(stored.get("salt") or "")
-            actual = self._hash_password(current_password or "", salt)
-            if not hmac.compare_digest(expected, actual):
+            if not self._password_matches(stored, current_password or ""):
                 raise WebError(HTTPStatus.UNAUTHORIZED, "Current password is incorrect.")
             new_salt = secrets.token_hex(16)
             stored["salt"] = new_salt
             stored["passwordHash"] = self._hash_password(new_password, new_salt)
+            stored["passwordIterations"] = self.iterations
             stored["updatedAt"] = _now_iso()
+            self._revoke_user_sessions(str(stored.get("id") or ""))
+            token = self.create_session(str(stored.get("id") or ""))
             self._save()
+            return token
 
     def remove_account_access(self, account_id: str) -> None:
         with self.lock:
@@ -8060,14 +8669,20 @@ class WebAuth:
                 self._save()
 
     @classmethod
-    def cookie_header(cls, token: str, *, cookie_name: str | None = None) -> str:
+    def cookie_header(
+        cls, token: str, *, cookie_name: str | None = None, secure: bool = False
+    ) -> str:
         name = cookie_name or cls.cookie_name
-        return f"{name}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200"
+        secure_part = "; Secure" if secure else ""
+        return f"{name}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200{secure_part}"
 
     @classmethod
-    def clear_cookie_header(cls, *, cookie_name: str | None = None) -> str:
+    def clear_cookie_header(
+        cls, *, cookie_name: str | None = None, secure: bool = False
+    ) -> str:
         name = cookie_name or cls.cookie_name
-        return f"{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        secure_part = "; Secure" if secure else ""
+        return f"{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure_part}"
 
     @classmethod
     def _token_from_cookie(
@@ -8084,14 +8699,70 @@ class WebAuth:
         return morsel.value if morsel else ""
 
     @classmethod
-    def _hash_password(cls, password: str, salt: str) -> str:
+    def _hash_password(
+        cls, password: str, salt: str, iterations: int | None = None
+    ) -> str:
         digest = hashlib.pbkdf2_hmac(
             "sha256",
             password.encode("utf-8"),
             salt.encode("ascii"),
-            cls.iterations,
+            iterations or cls.iterations,
         )
         return digest.hex()
+
+    def _password_matches(self, user: dict[str, Any], password: str) -> bool:
+        expected = str(user.get("passwordHash") or "")
+        salt = str(user.get("salt") or "")
+        iterations = int(user.get("passwordIterations") or self.legacy_iterations)
+        actual = self._hash_password(password, salt, iterations)
+        return bool(expected and salt and hmac.compare_digest(expected, actual))
+
+    def _prune_sessions(self) -> None:
+        now = time.time()
+        sessions = self.data.setdefault("sessions", {})
+        self.data["sessions"] = {
+            token: session
+            for token, session in sessions.items()
+            if isinstance(session, dict) and float(session.get("expiresAt") or 0) > now
+        }
+
+    def _revoke_user_sessions(self, user_id: str) -> None:
+        self.data["sessions"] = {
+            token: session
+            for token, session in self.data.setdefault("sessions", {}).items()
+            if not isinstance(session, dict) or str(session.get("userId") or "") != user_id
+        }
+
+    def _check_login_rate_limit(self, key: str) -> None:
+        cutoff = time.time() - self.login_window_seconds
+        failures = [stamp for stamp in self.login_failures.get(key, []) if stamp > cutoff]
+        self.login_failures[key] = failures
+        if len(failures) >= self.login_max_failures:
+            raise WebError(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                "Too many failed sign-in attempts. Try again later.",
+                "login_rate_limited",
+            )
+
+    def _record_login_failure(self, key: str) -> None:
+        self.login_failures.setdefault(key, []).append(time.time())
+
+    def _record_registration_attempt(self, source: str) -> None:
+        if not source:
+            return
+        key = (source or "local").strip().casefold()
+        cutoff = time.time() - self.registration_window_seconds
+        attempts = [
+            stamp for stamp in self.registration_attempts.get(key, []) if stamp > cutoff
+        ]
+        if len(attempts) >= self.registration_max_attempts:
+            raise WebError(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                "Too many registration attempts. Try again later.",
+                "rate_limited",
+            )
+        attempts.append(time.time())
+        self.registration_attempts[key] = attempts
 
     @classmethod
     def roles_payload(cls) -> dict[str, Any]:
@@ -8147,6 +8818,7 @@ class WebAuth:
             "role": role,
             "salt": salt,
             "passwordHash": self._hash_password(password, salt),
+            "passwordIterations": self.iterations,
             "accountIds": sorted({str(a) for a in account_ids if a}),
             "active": True,
             "createdAt": _now_iso(),
@@ -8322,6 +8994,7 @@ class AccountStore:
                 token_file = account.get("tokenFile") or ""
                 item = dict(account)
                 item["tokenFileExists"] = bool(token_file and os.path.exists(token_file))
+                item.pop("tokenFile", None)
                 out.append(item)
             return out
 
@@ -8349,6 +9022,9 @@ class AccountStore:
                 raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
             self.data["activeAccountId"] = account_id
             self.save()
+            token_file = str(account.get("tokenFile") or "")
+            account.pop("tokenFile", None)
+            account["tokenFileExists"] = bool(token_file and os.path.exists(token_file))
             return account
 
     def update_profile(self, account_id: str, profile: dict[str, Any]) -> None:
@@ -8366,6 +9042,8 @@ class AccountStore:
         label = (label or "").strip()
         if not label:
             raise WebError(HTTPStatus.BAD_REQUEST, "Account name is required.")
+        if len(label) > MAX_NAME_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Account name is too long.")
         with self.lock:
             for account in self.data.get("accounts", []):
                 if isinstance(account, dict) and account.get("id") == account_id:
@@ -8381,11 +9059,28 @@ class AccountStore:
         profile: dict[str, Any],
         requested_label: str | None,
         owner_id: str,
+        *,
+        persist: bool = True,
+        token_writer: Callable[[OkLine, str], None] | None = None,
     ) -> dict[str, Any]:
         label = (requested_label or profile.get("displayName") or "Line Account").strip()
+        if len(label) > MAX_NAME_LENGTH:
+            label = label[:MAX_NAME_LENGTH]
         mid = str(profile.get("mid") or uuid.uuid4().hex)
         base = _safe_slug(label) + "-" + _safe_slug(mid[-8:], "line")
         with self.lock:
+            owned = sum(
+                1
+                for account in self.data.get("accounts", [])
+                if isinstance(account, dict)
+                and str(account.get("ownerId") or "") == owner_id
+            )
+            if owned >= MAX_ACCOUNTS_PER_USER:
+                raise WebError(
+                    HTTPStatus.CONFLICT,
+                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} LINE accounts.",
+                    "account_quota",
+                )
             existing = {
                 a.get("id") for a in self.data.get("accounts", []) if isinstance(a, dict)
             }
@@ -8396,7 +9091,10 @@ class AccountStore:
                 suffix += 1
             os.makedirs(self.config.accounts_dir, exist_ok=True)
             token_file = str(Path(self.config.accounts_dir) / f"{account_id}.tokens.json")
-            api.save_tokens(token_file)
+            if token_writer is None:
+                api.save_tokens(token_file)
+            else:
+                token_writer(api, token_file)
             account = {
                 "id": account_id,
                 "label": label,
@@ -8409,12 +9107,35 @@ class AccountStore:
             }
             self.data.setdefault("accounts", []).append(account)
             self.data["activeAccountId"] = account_id
-            self.save()
+            if persist:
+                try:
+                    self.save()
+                except Exception:
+                    self.data["accounts"].remove(account)
+                    if os.path.exists(token_file):
+                        os.remove(token_file)
+                    raise
             return dict(account)
 
     def remove(self, account_id: str, *, delete_file: bool = True) -> dict[str, Any]:
         with self.lock:
-            accounts = self.data.get("accounts", [])
+            updated, found = self.data_after_remove(account_id)
+            previous = self.data
+            self.data = updated
+            try:
+                self.save()
+            except Exception:
+                self.data = previous
+                raise
+        token_file = found.get("tokenFile")
+        if delete_file and token_file and os.path.exists(token_file):
+            os.remove(token_file)
+        return dict(found)
+
+    def data_after_remove(self, account_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        with self.lock:
+            updated = copy.deepcopy(self.data)
+            accounts = updated.get("accounts", [])
             found = None
             kept = []
             for account in accounts:
@@ -8424,14 +9145,10 @@ class AccountStore:
                     kept.append(account)
             if found is None:
                 raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
-            self.data["accounts"] = kept
-            if self.data.get("activeAccountId") == account_id:
-                self.data["activeAccountId"] = kept[0].get("id") if kept else None
-            self.save()
-        token_file = found.get("tokenFile")
-        if delete_file and token_file and os.path.exists(token_file):
-            os.remove(token_file)
-        return dict(found)
+            updated["accounts"] = kept
+            if updated.get("activeAccountId") == account_id:
+                updated["activeAccountId"] = kept[0].get("id") if kept else None
+            return updated, found
 
 
 class ScheduleEngine:
@@ -8452,23 +9169,140 @@ class ScheduleEngine:
             try:
                 self.state.run_due_schedules()
             except Exception:
-                pass
+                traceback.print_exc()
 
 
 class WebState:
     def __init__(self, config: WebConfig) -> None:
         self.config = config
+        _ensure_private_directory(config.state_dir)
+        _ensure_private_directory(config.accounts_dir)
         self.lock = threading.RLock()
-        self.api_lock = threading.RLock()
+        self.api_locks: dict[str, threading.RLock] = {}
         self.store = _make_state_store(config)
+        self.secret_cipher = self._load_secret_cipher()
+        self._migrate_stored_secrets()
         self.web_auth = WebAuth(self.store)
         self.account_store = AccountStore(config, self.store)
         self._migrate_tenant_data()
         self.apis: dict[str, OkLine] = {}
-        self.login: dict[str, Any] = {"state": "idle"}
+        self.logins: dict[str, dict[str, Any]] = {"": {"state": "idle"}}
         self.schedule_lock = threading.RLock()
         self.schedules: list[dict[str, Any]] = self._load_schedules()
+        self.schedule_inflight: set[str] = set()
+        self.schedule_executor = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="linepassport-schedule"
+        )
         self.scheduler = ScheduleEngine(self)
+
+    def setup_token_required(self) -> bool:
+        return not _is_loopback_bind(self.config.host)
+
+    def _load_secret_cipher(self) -> Fernet:
+        configured = str(os.getenv("LINEPASSPORT_SECRET_KEY") or "").strip()
+        key_path = Path(self.config.state_dir) / ".secrets.key"
+        if configured:
+            raw = configured.encode("ascii")
+        elif key_path.exists():
+            raw = key_path.read_bytes().strip()
+        else:
+            raw = Fernet.generate_key()
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = key_path.with_name(key_path.name + ".tmp")
+            tmp.write_bytes(raw)
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp, key_path)
+            try:
+                os.chmod(key_path, 0o600)
+            except OSError:
+                pass
+        try:
+            return Fernet(raw)
+        except (TypeError, ValueError) as exc:
+            raise WebError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "LINEPASSPORT_SECRET_KEY is invalid.",
+                "invalid_secret_key",
+            ) from exc
+
+    def _encrypt_secret(self, value: str) -> str:
+        if not value:
+            return ""
+        if value.startswith("fernet:"):
+            return value
+        token = self.secret_cipher.encrypt(value.encode("utf-8")).decode("ascii")
+        return f"fernet:{token}"
+
+    def _migrate_stored_secrets(self) -> None:
+        root = self.store.get("ai_settings", {})
+        if not isinstance(root, dict):
+            return
+        changed = False
+
+        def encrypt_record(record: Any) -> None:
+            nonlocal changed
+            if not isinstance(record, dict):
+                return
+            key = str(record.get("apiKey") or "")
+            if key and not key.startswith("fernet:"):
+                record["apiKey"] = self._encrypt_secret(key)
+                changed = True
+
+        encrypt_record(root)
+        tenants = root.get("tenants")
+        if isinstance(tenants, dict):
+            for tenant in tenants.values():
+                if not isinstance(tenant, dict):
+                    continue
+                encrypt_record(tenant)
+                for provider in AI_PROVIDERS:
+                    encrypt_record(tenant.get(provider))
+        if changed:
+            self.store.set("ai_settings", root)
+
+    def _decrypt_secret(self, value: str) -> str:
+        if not value or not value.startswith("fernet:"):
+            return value
+        try:
+            return self.secret_cipher.decrypt(value[len("fernet:") :].encode("ascii")).decode(
+                "utf-8"
+            )
+        except (InvalidToken, ValueError) as exc:
+            raise WebError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Stored secret cannot be decrypted. Restore the original secret key.",
+                "secret_decryption_failed",
+            ) from exc
+
+    def verify_setup_token(self, supplied: str, source: str = "") -> None:
+        if not self.setup_token_required():
+            return
+        expected = (
+            self.config.setup_token
+            or os.getenv("LINEPASSPORT_SETUP_TOKEN")
+            or os.getenv("OKLINE_SETUP_TOKEN")
+            or ""
+        )
+        if not expected:
+            raise WebError(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "Initial setup is locked until LINEPASSPORT_SETUP_TOKEN is configured.",
+                "setup_token_not_configured",
+            )
+        rate_key = f"setup:source:{(source or 'local').strip().casefold()}"
+        with self.web_auth.lock:
+            self.web_auth._check_login_rate_limit(rate_key)
+            if not hmac.compare_digest(str(supplied or ""), expected):
+                self.web_auth._record_login_failure(rate_key)
+                raise WebError(
+                    HTTPStatus.FORBIDDEN,
+                    "Setup token is invalid.",
+                    "invalid_setup_token",
+                )
+            self.web_auth.login_failures.pop(rate_key, None)
 
     def _migrate_tenant_data(self) -> None:
         users = [user for user in self.web_auth.data.get("users", []) if isinstance(user, dict)]
@@ -8561,11 +9395,30 @@ class WebState:
 
     def close(self) -> None:
         self.scheduler.close()
+        self.schedule_executor.shutdown(wait=False, cancel_futures=True)
         with self.lock:
             apis = list(self.apis.values())
             self.apis = {}
         for api in apis:
             api.close()
+        self.store.close()
+
+    def api_lock_for(self, account_id: str) -> threading.RLock:
+        with self.lock:
+            return self.api_locks.setdefault(account_id, threading.RLock())
+
+    @property
+    def login(self) -> dict[str, Any]:
+        """Compatibility view for the anonymous/local login slot."""
+        return self.logins.setdefault("", {"state": "idle"})
+
+    @login.setter
+    def login(self, value: dict[str, Any]) -> None:
+        self.logins[""] = value
+
+    @staticmethod
+    def _login_owner_key(user: dict[str, Any] | None) -> str:
+        return str((user or {}).get("id") or "")
 
     def _new_api(self, account_id: str | None = None) -> OkLine:
         redact = not self.config.show_secrets
@@ -8578,8 +9431,92 @@ class WebState:
         account = self.account_store.get(account_id) if account_id else None
         token_file = account.get("tokenFile") if account else None
         if token_file and os.path.exists(token_file):
-            return OkLine.from_tokens_file(token_file, redact=redact)
+            return self._api_from_account_tokens(str(token_file), redact=redact)
         return OkLine(redact=redact)
+
+    def _api_from_account_tokens(self, token_file: str, *, redact: bool) -> OkLine:
+        from .session import Session
+
+        if os.path.getsize(token_file) > MAX_SESSION_FILE_BYTES:
+            raise WebError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Stored LINE session file is too large.",
+                "invalid_session_file",
+            )
+        raw = Path(token_file).read_bytes()
+        if raw.startswith(b"fernet:"):
+            try:
+                payload = self.secret_cipher.decrypt(raw[len(b"fernet:") :])
+                session = Session.from_dict(json.loads(payload.decode("utf-8")))
+            except (InvalidToken, UnicodeError, ValueError, TypeError) as exc:
+                raise WebError(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "Stored LINE session cannot be decrypted. Restore the original secret key.",
+                    "session_decryption_failed",
+                ) from exc
+            api = OkLine(
+                access_token=session.access_token,
+                refresh_token=session.refresh_token,
+                certificate=session.certificate,
+                mid=session.mid,
+                redact=redact,
+            )
+            if session.e2ee:
+                try:
+                    api.e2ee.load_from_export(session.e2ee)
+                except Exception:
+                    traceback.print_exc()
+        else:
+            session = Session.from_dict(json.loads(raw.decode("utf-8")))
+            api = OkLine.from_tokens_file(token_file, redact=redact)
+            api._session_path = None
+            self._save_account_tokens(api, token_file, fallback_e2ee=session.e2ee)
+        api._session_save_hook = lambda: self._save_account_tokens(api, token_file)
+        return api
+
+    def _stored_session_e2ee(self, token_file: str) -> dict[str, Any] | None:
+        from .session import Session
+
+        try:
+            raw = Path(token_file).read_bytes()
+            if raw.startswith(b"fernet:"):
+                raw = self.secret_cipher.decrypt(raw[len(b"fernet:") :])
+                session = Session.from_dict(json.loads(raw.decode("utf-8")))
+            else:
+                session = Session.from_dict(json.loads(raw.decode("utf-8")))
+        except (OSError, InvalidToken, UnicodeError, ValueError, TypeError):
+            return None
+        return session.e2ee if isinstance(session.e2ee, dict) else None
+
+    def _save_account_tokens(
+        self,
+        api: OkLine,
+        token_file: str,
+        *,
+        fallback_e2ee: dict[str, Any] | None = None,
+    ) -> None:
+        from .session import Session
+
+        session = Session.from_tokens(api.transport.tokens)
+        persisted_e2ee = (
+            fallback_e2ee
+            if isinstance(fallback_e2ee, dict)
+            else self._stored_session_e2ee(token_file)
+        )
+        try:
+            if api.e2ee.is_ready():
+                exported_e2ee = api.e2ee.export_keys()
+                if exported_e2ee.get("keys"):
+                    persisted_e2ee = exported_e2ee
+        except Exception:
+            traceback.print_exc()
+        session.e2ee = persisted_e2ee
+        payload = json.dumps(
+            session.to_dict(), ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        encrypted = b"fernet:" + self.secret_cipher.encrypt(payload)
+        _write_private_bytes(token_file, encrypted)
+        api._session_path = None
 
     def get_api(self, account_id: str | None = None, *, require_auth: bool = True) -> OkLine:
         if self.config.access_token and account_id is None:
@@ -8631,7 +9568,7 @@ class WebState:
             authenticated = bool(api.tokens.access_token)
         if account_id and api and authenticated:
             try:
-                with self.api_lock:
+                with self.api_lock_for(account_id):
                     profile = api.get_profile()
                 if isinstance(profile, dict):
                     self.account_store.update_profile(account_id, profile)
@@ -8643,8 +9580,6 @@ class WebState:
             "authenticated": authenticated,
             "activeAccountId": account_id,
             "accounts": self.account_store.list_accounts(allowed_ids),
-            "tokenFile": self.config.tokens_file,
-            "tokenFileExists": os.path.exists(self.config.tokens_file),
             "storage": self.store.label(),
             "nodeAvailable": LtsmBridge.is_available(),
             "e2eeReady": e2ee_ready,
@@ -8678,13 +9613,15 @@ class WebState:
         account_name: str | None = None,
         user: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        owner_id = self._login_owner_key(user)
         with self.lock:
-            if self.login.get("state") in {"starting", "qr", "pin"}:
+            login = self.logins.setdefault(owner_id, {"state": "idle"})
+            if login.get("state") in {"starting", "qr", "pin"}:
                 raise WebError(
                     HTTPStatus.CONFLICT, "QR login is already running.", "login_running"
                 )
             login_id = uuid.uuid4().hex
-            self.login = {
+            self.logins[owner_id] = {
                 "state": "starting",
                 "id": login_id,
                 "startedAt": time.time(),
@@ -8695,7 +9632,7 @@ class WebState:
                 "profile": None,
                 "account": None,
                 "accountName": account_name,
-                "ownerId": str((user or {}).get("id") or ""),
+                "ownerId": owner_id,
             }
         thread = threading.Thread(
             target=self._login_worker,
@@ -8703,7 +9640,7 @@ class WebState:
                 float(wait_seconds),
                 account_name,
                 login_id,
-                str((user or {}).get("id") or ""),
+                owner_id,
             ),
             daemon=True,
         )
@@ -8711,12 +9648,9 @@ class WebState:
         return self.login_state(user)
 
     def login_state(self, user: dict[str, Any] | None = None) -> dict[str, Any]:
+        owner_key = self._login_owner_key(user)
         with self.lock:
-            owner_id = str(self.login.get("ownerId") or "")
-            user_id = str((user or {}).get("id") or "")
-            if owner_id and owner_id != user_id and not self.web_auth._is_god(user):
-                return {"state": "idle"}
-            return dict(self.login)
+            return dict(self.logins.get(owner_key) or {"state": "idle"})
 
     def cancel_login(self, user: dict[str, Any] | None = None) -> dict[str, Any]:
         """Free the QR-login worker slot so a fresh login can start.
@@ -8725,12 +9659,9 @@ class WebState:
         new idle login state here, that stale worker's callbacks/result become
         no-ops (they only write when their ``id`` still matches).
         """
+        owner_key = self._login_owner_key(user)
         with self.lock:
-            owner_id = str(self.login.get("ownerId") or "")
-            user_id = str((user or {}).get("id") or "")
-            if owner_id and owner_id != user_id and not self.web_auth._is_god(user):
-                raise WebError(HTTPStatus.FORBIDDEN, "Login belongs to another user.")
-            self.login = {"state": "idle", "id": uuid.uuid4().hex}
+            self.logins[owner_key] = {"state": "idle", "id": uuid.uuid4().hex}
         return {"ok": True, "state": "idle"}
 
     def _login_worker(
@@ -8742,19 +9673,22 @@ class WebState:
     ) -> None:
         client = OkLine(record=False, redact=not self.config.show_secrets)
         keep_client = False
+        owner_key = str(owner_id or "")
 
         def _current() -> bool:
-            return self.login.get("id") == login_id
+            return self.logins.get(owner_key, {}).get("id") == login_id
 
         def on_qr(url: str) -> None:
             with self.lock:
                 if _current():
-                    self.login.update({"state": "qr", "qrUrl": url, "qrSvg": _qr_svg(url)})
+                    self.logins[owner_key].update(
+                        {"state": "qr", "qrUrl": url, "qrSvg": _qr_svg(url)}
+                    )
 
         def on_pin(pin: str) -> None:
             with self.lock:
                 if _current():
-                    self.login.update({"state": "pin", "pin": pin})
+                    self.logins[owner_key].update({"state": "pin", "pin": pin})
 
         try:
             result = client.qr_login(on_qr=on_qr, on_pin=on_pin, wait_seconds=wait_seconds)
@@ -8769,46 +9703,104 @@ class WebState:
                 # The user cancelled while we were finishing; drop the session
                 # instead of registering an account they no longer expect.
                 return
-            account = self.account_store.add_from_api(
+            account = self._commit_new_account(
                 client, profile, account_name, owner_id
             )
-            self.web_auth.grant_account_access(owner_id, account["id"])
             self.replace_api(account["id"], client)
             keep_client = True
             with self.lock:
                 if _current():
-                    self.login.update(
+                    self.logins[owner_key].update(
                         {
                             "state": "success",
                             "profile": profile,
-                            "account": account,
+                            "account": next(
+                                (
+                                    item
+                                    for item in self.account_store.list_accounts({account["id"]})
+                                    if item.get("id") == account["id"]
+                                ),
+                                {"id": account["id"], "label": account.get("label")},
+                            ),
                             "error": None,
                         }
                     )
         except Exception as exc:
             with self.lock:
                 if _current():
-                    self.login.update({"state": "error", "error": str(exc)})
+                    self.logins[owner_key].update({"state": "error", "error": str(exc)})
         finally:
             if not keep_client:
                 client.close()
+
+    def _commit_new_account(
+        self,
+        client: OkLine,
+        profile: dict[str, Any],
+        account_name: str | None,
+        owner_id: str,
+    ) -> dict[str, Any]:
+        account: dict[str, Any] | None = None
+        with self.lock, self.web_auth.lock, self.account_store.lock:
+            previous_accounts = copy.deepcopy(self.account_store.data)
+            previous_auth = copy.deepcopy(self.web_auth.data)
+            try:
+                account = self.account_store.add_from_api(
+                    client,
+                    profile,
+                    account_name,
+                    owner_id,
+                    persist=False,
+                    token_writer=self._save_account_tokens,
+                )
+                auth_data = copy.deepcopy(self.web_auth.data)
+                owner = next(
+                    (
+                        user
+                        for user in auth_data.get("users", [])
+                        if str(user.get("id") or "") == owner_id
+                    ),
+                    None,
+                )
+                if owner is None:
+                    raise WebError(HTTPStatus.NOT_FOUND, "Account owner not found.")
+                account_ids = set(owner.get("accountIds") or [])
+                account_ids.add(str(account["id"]))
+                owner["accountIds"] = sorted(account_ids)
+                owner["updatedAt"] = _now_iso()
+                self.store.set_many(
+                    {
+                        "accounts": self.account_store.data,
+                        "auth": auth_data,
+                    }
+                )
+                self.web_auth.data = auth_data
+                return account
+            except Exception:
+                self.account_store.data = previous_accounts
+                self.web_auth.data = previous_auth
+                token_file = str((account or {}).get("tokenFile") or "")
+                if token_file and os.path.exists(token_file):
+                    try:
+                        os.remove(token_file)
+                    except OSError:
+                        traceback.print_exc()
+                raise
 
     def logout_account(
         self, account_id: str, user: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         account_id = _required_account_id(account_id)
-        api = self.get_api(account_id, require_auth=False)
         server_error = None
-        if api.tokens.access_token:
-            try:
-                with self.api_lock:
+        with self.api_lock_for(account_id):
+            api = self.get_api(account_id, require_auth=False)
+            if api.tokens.access_token:
+                try:
                     api.auth.logout()
-            except Exception as exc:
-                server_error = str(exc)
-        self.close_api(account_id)
-        self.account_store.remove(account_id, delete_file=True)
-        self.web_auth.remove_account_access(account_id)
-        self.disable_schedules_for_account(account_id)
+                except Exception as exc:
+                    server_error = _safe_log_detail(exc, 500)
+            self.close_api(account_id)
+            self._commit_account_removal(account_id)
         return {
             "ok": True,
             "serverError": server_error,
@@ -8822,10 +9814,11 @@ class WebState:
     def delete_account(
         self, account_id: str, user: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        self.close_api(account_id)
-        removed = self.account_store.remove(account_id, delete_file=True)
-        self.web_auth.remove_account_access(account_id)
-        self.disable_schedules_for_account(account_id)
+        account_id = _required_account_id(account_id)
+        with self.api_lock_for(account_id):
+            self.close_api(account_id)
+            removed = self._commit_account_removal(account_id)
+        removed.pop("tokenFile", None)
         return {
             "ok": True,
             "removed": removed,
@@ -8836,6 +9829,43 @@ class WebState:
             },
         }
 
+    def _commit_account_removal(self, account_id: str) -> dict[str, Any]:
+        with self.lock, self.web_auth.lock, self.account_store.lock, self.schedule_lock:
+            account_data, removed = self.account_store.data_after_remove(account_id)
+            auth_data = copy.deepcopy(self.web_auth.data)
+            for auth_user in auth_data.get("users", []):
+                account_ids = list(auth_user.get("accountIds") or [])
+                if account_id in account_ids:
+                    auth_user["accountIds"] = [
+                        item for item in account_ids if item != account_id
+                    ]
+                    auth_user["updatedAt"] = _now_iso()
+            schedules = copy.deepcopy(self.schedules)
+            for schedule in schedules:
+                if schedule.get("accountId") == account_id:
+                    schedule["enabled"] = False
+                    schedule["running"] = False
+                    schedule["status"] = "account deleted"
+                    schedule.pop("runningSince", None)
+                    schedule.pop("runToken", None)
+            self.store.set_many(
+                {
+                    "accounts": account_data,
+                    "auth": auth_data,
+                    "schedules": {"schedules": schedules},
+                }
+            )
+            self.account_store.data = account_data
+            self.web_auth.data = auth_data
+            self.schedules = schedules
+        token_file = str(removed.get("tokenFile") or "")
+        if token_file and os.path.exists(token_file):
+            try:
+                os.remove(token_file)
+            except OSError:
+                traceback.print_exc()
+        return removed
+
     def update_account(
         self,
         account_id: str,
@@ -8843,6 +9873,7 @@ class WebState:
         user: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         account = self.account_store.update_label(_required_account_id(account_id), label)
+        account.pop("tokenFile", None)
         return {
             "ok": True,
             "account": account,
@@ -8993,11 +10024,11 @@ class WebState:
                         data=data,
                     )
                 )
-                del logs[:-500]
+                logs = _trim_bot_logs(logs)
                 self.store.set("bot_logs", {"logs": logs})
         except Exception:
             # Logging should never prevent the bot action itself from completing.
-            pass
+            traceback.print_exc()
 
     def list_bot_logs(
         self,
@@ -9052,7 +10083,7 @@ class WebState:
                 detail="Cleared bot logs for this account.",
             )
             kept.append(marker)
-            del kept[:-500]
+            kept = _trim_bot_logs(kept)
             self.store.set("bot_logs", {"logs": kept})
         return {"ok": True, "logs": [marker], "count": 1}
 
@@ -9090,66 +10121,110 @@ class WebState:
         self, body: dict[str, Any], current_user: dict[str, Any]
     ) -> dict[str, Any]:
         user_id = str(body.get("id") or "")
+        current_user_id = str(current_user.get("id") or "")
         target = self.web_auth._find_user(user_id)
-        account_ids = set((target or {}).get("accountIds") or [])
-        self.web_auth.delete_user(
-            user_id,
-            current_user_id=str(current_user.get("id") or ""),
-            actor=current_user,
+        if target is None:
+            raise WebError(HTTPStatus.NOT_FOUND, "User not found.")
+        account_ids = set(target.get("accountIds") or [])
+        account_ids.update(
+            str(account.get("id") or "")
+            for account in self.account_store.data.get("accounts", [])
+            if isinstance(account, dict) and str(account.get("ownerId") or "") == user_id
         )
-        for account_id in account_ids:
-            self.close_api(account_id)
-            self.account_store.remove(account_id, delete_file=True)
-        with self.schedule_lock:
-            self.schedules = [
-                schedule
-                for schedule in self.schedules
-                if schedule.get("accountId") not in account_ids
-            ]
-            self.save_schedules()
-        pattern_data = self.store.get("patterns", {"patterns": []})
-        patterns = pattern_data.get("patterns", []) if isinstance(pattern_data, dict) else []
-        if isinstance(patterns, list):
-            categories = (
-                pattern_data.get("categories", [])
-                if isinstance(pattern_data, dict)
-                else []
-            )
-            self.store.set(
-                "patterns",
-                {
-                    "patterns": [
-                        pattern
-                        for pattern in patterns
-                        if not isinstance(pattern, dict)
-                        or str(pattern.get("ownerId") or "") != user_id
-                    ],
-                    "categories": [
-                        category
-                        for category in categories
-                        if not isinstance(category, dict)
-                        or str(category.get("ownerId") or "") != user_id
-                    ],
-                },
-            )
-        ai_root = self.store.get("ai_settings", {"tenants": {}})
-        if isinstance(ai_root, dict) and isinstance(ai_root.get("tenants"), dict):
-            ai_root["tenants"].pop(user_id, None)
-            self.store.set("ai_settings", ai_root)
-        log_data = self.store.get("bot_logs", {"logs": []})
-        logs = log_data.get("logs", []) if isinstance(log_data, dict) else []
-        if isinstance(logs, list):
-            self.store.set(
-                "bot_logs",
-                {
-                    "logs": [
-                        log
-                        for log in logs
-                        if not isinstance(log, dict)
-                        or log.get("accountId") not in account_ids
+        account_ids.discard("")
+        api_locks = [self.api_lock_for(account_id) for account_id in sorted(account_ids)]
+        for api_lock in api_locks:
+            api_lock.acquire()
+        token_files: list[str] = []
+        try:
+            with self.lock, self.web_auth.lock, self.account_store.lock, self.schedule_lock:
+                auth_data = self.web_auth.data_after_user_delete(
+                    user_id,
+                    current_user_id=current_user_id,
+                    actor=current_user,
+                )
+                for auth_user in auth_data.get("users", []):
+                    auth_user["accountIds"] = [
+                        account_id
+                        for account_id in auth_user.get("accountIds", [])
+                        if account_id not in account_ids
                     ]
-                },
-            )
+                account_data = copy.deepcopy(self.account_store.data)
+                kept_accounts = []
+                for account in account_data.get("accounts", []):
+                    if isinstance(account, dict) and account.get("id") in account_ids:
+                        token_file = str(account.get("tokenFile") or "")
+                        if token_file:
+                            token_files.append(token_file)
+                    else:
+                        kept_accounts.append(account)
+                account_data["accounts"] = kept_accounts
+                if account_data.get("activeAccountId") in account_ids:
+                    account_data["activeAccountId"] = (
+                        kept_accounts[0].get("id") if kept_accounts else None
+                    )
+                schedules = [
+                    copy.deepcopy(schedule)
+                    for schedule in self.schedules
+                    if schedule.get("accountId") not in account_ids
+                    and str(schedule.get("ownerId") or "") != user_id
+                ]
+
+                raw_patterns = self.store.get("patterns", {"patterns": [], "categories": []})
+                pattern_data = (
+                    copy.deepcopy(raw_patterns) if isinstance(raw_patterns, dict) else {}
+                )
+                pattern_data["patterns"] = [
+                    pattern
+                    for pattern in pattern_data.get("patterns", [])
+                    if not isinstance(pattern, dict)
+                    or str(pattern.get("ownerId") or "") != user_id
+                ]
+                pattern_data["categories"] = [
+                    category
+                    for category in pattern_data.get("categories", [])
+                    if not isinstance(category, dict)
+                    or str(category.get("ownerId") or "") != user_id
+                ]
+
+                raw_ai = self.store.get("ai_settings", {"tenants": {}})
+                ai_root = copy.deepcopy(raw_ai) if isinstance(raw_ai, dict) else {"tenants": {}}
+                tenants = ai_root.get("tenants")
+                if isinstance(tenants, dict):
+                    tenants.pop(user_id, None)
+
+                raw_logs = self.store.get("bot_logs", {"logs": []})
+                log_data = copy.deepcopy(raw_logs) if isinstance(raw_logs, dict) else {}
+                log_data["logs"] = [
+                    log
+                    for log in log_data.get("logs", [])
+                    if not isinstance(log, dict) or log.get("accountId") not in account_ids
+                ]
+
+                self.store.set_many(
+                    {
+                        "auth": auth_data,
+                        "accounts": account_data,
+                        "schedules": {"schedules": schedules},
+                        "patterns": pattern_data,
+                        "ai_settings": ai_root,
+                        "bot_logs": log_data,
+                    }
+                )
+                self.web_auth.data = auth_data
+                self.account_store.data = account_data
+                self.schedules = schedules
+                for account_id in account_ids:
+                    self.close_api(account_id)
+        finally:
+            for api_lock in reversed(api_locks):
+                api_lock.release()
+        for token_file in token_files:
+            try:
+                if os.path.exists(token_file):
+                    os.remove(token_file)
+            except OSError:
+                traceback.print_exc()
         return {"ok": True, **self.users_payload()}
 
     # -- schedules ---------------------------------------------------------
@@ -9158,7 +10233,19 @@ class WebState:
         schedules = data.get("schedules", []) if isinstance(data, dict) else []
         if not isinstance(schedules, list):
             return []
-        return [s for s in schedules if isinstance(s, dict)]
+        items = [s for s in schedules if isinstance(s, dict)]
+        recovered = False
+        for job in items:
+            if job.get("running"):
+                job["running"] = False
+                job["status"] = "error"
+                job["lastError"] = "Recovered after the previous process stopped unexpectedly."
+                job.pop("runningSince", None)
+                job.pop("runToken", None)
+                recovered = True
+        if recovered:
+            self.store.set("schedules", {"schedules": items})
+        return items
 
     def save_schedules(self) -> None:
         with self.schedule_lock:
@@ -9190,6 +10277,14 @@ class WebState:
             raise WebError(HTTPStatus.BAD_REQUEST, "A valid account is required.")
         job = _schedule_from_body(body, account_id=account_id)
         with self.schedule_lock:
+            count = sum(1 for item in self.schedules if item.get("accountId") == account_id)
+            if count >= MAX_SCHEDULES_PER_ACCOUNT:
+                raise WebError(
+                    HTTPStatus.CONFLICT,
+                    f"Each LINE account can have at most {MAX_SCHEDULES_PER_ACCOUNT} schedules.",
+                    "schedule_quota",
+                )
+            _ensure_schedule_image_quota(self.schedules, job)
             self.schedules.append(job)
             self.save_schedules()
             self.append_bot_log(
@@ -9208,6 +10303,7 @@ class WebState:
             if not self.account_store.get(account_id):
                 raise WebError(HTTPStatus.BAD_REQUEST, "A valid account is required.")
             updated = _schedule_from_body(body, account_id=account_id, existing=job)
+            _ensure_schedule_image_quota(self.schedules, updated, replacing_id=schedule_id)
             job.clear()
             job.update(updated)
             self.save_schedules()
@@ -9373,6 +10469,18 @@ class WebState:
                 items = []
             if not isinstance(categories, list):
                 categories = []
+            owner_categories = sum(
+                1
+                for category in categories
+                if isinstance(category, dict)
+                and str(category.get("ownerId") or "") == owner_id
+            )
+            if owner_categories >= MAX_PATTERN_CATEGORIES_PER_USER:
+                raise WebError(
+                    HTTPStatus.CONFLICT,
+                    f"Each user can have at most {MAX_PATTERN_CATEGORIES_PER_USER} categories.",
+                    "pattern_category_quota",
+                )
             duplicate = any(
                 isinstance(category, dict)
                 and str(category.get("ownerId") or "") == owner_id
@@ -9517,6 +10625,10 @@ class WebState:
             raise WebError(HTTPStatus.BAD_REQUEST, "Pattern name is required.")
         if not text.strip():
             raise WebError(HTTPStatus.BAD_REQUEST, "Pattern text is required.")
+        if len(name) > MAX_NAME_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Pattern name is too long.")
+        if len(text) > MAX_TEXT_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Pattern text is too long.")
         with self.schedule_lock:
             data = self.store.get("patterns", {"patterns": []})
             items = data.get("patterns", []) if isinstance(data, dict) else []
@@ -9526,6 +10638,18 @@ class WebState:
             if not isinstance(categories, list):
                 categories = []
             owner_id = str((user or {}).get("id") or "")
+            owner_patterns = sum(
+                1
+                for pattern in items
+                if isinstance(pattern, dict)
+                and str(pattern.get("ownerId") or "") == owner_id
+            )
+            if owner_patterns >= MAX_PATTERNS_PER_USER:
+                raise WebError(
+                    HTTPStatus.CONFLICT,
+                    f"Each user can have at most {MAX_PATTERNS_PER_USER} patterns.",
+                    "pattern_quota",
+                )
             category_exists = category_id == DEFAULT_PATTERN_CATEGORY_ID or any(
                 isinstance(category, dict)
                 and str(category.get("id") or "") == category_id
@@ -9567,6 +10691,10 @@ class WebState:
             raise WebError(HTTPStatus.BAD_REQUEST, "Pattern name is required.")
         if not text.strip():
             raise WebError(HTTPStatus.BAD_REQUEST, "Pattern text is required.")
+        if len(name) > MAX_NAME_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Pattern name is too long.")
+        if len(text) > MAX_TEXT_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Pattern text is too long.")
         owner_id = str((user or {}).get("id") or "")
         with self.schedule_lock:
             data = self.store.get("patterns", {"patterns": [], "categories": []})
@@ -9661,8 +10789,10 @@ class WebState:
             legacy = dict(root)
             root = {"tenants": {owner_id: legacy} if legacy else {}}
             self.store.set("ai_settings", root)
-        tenants = root.get("tenants") if isinstance(root.get("tenants"), dict) else {}
-        data = tenants.get(owner_id) if isinstance(tenants.get(owner_id), dict) else {}
+        raw_tenants = root.get("tenants")
+        tenants: dict[str, Any] = raw_tenants if isinstance(raw_tenants, dict) else {}
+        raw_data = tenants.get(owner_id)
+        data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
         # Migrate the old flat Google-only shape {apiKey, model, baseUrl}.
         if "provider" not in data and any(k in data for k in ("apiKey", "model", "baseUrl")):
             data = {
@@ -9675,16 +10805,17 @@ class WebState:
             }
         return data
 
-    @staticmethod
-    def _ai_provider_view(data: dict[str, Any], provider: str) -> dict[str, Any]:
+    def _ai_provider_view(self, data: dict[str, Any], provider: str) -> dict[str, Any]:
         meta = _ai_provider_meta(provider)
         raw = data.get(provider)
         cfg = raw if isinstance(raw, dict) else {}
         model = str(cfg.get("model") or meta["model"]).strip() or meta["model"]
         view = {
-            "apiKey": str(cfg.get("apiKey") or ""),
+            "apiKey": self._decrypt_secret(str(cfg.get("apiKey") or "")),
             "model": model,
-            "baseUrl": str(cfg.get("baseUrl") or meta["baseUrl"]).strip() or meta["baseUrl"],
+            # Provider origins are fixed so a tenant cannot turn an API key field
+            # into an authenticated SSRF primitive.
+            "baseUrl": meta["baseUrl"],
         }
         if provider == "nanobananaapi":
             aspect = str(cfg.get("aspectRatio") or "").strip()
@@ -9776,8 +10907,11 @@ class WebState:
             else:
                 api_key = str(raw_key).strip()
             model = str(body.get("model") or current["model"]).strip() or meta["model"]
-            base_url = str(body.get("baseUrl") or current["baseUrl"]).strip() or meta["baseUrl"]
-            record = {"apiKey": api_key, "model": model, "baseUrl": base_url}
+            record = {
+                "apiKey": self._encrypt_secret(api_key),
+                "model": model,
+                "baseUrl": meta["baseUrl"],
+            }
             if provider == "nanobananaapi":
                 legacy_aspect = model if model in NBAPI_ASPECT_RATIOS else ""
                 if model not in NBAPI_MODELS:
@@ -9864,11 +10998,35 @@ class WebState:
                         job["status"] = "completed"
                     changed = True
                 if next_run and float(next_run) <= now:
-                    due.append(str(job["id"]))
+                    schedule_id = str(job["id"])
+                    if schedule_id not in self.schedule_inflight:
+                        self.schedule_inflight.add(schedule_id)
+                        due.append(schedule_id)
             if changed:
                 self.save_schedules()
         for schedule_id in due:
-            self._execute_schedule(schedule_id, manual=False)
+            try:
+                future = self.schedule_executor.submit(
+                    self._execute_schedule, schedule_id, manual=False
+                )
+            except Exception:
+                with self.schedule_lock:
+                    self.schedule_inflight.discard(schedule_id)
+                raise
+            def schedule_done(
+                completed: Future[Any], schedule_id: str = schedule_id
+            ) -> None:
+                self._schedule_future_done(schedule_id, completed)
+
+            future.add_done_callback(schedule_done)
+
+    def _schedule_future_done(self, schedule_id: str, future: Future[Any]) -> None:
+        with self.schedule_lock:
+            self.schedule_inflight.discard(schedule_id)
+        try:
+            future.result()
+        except Exception:
+            traceback.print_exc()
 
     def _find_schedule(self, schedule_id: str) -> dict[str, Any]:
         for job in self.schedules:
@@ -9886,6 +11044,8 @@ class WebState:
                 raise WebError(HTTPStatus.CONFLICT, "Schedule is already running.")
             job["running"] = True
             job["status"] = "running"
+            job["runningSince"] = time.time()
+            job["runToken"] = uuid.uuid4().hex
             self.save_schedules()
             snapshot = dict(job)
 
@@ -9912,15 +11072,20 @@ class WebState:
                 "manual" if manual else "scheduled",
                 data={"manual": manual},
             )
-            api = self.get_api(account_id)
-            owner = self.web_auth.user_for_account(account_id)
-            with self.api_lock:
+            with self.api_lock_for(account_id):
+                api = self.get_api(account_id)
+                owner = self.web_auth.user_for_account(account_id)
+                items = _resolve_job_contents(
+                    snapshot,
+                    ai_settings=self.ai_settings(owner, reveal=True),
+                    log=log_bot,
+                )
                 to = _resolve_to(api, str(snapshot.get("to") or ""))
                 message_ids = _send_job_contents(
                     api,
                     to,
                     snapshot,
-                    ai_settings=self.ai_settings(owner, reveal=True),
+                    items=items,
                     log=log_bot,
                 )
             message_id = message_ids[-1] if message_ids else None
@@ -9928,6 +11093,8 @@ class WebState:
             with self.schedule_lock:
                 job = self._find_schedule(schedule_id)
                 job["running"] = False
+                job.pop("runningSince", None)
+                job.pop("runToken", None)
                 job["sentCount"] = int(job.get("sentCount") or 0) + 1
                 job["lastRunAt"] = sent_at
                 job["lastMessageId"] = message_id
@@ -9945,6 +11112,7 @@ class WebState:
                 )
                 return {"ok": True, "schedule": dict(job), "messageIds": message_ids}
         except Exception as exc:
+            error_message = _safe_log_detail(exc, 2_000)
             try:
                 account_id = str(snapshot.get("accountId") or "")
                 self.append_bot_log(
@@ -9952,27 +11120,31 @@ class WebState:
                     account_id=account_id,
                     schedule=snapshot,
                     ok=False,
-                    detail=str(exc),
+                    detail=error_message,
                     data={"manual": manual},
                 )
             except Exception:
-                pass
+                traceback.print_exc()
             with self.schedule_lock:
                 job = self._find_schedule(schedule_id)
                 job["running"] = False
-                job["lastError"] = str(exc)
+                job.pop("runningSince", None)
+                job.pop("runToken", None)
+                job["lastError"] = error_message
                 job["status"] = "error"
-                _append_history(job, {"at": _now_iso(), "ok": False, "error": str(exc)})
+                _append_history(job, {"at": _now_iso(), "ok": False, "error": error_message})
                 if not manual:
                     _advance_after_error(job)
                 self.save_schedules()
             if isinstance(exc, WebError):
                 raise
-            raise WebError(HTTPStatus.BAD_GATEWAY, str(exc)) from exc
+            raise WebError(HTTPStatus.BAD_GATEWAY, error_message) from exc
 
 
 class OkLineWebHandler(BaseHTTPRequestHandler):
     server: OkLineWebServer
+    server_version = "LinePassport"
+    sys_version = ""
 
     def do_GET(self) -> None:  # noqa: N802
         self._handle("GET")
@@ -9987,6 +11159,45 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
     def state(self) -> WebState:
         return self.server.state
 
+    def _secure_cookies(self) -> bool:
+        configured = self.state.config.secure_cookies
+        return bool(
+            configured
+            if configured is not None
+            else not _is_loopback_bind(self.state.config.host)
+        )
+
+    def _request_source(self) -> str:
+        peer = str(self.client_address[0])
+        if not self.state.config.trust_proxy:
+            return peer
+        forwarded = str(self.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+        try:
+            return str(ipaddress.ip_address(forwarded)) if forwarded else peer
+        except ValueError:
+            return peer
+
+    def _cookie_header(self, token: str, *, cookie_name: str | None = None) -> str:
+        return WebAuth.cookie_header(
+            token, cookie_name=cookie_name, secure=self._secure_cookies()
+        )
+
+    def _clear_cookie_header(self, *, cookie_name: str | None = None) -> str:
+        return WebAuth.clear_cookie_header(
+            cookie_name=cookie_name, secure=self._secure_cookies()
+        )
+
+    def _require_same_origin(self) -> None:
+        if str(self.headers.get("sec-fetch-site") or "").lower() == "cross-site":
+            raise WebError(HTTPStatus.FORBIDDEN, "Cross-site requests are not allowed.")
+        origin = str(self.headers.get("origin") or "").strip()
+        if not origin:
+            return
+        parsed = urlparse(origin)
+        host = str(self.headers.get("host") or "").strip().lower()
+        if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != host:
+            raise WebError(HTTPStatus.FORBIDDEN, "Request origin is not allowed.")
+
     def _handle(self, method: str) -> None:
         parsed = urlparse(self.path)
         try:
@@ -9998,10 +11209,14 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                     "application/javascript; charset=utf-8",
                     HTTPStatus.OK,
                 )
+            if method == "GET" and parsed.path == "/healthz":
+                return self._json({"ok": True})
             if method == "GET" and parsed.path in {"/god", "/god/"}:
                 return self._html(GOD_HTML)
             if parsed.path == "/favicon.ico":
                 return self._bytes(b"", "image/x-icon", HTTPStatus.NO_CONTENT)
+            if method != "GET" and parsed.path.startswith("/api/"):
+                self._require_same_origin()
             self.current_user: dict[str, Any] | None = None
             god_public_paths = {
                 "/api/god/status",
@@ -10045,7 +11260,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 {"error": str(exc), "code": "line_login_required"},
                 HTTPStatus.UNAUTHORIZED,
             )
-        except Exception as exc:
+        except Exception:
             # Log the raw exception to the server console for the operator, but
             # hand the browser a stable, friendly, localisable code instead of a
             # raw stack-trace string.
@@ -10054,7 +11269,6 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 {
                     "error": "Unexpected server error.",
                     "code": "server_error",
-                    "detail": str(exc),
                 },
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
@@ -10079,6 +11293,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             token = self.state.web_auth.login_god(
                 str(body.get("username") or body.get("email") or ""),
                 str(body.get("password") or ""),
+                self._request_source(),
             )
             user = self.state.web_auth.current_user(
                 WebAuth.cookie_header(token, cookie_name=WebAuth.god_cookie_name),
@@ -10089,7 +11304,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 headers=[
                     (
                         "Set-Cookie",
-                        WebAuth.cookie_header(
+                        self._cookie_header(
                             token, cookie_name=WebAuth.god_cookie_name
                         ),
                     )
@@ -10104,7 +11319,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 headers=[
                     (
                         "Set-Cookie",
-                        WebAuth.clear_cookie_header(
+                        self._clear_cookie_header(
                             cookie_name=WebAuth.god_cookie_name
                         ),
                     )
@@ -10122,19 +11337,30 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.delete_user(self._read_json(), self.current_user or {})
         if method == "GET" and path == "/api/auth/status":
             auth = self.state.web_auth
-            token = auth.ensure_simple_mode() if not auth.configured() else None
-            cookie = WebAuth.cookie_header(token) if token else self.headers.get("cookie")
+            setup_token: str | None = (
+                auth.ensure_simple_mode()
+                if not auth.configured() and not self.state.setup_token_required()
+                else None
+            )
+            cookie = (
+                WebAuth.cookie_header(setup_token)
+                if setup_token
+                else self.headers.get("cookie")
+            )
             status = auth.status(cookie)
+            status["setupTokenRequired"] = bool(
+                not auth.configured() and self.state.setup_token_required()
+            )
             if (status.get("user") or {}).get("role") == "god":
                 auth.logout(cookie)
                 status = auth.status(None)
                 return WebResult(
                     status,
-                    headers=[("Set-Cookie", WebAuth.clear_cookie_header())],
+                    headers=[("Set-Cookie", self._clear_cookie_header())],
                 )
-            if token:
+            if setup_token:
                 return WebResult(
-                    status, headers=[("Set-Cookie", WebAuth.cookie_header(token))]
+                    status, headers=[("Set-Cookie", self._cookie_header(setup_token))]
                 )
             return status
         if method == "POST" and path == "/api/auth/secure":
@@ -10147,7 +11373,10 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             )
             return {"ok": True, "simpleMode": False}
         if method == "POST" and path == "/api/auth/setup":
-            body = self._read_json()
+            body = self._read_json(max_bytes=64 * 1024)
+            self.state.verify_setup_token(
+                str(body.get("setupToken") or ""), self._request_source()
+            )
             token = self.state.web_auth.setup(
                 str(body.get("email") or body.get("username") or ""),
                 str(body.get("password") or ""),
@@ -10162,13 +11391,14 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                     ),
                     "roles": self.state.web_auth.roles_payload(),
                 },
-                headers=[("Set-Cookie", WebAuth.cookie_header(token))],
+                headers=[("Set-Cookie", self._cookie_header(token))],
             )
         if method == "POST" and path == "/api/auth/login":
             body = self._read_json()
             token = self.state.web_auth.login(
                 str(body.get("email") or body.get("username") or ""),
                 str(body.get("password") or ""),
+                self._request_source(),
             )
             return WebResult(
                 {
@@ -10180,7 +11410,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                     ),
                     "roles": self.state.web_auth.roles_payload(),
                 },
-                headers=[("Set-Cookie", WebAuth.cookie_header(token))],
+                headers=[("Set-Cookie", self._cookie_header(token))],
             )
         if method == "POST" and path == "/api/auth/register":
             body = self._read_json()
@@ -10188,6 +11418,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 str(body.get("email") or body.get("username") or ""),
                 str(body.get("password") or ""),
                 str(body.get("displayName") or ""),
+                self._request_source(),
             )
             return WebResult(
                 {
@@ -10199,22 +11430,31 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                     ),
                     "roles": self.state.web_auth.roles_payload(),
                 },
-                headers=[("Set-Cookie", WebAuth.cookie_header(token))],
+                headers=[("Set-Cookie", self._cookie_header(token))],
             )
         if method == "POST" and path == "/api/auth/change-password":
             user = self.state.web_auth.require_user(self.headers.get("cookie"))
             body = self._read_json()
-            self.state.web_auth.change_password(
+            new_password = str(body.get("newPassword") or "")
+            if new_password != str(body.get("confirmPassword") or ""):
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    "New password confirmation does not match.",
+                    "password_mismatch",
+                )
+            token = self.state.web_auth.change_password(
                 user,
                 str(body.get("currentPassword") or ""),
-                str(body.get("newPassword") or ""),
+                new_password,
             )
-            return {"ok": True}
+            return WebResult(
+                {"ok": True}, headers=[("Set-Cookie", self._cookie_header(token))]
+            )
         if method == "POST" and path == "/api/auth/logout":
             self.state.web_auth.logout(self.headers.get("cookie"))
             return WebResult(
                 {"ok": True},
-                headers=[("Set-Cookie", WebAuth.clear_cookie_header())],
+                headers=[("Set-Cookie", self._clear_cookie_header())],
             )
         if method == "GET" and path == "/api/status":
             return self.state.status(_query_one(query, "accountId", ""), self.current_user)
@@ -10346,12 +11586,12 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.list_schedules(account_id, self.current_user)
         if method == "POST" and path == "/api/schedules/create":
             self._require_permission("schedule")
-            body = self._read_json()
+            body = self._read_json(max_bytes=MAX_MEDIA_JSON_BODY_BYTES)
             self._require_account_access(str(body.get("accountId") or ""))
             return self.state.create_schedule(body)
         if method == "POST" and path == "/api/schedules/update":
             self._require_permission("schedule")
-            body = self._read_json()
+            body = self._read_json(max_bytes=MAX_MEDIA_JSON_BODY_BYTES)
             self._require_account_access(str(body.get("accountId") or ""))
             return self.state.update_schedule(str(body.get("id") or ""), body)
         if method == "POST" and path == "/api/schedules/toggle":
@@ -10408,7 +11648,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self._with_api(body, lambda api: self._send(api, body))
         if method == "POST" and path == "/api/send-media":
             self._require_permission("send")
-            body = self._read_json()
+            body = self._read_json(max_bytes=MAX_MEDIA_JSON_BODY_BYTES)
             return self._with_api(body, lambda api: self._send_media(api, body))
         if method == "POST" and path == "/api/call":
             self._require_permission("tools")
@@ -10445,7 +11685,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if not self.state.account_store.get(account_id):
             raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
         api = self.state.get_api(account_id)
-        with self.state.api_lock:
+        with self.state.api_lock_for(account_id):
             return fn(api)
 
     def _contacts(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
@@ -10497,9 +11737,9 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             conversations.append(item)
         conversations.sort(
             key=lambda item: (
-                int(item.get("lastMessageAt") or 0) <= 0,
-                -int(item.get("lastMessageAt") or 0),
-                int(item.get("rank") or 0),
+                _coerce_int(item.get("lastMessageAt")) <= 0,
+                -_coerce_int(item.get("lastMessageAt")),
+                _coerce_int(item.get("rank")),
                 str(item.get("mid") or ""),
             )
         )
@@ -10536,9 +11776,14 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         messages = api.get_recent_messages(chat_mid, count) or []
         # resolve senders we don't know yet (e.g. group members who aren't in
         # our own contact list) to their real LINE display names
+        message_mids = [
+            m["from"] for m in messages if isinstance(m, dict) and m.get("from")
+        ]
+        for message in messages:
+            message_mids.extend(_chat_event_mids(message))
         _resolve_names(
             api,
-            [m["from"] for m in messages if isinstance(m, dict) and m.get("from")],
+            message_mids,
             names,
         )
         return {
@@ -10580,15 +11825,19 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             data_b64 = data_b64.split(",", 1)[1]  # strip a data: URL prefix
         if not data_b64:
             raise WebError(HTTPStatus.BAD_REQUEST, "file data is required.")
+        if len(data_b64) > ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 4:
+            raise WebError(HTTPStatus.BAD_REQUEST, "File is too large (max 30 MB).")
         try:
-            raw = base64.b64decode(data_b64)
-        except ValueError as exc:
+            raw = base64.b64decode(data_b64, validate=True)
+        except (ValueError, TypeError) as exc:
             raise WebError(HTTPStatus.BAD_REQUEST, f"Invalid file data: {exc}") from exc
         if not raw:
             raise WebError(HTTPStatus.BAD_REQUEST, "file is empty.")
-        if len(raw) > 30 * 1024 * 1024:
+        if len(raw) > MAX_IMAGE_BYTES:
             raise WebError(HTTPStatus.BAD_REQUEST, "File is too large (max 30 MB).")
         name = str(body.get("filename") or "").strip() or "upload"
+        if len(name) > 255:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Filename is too long.")
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
         is_image = str(body.get("kind") or "").lower() == "image" or ext in {
             "jpg",
@@ -10609,17 +11858,33 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         self._require_permission("read")
         message_id = _query_one(query, "message_id")
         chat_mid = _query_one(query, "chat_mid")
+        preview = _query_one(query, "preview").lower() in {"1", "true", "yes"}
         if not message_id:
             raise WebError(HTTPStatus.BAD_REQUEST, "message_id is required.")
         try:
-            data = self._with_api(
-                query, lambda api: _download_message_content(api, message_id, chat_mid)
+            data, filename, content_type = self._with_api(
+                query,
+                lambda api: _download_message_payload(
+                    api, message_id, chat_mid, preview=preview
+                ),
             )
         except WebError:
             raise
         except Exception as exc:
             raise WebError(HTTPStatus.NOT_FOUND, "Media not available.") from exc
-        self._bytes(data, _sniff_content_type(data), HTTPStatus.OK)
+        headers = []
+        if content_type == 14:
+            filename = _safe_message_filename(filename)
+            encoded_name = quote(filename, safe="")
+            headers.append(
+                ("content-disposition", f"attachment; filename*=UTF-8''{encoded_name}")
+            )
+        self._bytes(
+            data,
+            _message_content_type(data, filename),
+            HTTPStatus.OK,
+            headers=headers,
+        )
 
     def _call(self, api: OkLine, body: dict[str, Any]) -> dict[str, Any]:
         endpoint = str(body.get("endpoint") or "")
@@ -10630,10 +11895,19 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             raise WebError(HTTPStatus.BAD_REQUEST, "args must be a JSON array.")
         return {"result": api.transport.call(endpoint, args)}
 
-    def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("content-length") or 0)
+    def _read_json(self, *, max_bytes: int = MAX_JSON_BODY_BYTES) -> dict[str, Any]:
+        try:
+            length = int(self.headers.get("content-length") or 0)
+        except ValueError as exc:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Content-Length is invalid.") from exc
         if length <= 0:
             return {}
+        if length > max_bytes:
+            raise WebError(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                "Request body is too large.",
+                "payload_too_large",
+            )
         raw = self.rfile.read(length).decode("utf-8")
         try:
             data = json.loads(raw)
@@ -10669,6 +11943,20 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         self.send_header("cache-control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("pragma", "no-cache")
         self.send_header("expires", "0")
+        self.send_header("x-content-type-options", "nosniff")
+        self.send_header("x-frame-options", "DENY")
+        self.send_header("referrer-policy", "no-referrer")
+        self.send_header("permissions-policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("cross-origin-opener-policy", "same-origin")
+        self.send_header(
+            "content-security-policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            "media-src 'self' data: blob:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+        )
+        if self._secure_cookies():
+            self.send_header("strict-transport-security", "max-age=31536000; includeSubDomains")
         for key, value in headers or []:
             self.send_header(key, value)
         self.send_header("content-length", str(len(payload)))
@@ -10679,6 +11967,15 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
 
 class OkLineWebServer(ThreadingHTTPServer):
     state: WebState
+    allow_reuse_address = True
+    daemon_threads = True
+    block_on_close = False
+    request_queue_size = 64
+
+    def get_request(self) -> tuple[socket.socket, Any]:
+        request, address = super().get_request()
+        request.settimeout(30.0)
+        return request, address
 
 
 def serve(
@@ -10695,6 +11992,9 @@ def serve(
     access_token: str | None = None,
     refresh_token: str | None = None,
     show_secrets: bool = False,
+    setup_token: str | None = None,
+    secure_cookies: bool | None = None,
+    trust_proxy: bool | None = None,
     open_browser: bool = True,
 ) -> int:
     accounts_file = accounts_file or str(Path(state_dir) / "accounts.json")
@@ -10714,16 +12014,32 @@ def serve(
         access_token=access_token,
         refresh_token=refresh_token,
         show_secrets=show_secrets,
+        setup_token=(
+            setup_token
+            or os.getenv("LINEPASSPORT_SETUP_TOKEN")
+            or os.getenv("OKLINE_SETUP_TOKEN")
+        ),
+        secure_cookies=(
+            secure_cookies
+            if secure_cookies is not None
+            else _optional_env_bool("LINEPASSPORT_SECURE_COOKIES")
+        ),
+        trust_proxy=(
+            trust_proxy
+            if trust_proxy is not None
+            else bool(_optional_env_bool("LINEPASSPORT_TRUST_PROXY"))
+        ),
     )
     server = _bind_server(config)
     host = str(server.server_address[0])
     bound_port = server.server_address[1]
     url = f"http://{host}:{bound_port}/"
     print(f"LinePassport running at {url}")
-    print(
-        "Forgot the LinePassport password? It is separate from your LINE password "
-        f"and cannot be recovered — delete {auth_file} to reset access, then reopen."
-    )
+    if server.state.store.label() == "file":
+        print(
+            "Forgot the LinePassport password? It is separate from your LINE password. "
+            f"Stop the server and remove {auth_file} only when a full local auth reset is intended."
+        )
     print("Press Ctrl-C to stop.")
     if open_browser:
         webbrowser.open(url)
@@ -10741,6 +12057,7 @@ def _bind_server(config: WebConfig) -> OkLineWebServer:
     ports = [config.port] if config.port == 0 else range(config.port, config.port + 20)
     last_error: OSError | None = None
     for candidate in ports:
+        server: OkLineWebServer | None = None
         try:
             server = OkLineWebServer((config.host, candidate), OkLineWebHandler)
             server.state = WebState(
@@ -10757,18 +12074,39 @@ def _bind_server(config: WebConfig) -> OkLineWebServer:
                     access_token=config.access_token,
                     refresh_token=config.refresh_token,
                     show_secrets=config.show_secrets,
+                    setup_token=config.setup_token,
+                    secure_cookies=config.secure_cookies,
+                    trust_proxy=config.trust_proxy,
                 )
             )
+            if (
+                server.state.setup_token_required()
+                and not server.state.web_auth.configured()
+                and not config.setup_token
+            ):
+                server.state.close()
+                server.server_close()
+                raise WebError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "LINEPASSPORT_SETUP_TOKEN is required for first startup on a public bind.",
+                    "setup_token_not_configured",
+                )
             return server
         except OSError as exc:
+            if server is not None:
+                server.server_close()
             last_error = exc
             if config.port == 0:
                 break
+        except Exception:
+            if server is not None:
+                server.server_close()
+            raise
     raise OSError(f"could not bind {config.host}:{config.port}: {last_error}")
 
 
 def _sniff_content_type(data: bytes) -> str:
-    """Best-effort image MIME type from the leading magic bytes."""
+    """Best-effort MIME type from leading magic bytes."""
     if data[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
     if data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -10777,7 +12115,19 @@ def _sniff_content_type(data: bytes) -> str:
         return "image/gif"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
+    if data[:5] == b"%PDF-":
+        return "application/pdf"
+    if data[:4] in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
+        return "application/zip"
     return "application/octet-stream"
+
+
+def _message_content_type(data: bytes, filename: str = "") -> str:
+    detected = _sniff_content_type(data)
+    if detected != "application/octet-stream":
+        return detected
+    guessed, _ = mimetypes.guess_type(filename)
+    return guessed or detected
 
 
 def _query_one(query: dict[str, list[str]], key: str, default: str = "") -> str:
@@ -10809,6 +12159,35 @@ def _ensure_schedule_account(job: dict[str, Any], account_id: str | None) -> Non
         raise WebError(HTTPStatus.FORBIDDEN, "Schedule belongs to another account.")
 
 
+def _schedule_image_bytes(job: dict[str, Any]) -> int:
+    encoded = str(job.get("imageData") or "")
+    if not encoded:
+        return 0
+    return (len(encoded.rstrip("=")) * 3) // 4
+
+
+def _ensure_schedule_image_quota(
+    schedules: list[dict[str, Any]],
+    candidate: dict[str, Any],
+    *,
+    replacing_id: str | None = None,
+) -> None:
+    account_id = str(candidate.get("accountId") or "")
+    total = _schedule_image_bytes(candidate)
+    total += sum(
+        _schedule_image_bytes(job)
+        for job in schedules
+        if str(job.get("accountId") or "") == account_id
+        and str(job.get("id") or "") != str(replacing_id or "")
+    )
+    if total > MAX_SCHEDULE_IMAGE_STORAGE_PER_ACCOUNT:
+        raise WebError(
+            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            "Stored schedule images exceed the 100 MB limit for this LINE account.",
+            "schedule_storage_quota",
+        )
+
+
 def _short_text(value: Any, limit: int = 240) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
@@ -10835,9 +12214,37 @@ def _safe_log_detail(value: Any, limit: int = 220) -> str:
 
 
 def _bot_log_detail(action: Any, value: Any) -> str:
-    if str(action or "") in {"content.ai.start", "content.ai.error"}:
+    action_name = str(action or "")
+    if action_name == "content.ai.start":
         return str(value or "").strip()
+    if action_name == "content.ai.error":
+        return _safe_log_detail(value, MAX_TEXT_LENGTH)
     return _safe_log_detail(value)
+
+
+def _trim_bot_logs(logs: list[Any]) -> list[Any]:
+    """Keep fair per-account history while bounding the shared state row."""
+    kept: list[Any] = []
+    counts: dict[str, int] = {}
+    total_bytes = 0
+    for item in reversed(logs):
+        if not isinstance(item, dict):
+            continue
+        account_id = str(item.get("accountId") or "__system__")
+        if counts.get(account_id, 0) >= 500:
+            continue
+        item_bytes = len(
+            json.dumps(item, ensure_ascii=False, default=_json_default).encode("utf-8")
+        )
+        if kept and total_bytes + item_bytes > MAX_BOT_LOG_STORAGE_BYTES:
+            continue
+        counts[account_id] = counts.get(account_id, 0) + 1
+        kept.append(item)
+        total_bytes += item_bytes
+        if len(kept) >= 5000:
+            break
+    kept.reverse()
+    return kept
 
 
 def _query_int(
@@ -10873,14 +12280,25 @@ def _schedule_from_body(
     image_source = str(body.get("imageSource") or (existing or {}).get("imageSource") or "")
     image_data = str(body.get("imageData") or (existing or {}).get("imageData") or "")
     image_name = str(body.get("imageName") or (existing or {}).get("imageName") or "")
-    if image_data and len(image_data) > 40 * 1024 * 1024:
-        raise WebError(HTTPStatus.BAD_REQUEST, "Job image is too large (max 30 MB).")
+    if image_data:
+        encoded = image_data.split(",", 1)[-1] if image_data.startswith("data:") else image_data
+        if len(encoded) > ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 4:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Job image is too large (max 30 MB).")
+        try:
+            decoded_size = len(base64.b64decode(encoded, validate=True))
+        except (ValueError, TypeError) as exc:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Job image is invalid.") from exc
+        if decoded_size > MAX_IMAGE_BYTES:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Job image is too large (max 30 MB).")
+        image_data = encoded
     raw_pids = body.get("patternIds", (existing or {}).get("patternIds", []))
     raw_ptexts = body.get("patternTexts", (existing or {}).get("patternTexts", []))
     pattern_ids = [str(x) for x in raw_pids if x] if isinstance(raw_pids, list) else []
     pattern_texts = (
         [str(x) for x in raw_ptexts if str(x).strip()] if isinstance(raw_ptexts, list) else []
     )
+    if len(pattern_ids) > MAX_PATTERN_REFERENCES or len(pattern_texts) > MAX_PATTERN_REFERENCES:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Too many message patterns were selected.")
     api_url = str(body.get("apiUrl") or (existing or {}).get("apiUrl") or "")
     api_method = str(
         body.get("apiMethod") or (existing or {}).get("apiMethod") or "GET"
@@ -10898,6 +12316,23 @@ def _schedule_from_body(
         raise WebError(HTTPStatus.BAD_REQUEST, "API URL is required.")
     if content_source == "ai_image" and not ai_prompt.strip() and not pattern_texts:
         raise WebError(HTTPStatus.BAD_REQUEST, "AI image prompt is required.")
+    name = str(body.get("name") or (existing or {}).get("name") or "Scheduled message").strip()
+    if len(name) > MAX_NAME_LENGTH:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Schedule name is too long.")
+    if len(to) > 256:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Schedule target is too long.")
+    if len(text) > MAX_TEXT_LENGTH or len(ai_prompt) > MAX_TEXT_LENGTH:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Schedule text or AI prompt is too long.")
+    if any(len(value) > MAX_TEXT_LENGTH for value in pattern_texts):
+        raise WebError(HTTPStatus.BAD_REQUEST, "Pattern text is too long.")
+    if len(api_body) > MAX_API_BODY_LENGTH:
+        raise WebError(HTTPStatus.BAD_REQUEST, "API request body is too long.")
+    if len(image_name) > 255:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Image name is too long.")
+    if image_source and content_source == "image":
+        _validate_http_url_shape(image_source)
+    if api_url and content_source == "api":
+        _validate_http_url_shape(api_url)
     encrypt = bool(body.get("encrypt", (existing or {}).get("encrypt", False)))
     if encrypt and content_source in {"image", "ai_image"}:
         # Reject up front: images can't be Letter-Sealed, and for ai_image this
@@ -10909,14 +12344,20 @@ def _schedule_from_body(
     if api_method not in {"GET", "POST"}:
         raise WebError(HTTPStatus.BAD_REQUEST, "apiMethod must be GET or POST.")
 
-    interval = int(
-        float(body.get("intervalMinutes") or (existing or {}).get("intervalMinutes") or 15)
-    )
+    try:
+        interval = int(
+            float(body.get("intervalMinutes") or (existing or {}).get("intervalMinutes") or 15)
+        )
+    except (TypeError, ValueError) as exc:
+        raise WebError(HTTPStatus.BAD_REQUEST, "intervalMinutes is invalid.") from exc
     interval = max(1, min(1440, interval))
     max_runs_raw = body.get(
         "maxRuns", (existing or {}).get("maxRuns", 1 if mode == "once" else 0)
     )
-    max_runs = int(float(max_runs_raw or 0))
+    try:
+        max_runs = int(float(max_runs_raw or 0))
+    except (TypeError, ValueError) as exc:
+        raise WebError(HTTPStatus.BAD_REQUEST, "maxRuns is invalid.") from exc
     if mode == "once":
         max_runs = 1
 
@@ -10928,7 +12369,7 @@ def _schedule_from_body(
     job.update(
         {
             "id": job.get("id") or uuid.uuid4().hex,
-            "name": str(body.get("name") or job.get("name") or "Scheduled message"),
+            "name": name,
             "accountId": account_id,
             "to": to.strip(),
             "contentSource": content_source,
@@ -11142,9 +12583,11 @@ def _send_job_contents(
     job: dict[str, Any],
     *,
     ai_settings: dict[str, Any] | None = None,
+    items: list[dict[str, Any]] | None = None,
     log: BotLogFn | None = None,
 ) -> list[Any]:
-    items = _resolve_job_contents(job, ai_settings=ai_settings, log=log)
+    if items is None:
+        items = _resolve_job_contents(job, ai_settings=ai_settings, log=log)
     if not items:
         raise WebError(HTTPStatus.BAD_REQUEST, "No content to send.")
     message_ids: list[Any] = []
@@ -11167,7 +12610,7 @@ def _send_job_contents(
             _bot_log(
                 log,
                 "send.item.error",
-                str(exc),
+                _safe_log_detail(exc, 2_000),
                 ok=False,
                 data={"kind": kind, "to": to},
             )
@@ -11203,9 +12646,11 @@ def _resolve_job_contents(
         image_data = job.get("imageData")
         if image_data:
             try:
-                raw = base64.b64decode(str(image_data))
-            except ValueError as exc:
+                raw = base64.b64decode(str(image_data), validate=True)
+            except (ValueError, TypeError) as exc:
                 raise WebError(HTTPStatus.BAD_REQUEST, "Job image is invalid.") from exc
+            if len(raw) > MAX_IMAGE_BYTES:
+                raise WebError(HTTPStatus.BAD_REQUEST, "Job image is too large (max 30 MB).")
             _bot_log(
                 log,
                 "content.image.uploaded",
@@ -11279,29 +12724,46 @@ def _api_contents(job: dict[str, Any], *, log: BotLogFn | None = None) -> list[d
     if method not in {"GET", "POST"}:
         raise WebError(HTTPStatus.BAD_REQUEST, "apiMethod must be GET or POST.")
     body = _apply_placeholders(str(job.get("apiBody") or "").strip())
-    kwargs: dict[str, Any] = {"timeout": 25}
+    request_json: Any = None
+    request_data: bytes | None = None
+    request_headers: dict[str, str] = {}
     if method == "POST" and body:
         try:
-            kwargs["json"] = json.loads(body)
+            request_json = json.loads(body)
         except ValueError:
-            kwargs["data"] = body.encode("utf-8")
-            kwargs["headers"] = {"content-type": "text/plain; charset=utf-8"}
+            request_data = body.encode("utf-8")
+            request_headers = {"content-type": "text/plain; charset=utf-8"}
     _bot_log(log, "content.api.fetch", _safe_url(url), data={"method": method})
     try:
-        resp = requests.request(method, url, **kwargs)
-        resp.raise_for_status()
+        resp, final_url = _open_public_response(
+            method,
+            url,
+            timeout=25,
+            headers=request_headers,
+            json_data=request_json,
+            data=request_data,
+        )
+        try:
+            resp.raise_for_status()
+            ctype = resp.headers.get("content-type", "").lower()
+            limit = MAX_IMAGE_BYTES if ctype.startswith("image/") else MAX_OUTBOUND_DOCUMENT_BYTES
+            raw = _read_limited_response(resp, limit)
+        finally:
+            resp.close()
+    except WebError:
+        raise
     except requests.RequestException as exc:
         _bot_log(log, "content.api.error", str(exc), ok=False, data={"method": method})
         raise WebError(HTTPStatus.BAD_GATEWAY, f"API request failed: {exc}") from exc
 
-    ctype = resp.headers.get("content-type", "").lower()
     if ctype.startswith("image/"):
-        items = [{"kind": "image", "data": resp.content, "name": _name_from_url(url)}]
-        _bot_log(log, "content.api.loaded", ctype, data={"items": 1, "bytes": len(resp.content)})
+        items = [{"kind": "image", "data": raw, "name": _name_from_url(final_url)}]
+        _bot_log(log, "content.api.loaded", ctype, data={"items": 1, "bytes": len(raw)})
         return items
-    if "json" in ctype or resp.text.lstrip()[:1] in "[{":
+    text_value = raw.decode("utf-8", errors="replace")
+    if "json" in ctype or text_value.lstrip()[:1] in "[{":
         try:
-            items = _contents_from_api_json(resp.json(), base_url=url, log=log)
+            items = _contents_from_api_json(json.loads(text_value), base_url=final_url, log=log)
             _bot_log(
                 log,
                 "content.api.loaded",
@@ -11313,7 +12775,7 @@ def _api_contents(job: dict[str, Any], *, log: BotLogFn | None = None) -> list[d
             raise WebError(
                 HTTPStatus.BAD_GATEWAY, f"API returned invalid JSON: {exc}"
             ) from exc
-    text = resp.text.strip()
+    text = text_value.strip()
     if not text:
         raise WebError(HTTPStatus.BAD_GATEWAY, "API returned no usable content.")
     _bot_log(log, "content.api.loaded", "text", data={"items": 1})
@@ -11343,14 +12805,20 @@ def _contents_from_api_json(
 
     if image_b64:
         try:
+            encoded = image_b64.split(",", 1)[-1] if image_b64.startswith("data:") else image_b64
+            if len(encoded) > ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 4:
+                raise WebError(HTTPStatus.BAD_GATEWAY, "API imageBase64 is too large.")
+            decoded = base64.b64decode(encoded, validate=True)
+            if len(decoded) > MAX_IMAGE_BYTES:
+                raise WebError(HTTPStatus.BAD_GATEWAY, "API imageBase64 is too large.")
             items.append(
                 {
                     "kind": "image",
-                    "data": base64.b64decode(image_b64),
+                    "data": decoded,
                     "name": "api-image.jpg",
                 }
             )
-        except ValueError as exc:
+        except (ValueError, TypeError) as exc:
             raise WebError(HTTPStatus.BAD_GATEWAY, "API imageBase64 is invalid.") from exc
     elif image_url:
         items.append(_image_content(image_url, base_url=base_url, log=log))
@@ -11400,19 +12868,34 @@ def _image_content(
             raise
         _bot_log(log, "content.image.loaded", name, data={"bytes": len(data)})
         return {"kind": "image", "data": data, "name": name}
-    return {"kind": "image", "data": source, "name": os.path.basename(source)}
+    raise WebError(
+        HTTPStatus.BAD_REQUEST,
+        "Image source must be an absolute HTTP(S) URL. Upload local files through the image picker.",
+        "invalid_image_url",
+    )
 
 
 def _download_image(url: str) -> tuple[bytes, str]:
     try:
-        resp = requests.get(url, timeout=25)
-        resp.raise_for_status()
+        resp, final_url = _open_public_response("GET", url, timeout=25)
+        try:
+            resp.raise_for_status()
+            ctype = resp.headers.get("content-type", "").lower()
+            if ctype and not ctype.startswith("image/"):
+                raise WebError(
+                    HTTPStatus.BAD_GATEWAY, f"Image URL returned {ctype or 'non-image'}"
+                )
+            raw = _read_limited_response(resp, MAX_IMAGE_BYTES)
+        finally:
+            resp.close()
+    except WebError:
+        raise
     except requests.RequestException as exc:
-        raise WebError(HTTPStatus.BAD_GATEWAY, f"Image download failed: {exc}") from exc
-    ctype = resp.headers.get("content-type", "").lower()
-    if ctype and not ctype.startswith("image/"):
-        raise WebError(HTTPStatus.BAD_GATEWAY, f"Image URL returned {ctype or 'non-image'}")
-    return resp.content, _name_from_url(url)
+        raise WebError(
+            HTTPStatus.BAD_GATEWAY,
+            f"Image download failed: {_safe_log_detail(exc, 500)}",
+        ) from exc
+    return raw, _name_from_url(final_url)
 
 
 def _safe_url(url: str) -> str:
@@ -11587,6 +13070,37 @@ def _ai_provider_meta(provider: str) -> dict[str, Any]:
     return AI_PROVIDER_META.get(provider) or AI_PROVIDER_META["google"]
 
 
+def _provider_base_url(expected: str) -> str:
+    """Return the built-in provider origin; custom origins are intentionally disabled."""
+    return expected.rstrip("/")
+
+
+def _same_origin_provider_url(url: str, base_url: str) -> str:
+    value = str(url or "").strip()
+    if not value or len(value) > MAX_URL_LENGTH:
+        raise WebError(HTTPStatus.BAD_GATEWAY, "Provider returned an invalid URL.", "ai_error")
+    parsed = urlparse(value)
+    base = urlparse(base_url)
+    try:
+        parsed_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        base_port = base.port or (443 if base.scheme == "https" else 80)
+    except ValueError as exc:
+        raise WebError(HTTPStatus.BAD_GATEWAY, "Provider returned an invalid URL.", "ai_error") from exc
+    if (
+        parsed.scheme != base.scheme
+        or (parsed.hostname or "").lower() != (base.hostname or "").lower()
+        or parsed_port != base_port
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise WebError(
+            HTTPStatus.BAD_GATEWAY,
+            "Provider returned a URL outside its trusted origin.",
+            "ai_error",
+        )
+    return value
+
+
 def _mask_secret(value: str) -> str:
     value = value or ""
     if not value:
@@ -11625,10 +13139,13 @@ def _extract_inline_image(data: Any) -> tuple[bytes, str] | None:
                 continue
             mime = str(inline.get("mimeType") or inline.get("mime_type") or "image/png")
             try:
-                raw = base64.b64decode(inline["data"])
+                encoded = str(inline["data"])
+                if len(encoded) > ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 4:
+                    continue
+                raw = base64.b64decode(encoded, validate=True)
             except (ValueError, TypeError):
                 continue
-            if raw:
+            if raw and len(raw) <= MAX_IMAGE_BYTES:
                 return raw, mime
     return None
 
@@ -11737,7 +13254,7 @@ def _generate_gemini_image(
             "ai_not_configured",
         )
     model = (model or NANO_BANANA_MODEL).strip() or NANO_BANANA_MODEL
-    base = (base_url or GEMINI_BASE_URL).strip().rstrip("/") or GEMINI_BASE_URL
+    base = _provider_base_url(GEMINI_BASE_URL)
     url = f"{base}/v1beta/models/{model}:generateContent"
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -11758,7 +13275,10 @@ def _generate_gemini_image(
                 "content-type": "application/json",
             },
             timeout=120,
+            stream=True,
+            allow_redirects=False,
         )
+        resp = _buffer_response_limited(resp, MAX_OUTBOUND_DOCUMENT_BYTES)
     except requests.RequestException as exc:
         raise WebError(
             HTTPStatus.BAD_GATEWAY, f"Google Gemini request failed: {exc}", "ai_error"
@@ -11831,6 +13351,8 @@ def _fal_error_code(status: int) -> str:
 
 def _prepare_ai_image_prompt(value: Any) -> str:
     prompt = str(value or "").strip()
+    if len(prompt) > MAX_TEXT_LENGTH:
+        raise WebError(HTTPStatus.BAD_REQUEST, "AI image prompt is too long.")
     if not prompt or prompt.startswith(AI_IMAGE_PROMPT_INSTRUCTION):
         return prompt
     return f"{AI_IMAGE_PROMPT_INSTRUCTION}\n\nUser prompt:\n{prompt}"
@@ -11940,7 +13462,7 @@ def _generate_fal_image(
     image_size = (image_size or FAL_DEFAULT_IMAGE_SIZE).strip()
     if image_size not in FAL_IMAGE_SIZES:
         image_size = FAL_DEFAULT_IMAGE_SIZE
-    base = (base_url or FAL_BASE_URL).strip().rstrip("/") or FAL_BASE_URL
+    base = _provider_base_url(FAL_BASE_URL)
     endpoint = f"{base}/{model}"
     headers = {
         "Authorization": f"Key {api_key.strip()}",
@@ -11966,7 +13488,10 @@ def _generate_fal_image(
             json=payload,
             headers=headers,
             timeout=30,
+            stream=True,
+            allow_redirects=False,
         )
+        submit_resp = _buffer_response_limited(submit_resp, MAX_OUTBOUND_DOCUMENT_BYTES)
     except requests.RequestException as exc:
         raise WebError(
             HTTPStatus.BAD_GATEWAY,
@@ -11984,9 +13509,11 @@ def _generate_fal_image(
     status_url = str(submitted.get("status_url") or "").strip()
     if not status_url:
         status_url = f"{endpoint}/requests/{request_id}/status"
+    status_url = _same_origin_provider_url(status_url, base)
     response_url = str(submitted.get("response_url") or "").strip()
     if not response_url:
         response_url = f"{endpoint}/requests/{request_id}"
+    response_url = _same_origin_provider_url(response_url, base)
     _bot_log(
         log,
         "content.ai.task",
@@ -12004,7 +13531,10 @@ def _generate_fal_image(
                 params={"logs": 1},
                 headers={"Authorization": headers["Authorization"]},
                 timeout=30,
+                stream=True,
+                allow_redirects=False,
             )
+            status_resp = _buffer_response_limited(status_resp, MAX_OUTBOUND_DOCUMENT_BYTES)
         except requests.RequestException as exc:
             if attempt < 4:
                 _bot_log(
@@ -12062,7 +13592,10 @@ def _generate_fal_image(
             response_url,
             headers={"Authorization": headers["Authorization"]},
             timeout=60,
+            stream=True,
+            allow_redirects=False,
         )
+        result_resp = _buffer_response_limited(result_resp, MAX_OUTBOUND_DOCUMENT_BYTES)
     except requests.RequestException as exc:
         raise WebError(
             HTTPStatus.BAD_GATEWAY,
@@ -12125,7 +13658,7 @@ def _generate_nbapi_image(
             "No nanobananaapi.ai API key. Add one in the AI Settings tab.",
             "ai_not_configured",
         )
-    base = (base_url or NBAPI_BASE_URL).strip().rstrip("/") or NBAPI_BASE_URL
+    base = _provider_base_url(NBAPI_BASE_URL)
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
         "content-type": "application/json",
@@ -12217,8 +13750,14 @@ def _nbapi_create_task(
     )
     try:
         resp = requests.post(
-            f"{base}{endpoint}", json=body, headers=headers, timeout=30
+            f"{base}{endpoint}",
+            json=body,
+            headers=headers,
+            timeout=30,
+            stream=True,
+            allow_redirects=False,
         )
+        resp = _buffer_response_limited(resp, MAX_OUTBOUND_DOCUMENT_BYTES)
     except requests.RequestException as exc:
         raise WebError(
             HTTPStatus.BAD_GATEWAY, f"nanobananaapi.ai request failed: {exc}", "ai_error"
@@ -12274,8 +13813,14 @@ def _nbapi_poll_result(
         time.sleep(3)
         try:
             resp = requests.get(
-                url, params={"taskId": task_id}, headers=headers, timeout=30
+                url,
+                params={"taskId": task_id},
+                headers=headers,
+                timeout=30,
+                stream=True,
+                allow_redirects=False,
             )
+            resp = _buffer_response_limited(resp, MAX_OUTBOUND_DOCUMENT_BYTES)
             data = resp.json()
         except (requests.RequestException, ValueError):
             _bot_log(
@@ -12544,7 +14089,94 @@ def _resolve_to(api: OkLine, value: str) -> str:
     raise WebError(HTTPStatus.BAD_REQUEST, f"{len(matches)} contacts match: {names}")
 
 
-def _download_message_content(api: OkLine, message_id: str, chat_mid: str = "") -> bytes:
+_LINE_MEDIA_HOST_SUFFIXES = ("line-scdn.net", "line-apps.com")
+_MAX_MESSAGE_MEDIA_BYTES = 30 * 1024 * 1024
+
+
+def _validated_line_media_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError("Invalid LINE media URL") from exc
+    host = (parsed.hostname or "").rstrip(".").lower()
+    trusted = any(
+        host == suffix or host.endswith("." + suffix)
+        for suffix in _LINE_MEDIA_HOST_SUFFIXES
+    )
+    if (
+        parsed.scheme.lower() != "https"
+        or not trusted
+        or parsed.username
+        or parsed.password
+        or port not in (None, 443)
+    ):
+        raise RuntimeError("Untrusted LINE media URL")
+    return parsed.geturl()
+
+
+def _download_line_media_url(url: str) -> bytes:
+    current = str(url or "")
+    for _ in range(4):
+        current = _validated_line_media_url(current)
+        response = None
+        try:
+            response = requests.get(
+                current,
+                timeout=25,
+                stream=True,
+                allow_redirects=False,
+            )
+            if response.status_code in {301, 302, 303, 307, 308}:
+                location = response.headers.get("location")
+                if not location:
+                    raise RuntimeError("LINE media redirect has no destination")
+                current = urljoin(current, location)
+                continue
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "").lower()
+            if content_type and not (
+                content_type.startswith("image/")
+                or content_type.startswith("application/octet-stream")
+            ):
+                raise RuntimeError(f"LINE media returned {content_type}")
+            declared_size = int(response.headers.get("content-length") or 0)
+            if declared_size > _MAX_MESSAGE_MEDIA_BYTES:
+                raise RuntimeError("LINE media is too large")
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_content(64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > _MAX_MESSAGE_MEDIA_BYTES:
+                    raise RuntimeError("LINE media is too large")
+                chunks.append(chunk)
+            data = b"".join(chunks)
+            if not data:
+                raise RuntimeError("LINE media is empty")
+            return data
+        except requests.RequestException as exc:
+            raise RuntimeError(f"LINE media download failed: {exc}") from exc
+        finally:
+            if response is not None:
+                response.close()
+    raise RuntimeError("Too many LINE media redirects")
+
+
+def _safe_message_filename(value: Any) -> str:
+    name = str(value or "").replace("\\", "/").rsplit("/", 1)[-1]
+    name = name.replace("\r", "").replace("\n", "").strip()
+    return name[:255] or "file"
+
+
+def _download_message_payload(
+    api: OkLine,
+    message_id: str,
+    chat_mid: str = "",
+    *,
+    preview: bool = False,
+) -> tuple[bytes, str, int | None]:
     message = None
     if chat_mid:
         recent = api.get_recent_messages(chat_mid, 200) or []
@@ -12556,14 +14188,42 @@ def _download_message_content(api: OkLine, message_id: str, chat_mid: str = "") 
             ),
             None,
         )
+    content_type = None
+    filename = ""
+    if message:
+        try:
+            content_type = int(str(message.get("contentType")))
+        except (TypeError, ValueError):
+            content_type = None
+    if message and not message.get("chunks"):
+        raw_meta = message.get("contentMetadata")
+        meta = raw_meta if isinstance(raw_meta, dict) else {}
+        if content_type == 14:
+            filename = str(meta.get("FILE_NAME") or "")
+        if str(message.get("contentType")) == "1":
+            preferred = ("PREVIEW_URL", "DOWNLOAD_URL") if preview else (
+                "DOWNLOAD_URL",
+                "PREVIEW_URL",
+            )
+            for key in preferred:
+                media_url = str(meta.get(key) or "").strip()
+                if not media_url:
+                    continue
+                try:
+                    return _download_line_media_url(media_url), filename, content_type
+                except RuntimeError:
+                    continue
     if not message or not message.get("chunks"):
-        return api.obs.download_object("talk", "m", message_id)
+        data = api.obs.download_object("talk", "m", message_id)
+        return data, filename, content_type
     if not api.e2ee.is_ready():
         raise RuntimeError("E2EE keys are not available for this account")
 
     decrypted = api.decrypt_message(message)
     raw_meta = decrypted.get("contentMetadata")
     meta = raw_meta if isinstance(raw_meta, dict) else {}
+    if content_type == 14:
+        filename = str(meta.get("FILE_NAME") or "")
     key_material = str(meta.get("ENC_KM") or "")
     if not key_material:
         raise RuntimeError("Encrypted media key is not available")
@@ -12575,7 +14235,33 @@ def _download_message_content(api: OkLine, message_id: str, chat_mid: str = "") 
         oid,
         talk_meta=encode_message_talk_meta(message_id),
     )
-    return e2ee_frame.decrypt_media_blob(encrypted, key_material)
+    data = e2ee_frame.decrypt_media_blob(encrypted, key_material)
+    return data, filename, content_type
+
+
+def _download_message_content(
+    api: OkLine,
+    message_id: str,
+    chat_mid: str = "",
+    *,
+    preview: bool = False,
+) -> bytes:
+    data, _, _ = _download_message_payload(
+        api, message_id, chat_mid, preview=preview
+    )
+    return data
+
+
+def _chat_event_mids(msg: Any) -> list[str]:
+    if not isinstance(msg, dict) or str(msg.get("contentType")) != "18":
+        return []
+    raw_meta = msg.get("contentMetadata")
+    meta = raw_meta if isinstance(raw_meta, dict) else {}
+    return [
+        value
+        for value in str(meta.get("LOC_ARGS") or "").split("\x1e")
+        if is_mid(value)
+    ]
 
 
 def _message_summary(api: OkLine, msg: Any, names: dict[str, str]) -> dict[str, Any]:
@@ -12596,6 +14282,7 @@ def _message_summary(api: OkLine, msg: Any, names: dict[str, str]) -> dict[str, 
     sender = msg.get("from") or ""
     raw_meta = resolved.get("contentMetadata")
     meta = raw_meta if isinstance(raw_meta, dict) else {}
+    event_mids = _chat_event_mids(resolved)
     return {
         "id": msg.get("id"),
         "from": sender,
@@ -12605,6 +14292,9 @@ def _message_summary(api: OkLine, msg: Any, names: dict[str, str]) -> dict[str, 
         "contentType": msg.get("contentType"),
         "stickerId": meta.get("STKID"),
         "fileName": meta.get("FILE_NAME"),
+        "fileSize": meta.get("FILE_SIZE"),
+        "eventKey": meta.get("LOC_KEY") if event_mids else None,
+        "eventNames": [names.get(mid) or mid for mid in event_mids],
         "createdTime": msg.get("createdTime"),
         "encrypted": encrypted,
         "mediaReady": not encrypted or bool(meta.get("ENC_KM")),
