@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import json
+import struct
 from collections.abc import Mapping
 from typing import Any
 
@@ -32,6 +33,25 @@ def encode_obs_params(params: Mapping[str, Any]) -> str:
     """Base64(JSON) — the ``X-Obs-Params`` header value."""
     raw = json.dumps(params, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return base64.b64encode(raw).decode("ascii")
+
+
+def encode_message_talk_meta(message_id: str) -> str:
+    """Build LINE's ``X-Talk-Meta`` header for an E2EE media object."""
+    value = str(message_id).encode("utf-8")
+    message = (
+        b"\x0b"
+        + struct.pack(">hI", 4, len(value))
+        + value
+        + b"\x0f"
+        + struct.pack(">h", 27)
+        + b"\x0c"
+        + struct.pack(">I", 0)
+        + b"\x00"
+    )
+    payload = json.dumps(
+        {"message": base64.b64encode(message).decode("ascii")}, separators=(",", ":")
+    ).encode("utf-8")
+    return base64.b64encode(payload).decode("ascii")
 
 
 class ObsClient:

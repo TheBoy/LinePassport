@@ -33,11 +33,13 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import requests
 
 from . import __version__
+from . import e2ee_crypto as e2ee_frame
 from ._util import is_mid
 from .client import OkLine
 from .entities import Group
 from .exceptions import LineLoginRequired
 from .hmac_signer import LtsmBridge
+from .obs import encode_message_talk_meta
 
 INDEX_HTML = r"""<!doctype html>
 <html lang="en">
@@ -1069,7 +1071,7 @@ INDEX_HTML = r"""<!doctype html>
       align-content: start;
     }
 
-    /* Contacts sub-tabs (people / groups): LINE-style underline text tabs. */
+    /* Contacts sub-tabs (all / people / groups): LINE-style underline text tabs. */
     .subtabs {
       display: flex;
       gap: 6px;
@@ -1151,6 +1153,7 @@ INDEX_HTML = r"""<!doctype html>
       min-height: 0;
     }
 
+    .all-list,
     .contact-list,
     .group-list {
       max-height: calc(100vh - 320px);
@@ -1651,6 +1654,9 @@ INDEX_HTML = r"""<!doctype html>
       text-overflow: ellipsis;
     }
 
+    .line-row.has-unread .line-row-name,
+    .line-row.has-unread .line-row-sub { color: var(--ink); font-weight: 700; }
+
     .line-row-sub {
       margin-top: 2px;
       color: var(--muted);
@@ -1665,6 +1671,29 @@ INDEX_HTML = r"""<!doctype html>
       font-size: 11px;
       font-variant-numeric: tabular-nums;
       align-self: start;
+    }
+
+    .line-row-side {
+      display: grid;
+      justify-items: end;
+      align-self: stretch;
+      gap: 5px;
+      min-width: 34px;
+    }
+
+    .line-unread-badge {
+      display: inline-grid;
+      place-items: center;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: var(--line-out);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
     }
 
     /* deterministic circular avatar */
@@ -1742,6 +1771,7 @@ INDEX_HTML = r"""<!doctype html>
 
     .icon-ghost svg { width: 19px; height: 19px; }
     .icon-ghost:hover { background: #eef3f1; color: var(--ink); border-color: transparent; }
+    .icon-ghost[aria-pressed="true"] { background: rgba(6, 199, 85, .12); color: #075f2c; }
     .icon-ghost:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 
     .convo-advanced {
@@ -2268,6 +2298,7 @@ INDEX_HTML = r"""<!doctype html>
         <select id="accountSelect"></select>
       </label>
       <div class="top-actions">
+        <button class="icon-ghost" id="notificationButton" type="button" aria-pressed="false" data-sound-status="idle" data-i18n-title="notifications.enable" title="Enable notifications" aria-label="Enable notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg></button>
         <button id="refreshAllButton" data-i18n="topbar.refresh">Refresh</button>
         <div class="settings-wrap">
           <button id="settingsButton" aria-haspopup="menu" aria-expanded="false" data-i18n="topbar.settings">Settings</button>
@@ -2479,7 +2510,8 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <div class="line-list-tabbar">
             <div class="line-list-tabs subtabs" role="tablist" aria-label="Contacts and groups">
-              <button id="loadContactsButton" class="subtab" type="button" role="tab" aria-selected="true" data-requires-account data-requires-permission="read" data-i18n="contacts.tab_people">Contacts</button>
+              <button id="loadAllButton" class="subtab" type="button" role="tab" aria-selected="true" data-requires-account data-requires-permission="read" data-i18n="contacts.tab_all">All</button>
+              <button id="loadContactsButton" class="subtab" type="button" role="tab" aria-selected="false" data-requires-account data-requires-permission="read" data-i18n="contacts.tab_people">Contacts</button>
               <button id="loadGroupsButton" class="subtab" type="button" role="tab" aria-selected="false" data-requires-account data-requires-permission="read" data-i18n="contacts.tab_groups">Groups</button>
             </div>
             <button id="contactsRefreshButton" class="icon-ghost" type="button" data-requires-account data-requires-permission="read" data-i18n-title="contacts.refresh_title" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.9 6.3"/><path d="M20 5v5h-5"/></svg></button>
@@ -2488,7 +2520,8 @@ INDEX_HTML = r"""<!doctype html>
             <button id="contactSearchButton" class="search-icon" type="button" data-requires-account data-requires-permission="read" data-i18n-title="contacts.search" title="Search" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M21 21l-4-4"/></svg></button>
             <input id="contactSearch" data-requires-account data-i18n-ph="contacts.search_ph" placeholder="Search…">
           </div>
-          <div class="line-rows contact-list" id="contactsList"></div>
+          <div class="line-rows all-list" id="allList"></div>
+          <div class="line-rows contact-list hidden" id="contactsList"></div>
           <div class="line-rows group-list hidden" id="groupsList"></div>
         </aside>
 
@@ -2500,7 +2533,6 @@ INDEX_HTML = r"""<!doctype html>
             </div>
             <div class="convo-actions">
               <button class="icon-ghost" id="reloadMessagesButton" type="button" data-requires-account data-requires-permission="read" data-i18n-title="chat.refresh" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.9 6.3"/><path d="M20 5v5h-5"/></svg></button>
-              <button class="icon-ghost" type="button" data-i18n-title="convo.mute" title="Mute" aria-label="Mute"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg></button>
               <button class="icon-ghost" type="button" data-i18n-title="convo.menu" title="Menu" aria-label="Menu"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
             </div>
           </header>
@@ -3143,6 +3175,7 @@ INDEX_HTML = r"""<!doctype html>
       "contacts.title": {th: "รายชื่อ", en: "Contacts"},
       "contacts.groups": {th: "กลุ่ม", en: "Groups"},
       "contacts.refresh": {th: "รีเฟรช", en: "Refresh"},
+      "contacts.tab_all": {th: "ทั้งหมด", en: "All"},
       "contacts.tab_people": {th: "รายชื่อ", en: "Contacts"},
       "contacts.tab_groups": {th: "กลุ่ม", en: "Groups"},
       "contacts.refresh_title": {th: "รีเฟรช", en: "Refresh"},
@@ -3150,8 +3183,20 @@ INDEX_HTML = r"""<!doctype html>
       "contacts.search_ph": {th: "ค้นหา…", en: "Search…"},
       "contacts.none": {th: "ไม่มีรายชื่อ", en: "No contacts"},
       "contacts.no_match": {th: "ไม่พบรายชื่อที่ค้นหา", en: "No matching contacts"},
+      "contacts.all_none": {th: "ยังไม่มีรายชื่อหรือกลุ่ม", en: "No contacts or groups"},
+      "contacts.all_no_match": {th: "ไม่พบรายชื่อหรือกลุ่มที่ค้นหา", en: "No matching contacts or groups"},
+      "contacts.unread": {th: "ยังไม่อ่าน {n} ข้อความ", en: "{n} unread messages"},
       "groups.none": {th: "ไม่มีกลุ่ม", en: "No groups"},
       "groups.members": {th: "{n} สมาชิก", en: "{n} members"},
+      "notifications.enable": {th: "เปิดการแจ้งเตือนและเสียง", en: "Enable notifications and sound"},
+      "notifications.disable": {th: "ปิดการแจ้งเตือนและเสียง", en: "Disable notifications and sound"},
+      "notifications.enabled": {th: "เปิดการแจ้งเตือนและเสียงแล้ว", en: "Notifications and sound enabled"},
+      "notifications.disabled": {th: "ปิดการแจ้งเตือนและเสียงแล้ว", en: "Notifications and sound disabled"},
+      "notifications.denied": {th: "เบราว์เซอร์บล็อกการแจ้งเตือน กรุณาอนุญาตในการตั้งค่าเว็บไซต์", en: "Notifications are blocked. Allow them in the site settings."},
+      "notifications.unsupported": {th: "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน", en: "This browser does not support notifications"},
+      "notifications.sound_unavailable": {th: "เบราว์เซอร์ไม่อนุญาตให้เล่นเสียง กรุณาตรวจสอบโหมดเงียบและระดับเสียง", en: "The browser could not play sound. Check silent mode and volume."},
+      "notifications.new_message": {th: "ข้อความใหม่จาก {name}", en: "New message from {name}"},
+      "notifications.new_messages": {th: "มีข้อความใหม่ {n} แชท", en: "New messages in {n} chats"},
       "chat.title": {th: "แชท", en: "Chat"},
       "chat.no_target": {th: "ยังไม่ได้เลือกปลายทาง", en: "No target selected"},
       "chat.target_ph": {th: "รหัสภายใน (MID) หรือชื่อผู้ติดต่อ", en: "Target MID or contact name"},
@@ -3387,6 +3432,17 @@ INDEX_HTML = r"""<!doctype html>
       scheduleLoading: false,
       botLogs: [],
       botLogLoading: false,
+      conversationLoading: false,
+      conversationSignature: "",
+      conversationBaseline: new Map(),
+      conversationBaselineReady: false,
+      notificationAccountId: "",
+      notificationsEnabled: false,
+      notificationAudioContext: null,
+      playedNotificationSoundKeys: new Set(),
+      openConversationMessageKeys: new Map(),
+      notificationWorker: null,
+      notificationWorkerListening: false,
       webAuthConfigured: false,
       authMode: "login",
       simpleMode: false,
@@ -3402,7 +3458,7 @@ INDEX_HTML = r"""<!doctype html>
       advanced: true,
       tab: "line",
       botPage: "schedules",
-      contactsSubtab: "people",
+      contactsSubtab: "all",
       e2eeReady: false,
       sending: false,
       lastStatus: null,
@@ -3410,6 +3466,7 @@ INDEX_HTML = r"""<!doctype html>
     };
 
     const BOT_BACKGROUND_REFRESH_MS = 3000;
+    const CONVERSATION_BACKGROUND_REFRESH_MS = 8000;
 
     const $ = (id) => document.getElementById(id);
 
@@ -3472,6 +3529,7 @@ INDEX_HTML = r"""<!doctype html>
       document.querySelectorAll("[data-i18n-title]").forEach((el) => {
         el.setAttribute("title", t(el.dataset.i18nTitle));
       });
+      syncNotificationButton();
       $("openPatternCategoriesButton").setAttribute("aria-label", t("patterns.settings"));
       updateMenuToggleLabels();
       renderSchedules();
@@ -3524,6 +3582,7 @@ INDEX_HTML = r"""<!doctype html>
         loadSchedules().catch(toastError);
         loadBotLogs().catch(toastError);
       }
+      if (tab === "line") refreshConversationsInBackground();
       if (tab === "ai") loadAiSettings();
     }
 
@@ -3545,15 +3604,20 @@ INDEX_HTML = r"""<!doctype html>
       if (page === "logs") loadBotLogs().catch(toastError);
     }
 
-    // ---- contacts sub-tabs (people / groups) ---------------------------
+    // ---- contacts sub-tabs (all / people / groups) ---------------------
     function setContactsSubtab(which) {
-      const groups = which === "groups";
-      state.contactsSubtab = groups ? "groups" : "people";
-      $("loadContactsButton").setAttribute("aria-selected", String(!groups));
-      $("loadGroupsButton").setAttribute("aria-selected", String(groups));
-      $("contactsList").classList.toggle("hidden", groups);
-      $("groupsList").classList.toggle("hidden", !groups);
-      $("contactSearchRow").classList.toggle("hidden", groups);
+      const selected = ["all", "people", "groups"].includes(which) ? which : "all";
+      state.contactsSubtab = selected;
+      $("loadAllButton").setAttribute("aria-selected", String(selected === "all"));
+      $("loadContactsButton").setAttribute("aria-selected", String(selected === "people"));
+      $("loadGroupsButton").setAttribute("aria-selected", String(selected === "groups"));
+      $("allList").classList.toggle("hidden", selected !== "all");
+      $("contactsList").classList.toggle("hidden", selected !== "people");
+      $("groupsList").classList.toggle("hidden", selected !== "groups");
+      $("contactSearchRow").classList.toggle("hidden", selected === "groups");
+      if (selected === "all") renderAllList();
+      else if (selected === "people") renderContactsList();
+      else renderGroupsList();
     }
 
     function toast(message, isError = false) {
@@ -3797,9 +3861,19 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function clearLists() {
+      $("allList").replaceChildren();
       $("contactsList").replaceChildren();
       $("groupsList").replaceChildren();
       $("messagesList").replaceChildren();
+      state.contacts = null;
+      state.groups = null;
+      state.conversationSignature = "";
+      state.conversationBaseline = new Map();
+      state.conversationBaselineReady = false;
+      state.notificationAccountId = "";
+      state.playedNotificationSoundKeys = new Set();
+      state.openConversationMessageKeys = new Map();
+      updateUnreadTitle([]);
       state.schedules = [];
       renderSchedules();
     }
@@ -4349,7 +4423,7 @@ INDEX_HTML = r"""<!doctype html>
           toast(t("toast.no_session_hint"), true);
           return;
         }
-        await Promise.allSettled([loadContacts(), loadGroups(), loadSchedules(), loadBotLogs()]);
+        await Promise.allSettled([loadConversationLists(), loadSchedules(), loadBotLogs()]);
       } finally {
         setAccountSwitchLoading(false);
       }
@@ -4386,7 +4460,7 @@ INDEX_HTML = r"""<!doctype html>
         setAccountControls(Boolean(status.authenticated));
         if (!status.authenticated) return;
         if (loadData) {
-            await Promise.allSettled([loadContacts(), loadGroups(), loadSchedules(), loadBotLogs()]);
+            await Promise.allSettled([loadConversationLists(), loadSchedules(), loadBotLogs()]);
         }
       } catch (err) {
         toastError(err);
@@ -4399,26 +4473,492 @@ INDEX_HTML = r"""<!doctype html>
       $("chatTitle").textContent = label || mid || t("chat.title");
       $("targetLabel").textContent = label ? `${label} / ${mid}` : (mid || t("chat.no_target"));
       $("scheduleTarget").value = mid || "";
+      document.querySelectorAll(".line-row").forEach((row) => {
+        row.classList.toggle("selected", row.dataset.mid === mid);
+      });
     }
 
-    function itemButton(title, mid, meta) {
+    function itemButton(title, mid, meta, options = {}) {
       const btn = document.createElement("button");
-      btn.className = "item";
+      const unreadCount = Math.max(0, Number(options.unreadCount) || 0);
+      btn.className = "line-row" + (unreadCount ? " has-unread" : "");
       btn.type = "button";
-      const strong = document.createElement("strong");
-      strong.textContent = title || t("chat.unknown");
-      const mono = document.createElement("span");
-      mono.className = "mono";
-      mono.textContent = mid;
-      const muted = document.createElement("span");
-      muted.className = "muted";
-      muted.textContent = meta || "";
-      btn.append(strong, mono, muted);
+      btn.dataset.mid = mid;
+      btn.classList.toggle("selected", state.target === mid);
+      btn.title = mid;
+
+      const displayName = title || t("chat.unknown");
+      const avatar = document.createElement("span");
+      avatar.className = "avatar";
+      avatar.textContent = displayName.trim().charAt(0).toUpperCase() || "?";
+
+      const main = document.createElement("span");
+      main.className = "line-row-main";
+      const name = document.createElement("span");
+      name.className = "line-row-name";
+      name.textContent = displayName;
+      const preview = document.createElement("span");
+      preview.className = "line-row-sub";
+      preview.textContent = options.lastMessage ? contentLabel(options.lastMessage) : (meta || mid);
+      main.append(name, preview);
+
+      const side = document.createElement("span");
+      side.className = "line-row-side";
+      const time = document.createElement("span");
+      time.className = "line-row-time";
+      time.textContent = fmtTime(options.lastMessageAt || 0);
+      side.appendChild(time);
+      if (unreadCount) {
+        const badge = document.createElement("span");
+        badge.className = "line-unread-badge";
+        badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+        badge.setAttribute("aria-label", t("contacts.unread", {n: unreadCount}));
+        side.appendChild(badge);
+      }
+
+      btn.append(avatar, main, side);
       btn.addEventListener("click", () => {
         setTarget(mid, title);
         loadMessages().catch(toastError);
       });
       return btn;
+    }
+
+    function clearUnreadForTarget(mid) {
+      for (const items of [state.contacts || [], state.groups || []]) {
+        const item = items.find((entry) => entry.mid === mid);
+        if (item) item.unreadCount = 0;
+      }
+      document.querySelectorAll(".line-row").forEach((row) => {
+        if (row.dataset.mid !== mid) return;
+        row.classList.remove("has-unread");
+        const badge = row.querySelector(".line-unread-badge");
+        if (badge) badge.remove();
+      });
+      updateUnreadTitle(currentConversationItems());
+    }
+
+    async function markConversationRead(chatMid, lastMessageId) {
+      if (!chatMid || !lastMessageId) return;
+      await post("/api/messages/read", {
+        accountId: selectedAccountId(),
+        chatMid,
+        lastMessageId
+      });
+      clearUnreadForTarget(chatMid);
+    }
+
+    function renderContactsList() {
+      const list = $("contactsList");
+      list.replaceChildren();
+      for (const contact of state.contacts || []) {
+        list.appendChild(itemButton(contact.name, contact.mid, contact.statusMessage || "", contact));
+      }
+      if (!list.children.length) {
+        listEmpty("contactsList", $("contactSearch").value.trim() ? "contacts.no_match" : "contacts.none");
+      }
+    }
+
+    function renderGroupsList() {
+      const list = $("groupsList");
+      list.replaceChildren();
+      for (const group of state.groups || []) {
+        list.appendChild(itemButton(
+          group.name,
+          group.mid,
+          t("groups.members", {n: group.memberCount || 0}),
+          group
+        ));
+      }
+      if (!list.children.length) listEmpty("groupsList", "groups.none");
+    }
+
+    function currentConversationRows() {
+      return [
+        ...(state.contacts || []).map((item) => ({item, kind: "contact"})),
+        ...(state.groups || []).map((item) => ({item, kind: "group"}))
+      ];
+    }
+
+    function currentConversationItems() {
+      const unique = new Map();
+      for (const row of currentConversationRows()) unique.set(row.item.mid, row.item);
+      return [...unique.values()];
+    }
+
+    function renderAllList() {
+      const list = $("allList");
+      list.replaceChildren();
+      const search = $("contactSearch").value.trim().toLocaleLowerCase();
+      const rows = currentConversationRows()
+        .filter(({item}) => !search || String(item.name || "").toLocaleLowerCase().includes(search))
+        .sort((a, b) => compareConversationItems(a.item, b.item));
+      for (const {item, kind} of rows) {
+        const meta = kind === "group"
+          ? t("groups.members", {n: item.memberCount || 0})
+          : (item.statusMessage || "");
+        list.appendChild(itemButton(item.name, item.mid, meta, item));
+      }
+      if (!list.children.length) {
+        listEmpty("allList", search ? "contacts.all_no_match" : "contacts.all_none");
+      }
+    }
+
+    function compareConversationItems(a, b) {
+      const aTime = Number(a.lastMessageAt) || 0;
+      const bTime = Number(b.lastMessageAt) || 0;
+      if (aTime !== bTime) return bTime - aTime;
+      const aRank = Number.isFinite(Number(a.conversationRank))
+        ? Number(a.conversationRank) : Number.MAX_SAFE_INTEGER;
+      const bRank = Number.isFinite(Number(b.conversationRank))
+        ? Number(b.conversationRank) : Number.MAX_SAFE_INTEGER;
+      if (aRank !== bRank) return aRank - bRank;
+      return String(a.name || a.mid || "").localeCompare(String(b.name || b.mid || ""));
+    }
+
+    function mergeConversationSummaries(conversations) {
+      const updates = new Map((conversations || []).map((item) => [item.mid, item]));
+      for (const items of [state.contacts || [], state.groups || []]) {
+        for (const item of items) {
+          const update = updates.get(item.mid);
+          if (!update) continue;
+          item.unreadCount = update.unreadCount || 0;
+          item.lastMessageAt = update.lastMessageAt || 0;
+          item.lastMessage = update.lastMessage || null;
+          item.conversationRank = update.rank;
+        }
+        items.sort(compareConversationItems);
+      }
+      const allScroll = $("allList").scrollTop;
+      const contactScroll = $("contactsList").scrollTop;
+      const groupScroll = $("groupsList").scrollTop;
+      renderAllList();
+      if (Array.isArray(state.contacts)) renderContactsList();
+      if (Array.isArray(state.groups)) renderGroupsList();
+      $("allList").scrollTop = allScroll;
+      $("contactsList").scrollTop = contactScroll;
+      $("groupsList").scrollTop = groupScroll;
+    }
+
+    function conversationSnapshot(items) {
+      const snapshot = new Map();
+      for (const item of items || []) {
+        const mid = String(item.mid || "");
+        if (!mid) continue;
+        const message = item.lastMessage || {};
+        const fallbackKey = [
+          item.lastMessageAt || message.createdTime || 0,
+          message.from || "",
+          message.contentType || "",
+          message.text || ""
+        ].join(":");
+        snapshot.set(mid, {
+          messageKey: String(message.id || fallbackKey),
+          unreadCount: Math.max(0, Number(item.unreadCount) || 0),
+          lastMessageAt: Number(item.lastMessageAt) || 0
+        });
+      }
+      return snapshot;
+    }
+
+    function primeConversationBaseline(accountId, items) {
+      state.notificationAccountId = accountId || "";
+      state.conversationBaseline = conversationSnapshot(items);
+      state.conversationBaselineReady = Boolean(accountId);
+      updateUnreadTitle(items);
+    }
+
+    function updateUnreadTitle(items) {
+      const seen = new Set();
+      let unread = 0;
+      for (const item of items || []) {
+        const mid = String(item.mid || "");
+        if (!mid || seen.has(mid)) continue;
+        seen.add(mid);
+        unread += Math.max(0, Number(item.unreadCount) || 0);
+      }
+      const count = unread > 99 ? "99+" : String(unread);
+      document.title = unread ? `(${count}) LinePassport` : "LinePassport";
+    }
+
+    function conversationName(item) {
+      const mid = String(item.mid || "");
+      const known = currentConversationItems().find((entry) => entry.mid === mid);
+      return (known && known.name)
+        || (item.lastMessage && item.lastMessage.fromName)
+        || t("chat.unknown");
+    }
+
+    function notificationsSupported() {
+      return typeof Notification !== "undefined";
+    }
+
+    function syncNotificationButton() {
+      const btn = $("notificationButton");
+      if (!btn) return;
+      const enabled = state.notificationsEnabled;
+      const key = enabled ? "notifications.disable" : "notifications.enable";
+      btn.dataset.i18nTitle = key;
+      btn.setAttribute("aria-pressed", String(enabled));
+      btn.setAttribute("aria-label", t(key));
+      btn.setAttribute("title", t(key));
+    }
+
+    function initializeNotifications() {
+      const saved = localStorage.getItem("linepassport.notifications");
+      state.notificationsEnabled = saved === "on"
+        && notificationsSupported()
+        && Notification.permission === "granted";
+      if (!state.notificationsEnabled && saved === "on") {
+        localStorage.setItem("linepassport.notifications", "off");
+      }
+      syncNotificationButton();
+      registerNotificationWorker();
+      const unlockSound = () => {
+        if (state.notificationsEnabled) unlockNotificationSound().catch(() => {});
+      };
+      document.addEventListener("pointerdown", unlockSound, {once: true, capture: true});
+      document.addEventListener("keydown", unlockSound, {once: true, capture: true});
+    }
+
+    async function unlockNotificationSound() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return false;
+      try {
+        if (!state.notificationAudioContext) {
+          state.notificationAudioContext = new AudioContextClass();
+        }
+        if (state.notificationAudioContext.state === "suspended") {
+          await state.notificationAudioContext.resume();
+        }
+        return state.notificationAudioContext.state === "running";
+      } catch (err) {
+        return false;
+      }
+    }
+
+    async function playNotificationSound() {
+      const button = $("notificationButton");
+      if (!state.notificationsEnabled) {
+        if (button) button.dataset.soundStatus = "disabled";
+        return false;
+      }
+      if (!(await unlockNotificationSound())) {
+        if (button) button.dataset.soundStatus = "blocked";
+        return false;
+      }
+      const context = state.notificationAudioContext;
+      const startAt = context.currentTime + 0.02;
+      const notes = [
+        {offset: 0, frequency: 740},
+        {offset: 0.18, frequency: 987.77},
+        {offset: 0.36, frequency: 1318.51}
+      ];
+      for (const note of notes) {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const noteStart = startAt + note.offset;
+        const noteEnd = noteStart + 0.24;
+        oscillator.type = "triangle";
+        oscillator.frequency.setValueAtTime(note.frequency, noteStart);
+        gain.gain.setValueAtTime(0.0001, noteStart);
+        gain.gain.exponentialRampToValueAtTime(0.32, noteStart + 0.025);
+        gain.gain.exponentialRampToValueAtTime(0.0001, noteEnd);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(noteStart);
+        oscillator.stop(noteEnd + 0.02);
+      }
+      if (button) {
+        button.dataset.soundStatus = "played";
+        button.dataset.soundPlayedAt = String(Date.now());
+      }
+      return true;
+    }
+
+    function messageNotificationKey(accountId, mid, message) {
+      if (!message) return "";
+      const identity = message.id || [
+        message.createdTime || 0,
+        message.from || "",
+        message.contentType || "",
+        message.text || ""
+      ].join(":");
+      return identity ? `${accountId}:${mid}:${identity}` : "";
+    }
+
+    function playNotificationSoundForItems(accountId, items) {
+      if (!state.notificationsEnabled) return;
+      let hasNewSound = false;
+      for (const item of items || []) {
+        const key = messageNotificationKey(accountId, item.mid, item.lastMessage);
+        if (!key || state.playedNotificationSoundKeys.has(key)) continue;
+        state.playedNotificationSoundKeys.add(key);
+        hasNewSound = true;
+      }
+      while (state.playedNotificationSoundKeys.size > 200) {
+        const oldest = state.playedNotificationSoundKeys.values().next().value;
+        state.playedNotificationSoundKeys.delete(oldest);
+      }
+      if (hasNewSound) playNotificationSound().catch(() => {});
+    }
+
+    function openNotifiedConversation(data) {
+      window.focus();
+      if (!data || selectedAccountId() !== data.accountId) return;
+      setTab("line");
+      setContactsSubtab("all");
+      setTarget(data.mid, data.name);
+      loadMessages().catch(toastError);
+    }
+
+    async function registerNotificationWorker() {
+      if (!("serviceWorker" in navigator)) return;
+      if (!state.notificationWorkerListening) {
+        navigator.serviceWorker.addEventListener("message", (event) => {
+          if (event.data && event.data.type === "linepassport-notification-click") {
+            openNotifiedConversation(event.data);
+          }
+        });
+        state.notificationWorkerListening = true;
+      }
+      try {
+        await navigator.serviceWorker.register("/service-worker.js");
+        state.notificationWorker = await navigator.serviceWorker.ready;
+      } catch (err) {
+        state.notificationWorker = null;
+      }
+    }
+
+    async function toggleNotifications() {
+      if (state.notificationsEnabled) {
+        state.notificationsEnabled = false;
+        localStorage.setItem("linepassport.notifications", "off");
+        if (state.notificationAudioContext) {
+          state.notificationAudioContext.suspend().catch(() => {});
+        }
+        syncNotificationButton();
+        toast(t("notifications.disabled"));
+        return;
+      }
+      if (!notificationsSupported()) {
+        state.notificationsEnabled = false;
+        localStorage.setItem("linepassport.notifications", "off");
+        syncNotificationButton();
+        toast(t("notifications.unsupported"), true);
+        return;
+      }
+      let permission = Notification.permission;
+      const soundUnlockPromise = unlockNotificationSound();
+      const permissionPromise = permission === "default"
+        ? Notification.requestPermission()
+        : Promise.resolve(permission);
+      permission = await permissionPromise;
+      const soundUnlocked = await soundUnlockPromise;
+      if (permission !== "granted") {
+        state.notificationsEnabled = false;
+        localStorage.setItem("linepassport.notifications", "off");
+        if (state.notificationAudioContext) {
+          state.notificationAudioContext.suspend().catch(() => {});
+        }
+        syncNotificationButton();
+        toast(t("notifications.denied"), true);
+        return;
+      }
+      state.notificationsEnabled = true;
+      localStorage.setItem("linepassport.notifications", "on");
+      syncNotificationButton();
+      const soundReady = soundUnlocked && await playNotificationSound();
+      toast(t(soundReady ? "notifications.enabled" : "notifications.sound_unavailable"), !soundReady);
+    }
+
+    async function showSystemNotification(accountId, item) {
+      if (!state.notificationsEnabled || !notificationsSupported()) return;
+      if (Notification.permission !== "granted") return;
+      const name = conversationName(item);
+      const data = {accountId, mid: item.mid, name};
+      const title = t("notifications.new_message", {name});
+      const options = {
+        body: contentLabel(item.lastMessage || {}),
+        tag: `linepassport:${accountId}:${item.mid}`,
+        renotify: true,
+        silent: false,
+        vibrate: [100, 60, 100],
+        data
+      };
+      try {
+        if (state.notificationWorker) {
+          await state.notificationWorker.showNotification(title, options);
+          return;
+        }
+        const notice = new Notification(title, options);
+        notice.onclick = () => {
+          openNotifiedConversation(data);
+          notice.close();
+        };
+      } catch (err) {
+        /* Browser notification failures must not interrupt background refresh. */
+      }
+    }
+
+    function processNewMessageNotifications(accountId, conversations) {
+      updateUnreadTitle(conversations);
+      const next = conversationSnapshot(conversations);
+      if (state.notificationAccountId !== accountId || !state.conversationBaselineReady) {
+        primeConversationBaseline(accountId, conversations);
+        return;
+      }
+      const incoming = [];
+      const visibleAlerts = [];
+      for (const item of conversations) {
+        const mid = String(item.mid || "");
+        const current = next.get(mid);
+        if (!mid || !current) continue;
+        const previous = state.conversationBaseline.get(mid);
+        const message = item.lastMessage || {};
+        const changed = !previous || current.messageKey !== previous.messageKey;
+        const isOwn = state.profile && message.from === state.profile.mid;
+        const isOpen = document.visibilityState === "visible"
+          && state.tab === "line"
+          && state.target === item.mid;
+        if (changed && current.unreadCount > 0 && !isOwn) {
+          incoming.push(item);
+          if (!isOpen) visibleAlerts.push(item);
+        }
+      }
+      state.conversationBaseline = next;
+      if (!incoming.length) return;
+      playNotificationSoundForItems(accountId, incoming);
+      if (!visibleAlerts.length) return;
+      if (visibleAlerts.length === 1) {
+        toast(t("notifications.new_message", {name: conversationName(visibleAlerts[0])}));
+      } else {
+        toast(t("notifications.new_messages", {n: visibleAlerts.length}));
+      }
+      for (const item of visibleAlerts.slice(0, 5)) {
+        showSystemNotification(accountId, item).catch(() => {});
+      }
+    }
+
+    async function refreshConversationsInBackground() {
+      if ($("appShell").classList.contains("app-hidden")) return;
+      const accountId = selectedAccountId();
+      if (!accountId || state.conversationLoading) return;
+      if (!Array.isArray(state.contacts) && !Array.isArray(state.groups)) return;
+      state.conversationLoading = true;
+      try {
+        const data = await api(`/api/conversations?${accountQuery(accountId)}&limit=1000`);
+        const conversations = data.conversations || [];
+        processNewMessageNotifications(accountId, conversations);
+        const signature = accountId + ":" + JSON.stringify(conversations);
+        if (signature === state.conversationSignature) return;
+        state.conversationSignature = signature;
+        mergeConversationSummaries(conversations);
+      } catch (err) {
+        /* Background refresh is best effort; manual refresh remains available. */
+      } finally {
+        state.conversationLoading = false;
+      }
     }
 
     function listLoading(id) {
@@ -4451,27 +4991,84 @@ INDEX_HTML = r"""<!doctype html>
       list.appendChild(row);
     }
 
-    async function loadContacts() {
+    async function loadContacts(options = {}) {
       const accountId = requireAccount();
       if (!accountId) return;
       const btn = $("contactsRefreshButton");
-      btn.disabled = true;
-      btn.setAttribute("aria-busy", "true");
+      if (!options.shared) {
+        btn.disabled = true;
+        btn.setAttribute("aria-busy", "true");
+      }
       listLoading("contactsList");
       try {
         const search = encodeURIComponent($("contactSearch").value.trim());
         const data = await api(`/api/contacts?${accountQuery(accountId)}&limit=250&search=${search}`);
         state.contacts = data.contacts || [];
         populateScheduleTarget();
-        const list = $("contactsList");
-        list.replaceChildren();
-        for (const c of data.contacts || []) {
-          list.appendChild(itemButton(c.name, c.mid, c.statusMessage || ""));
-        }
-        if (!list.children.length) listEmpty("contactsList", $("contactSearch").value.trim() ? "contacts.no_match" : "contacts.none");
+        renderContactsList();
+        if (!options.suppressAllRender) renderAllList();
+        updateUnreadTitle(currentConversationItems());
       } catch (err) {
         listError("contactsList", loadContacts);
         toastError(err);
+      } finally {
+        if (!options.shared) {
+          btn.disabled = false;
+          btn.setAttribute("aria-busy", "false");
+          applyPermissions();
+        }
+      }
+    }
+
+    async function loadGroups(options = {}) {
+      const accountId = requireAccount();
+      if (!accountId) return;
+      const btn = $("contactsRefreshButton");
+      if (!options.shared) {
+        btn.disabled = true;
+        btn.setAttribute("aria-busy", "true");
+      }
+      listLoading("groupsList");
+      try {
+        const data = await api(`/api/groups?${accountQuery(accountId)}&limit=200`);
+        state.groups = data.groups || [];
+        populateScheduleTarget();
+        renderGroupsList();
+        if (!options.suppressAllRender) renderAllList();
+        updateUnreadTitle(currentConversationItems());
+      } catch (err) {
+        listError("groupsList", loadGroups);
+        toastError(err);
+      } finally {
+        if (!options.shared) {
+          btn.disabled = false;
+          btn.setAttribute("aria-busy", "false");
+          applyPermissions();
+        }
+      }
+    }
+
+    async function loadConversationLists() {
+      const accountId = requireAccount();
+      if (!accountId) return;
+      const btn = $("contactsRefreshButton");
+      btn.disabled = true;
+      btn.setAttribute("aria-busy", "true");
+      if (state.contactsSubtab === "all") listLoading("allList");
+      try {
+        await Promise.allSettled([
+          loadContacts({shared: true, suppressAllRender: true}),
+          loadGroups({shared: true, suppressAllRender: true})
+        ]);
+        renderAllList();
+        if (!state.conversationBaselineReady || state.notificationAccountId !== accountId) {
+          state.notificationAccountId = accountId;
+          state.conversationBaseline = new Map();
+          state.conversationBaselineReady = false;
+          await refreshConversationsInBackground();
+        } else {
+          updateUnreadTitle(currentConversationItems());
+        }
       } finally {
         btn.disabled = false;
         btn.setAttribute("aria-busy", "false");
@@ -4479,31 +5076,10 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
-    async function loadGroups() {
-      const accountId = requireAccount();
-      if (!accountId) return;
-      const btn = $("contactsRefreshButton");
-      btn.disabled = true;
-      btn.setAttribute("aria-busy", "true");
-      listLoading("groupsList");
-      try {
-        const data = await api(`/api/groups?${accountQuery(accountId)}&limit=200`);
-        state.groups = data.groups || [];
-        populateScheduleTarget();
-        const list = $("groupsList");
-        list.replaceChildren();
-        for (const g of data.groups || []) {
-          list.appendChild(itemButton(g.name, g.mid, `${g.memberCount || 0}`));
-        }
-        if (!list.children.length) listEmpty("groupsList", "groups.none");
-      } catch (err) {
-        listError("groupsList", loadGroups);
-        toastError(err);
-      } finally {
-        btn.disabled = false;
-        btn.setAttribute("aria-busy", "false");
-        applyPermissions();
-      }
+    function refreshCurrentConversationList() {
+      if (state.contactsSubtab === "groups") return loadGroups();
+      if (state.contactsSubtab === "people") return loadContacts();
+      return loadConversationLists();
     }
 
     function targetValue() {
@@ -4553,7 +5129,7 @@ INDEX_HTML = r"""<!doctype html>
           const div = document.createElement("div");
           const isMe = m.from === myMid;
           const ctype = m.contentType;
-          const isImage = (ctype === 1 || ctype === "1") && m.id && !m.encrypted;
+          const isImage = (ctype === 1 || ctype === "1") && m.id && m.mediaReady;
           const isSticker = (ctype === 7 || ctype === "7") && m.stickerId;
           div.className = "bubble" + (isMe ? " me" : "") + (isImage || isSticker ? " has-media" : "");
           const body = messageBody(m, accountId, isImage, isSticker);
@@ -4576,6 +5152,21 @@ INDEX_HTML = r"""<!doctype html>
         }
         if (!list.children.length) listEmpty("messagesList", "chat.empty");
         list.scrollTop = list.scrollHeight;
+        const messages = data.messages || [];
+        const lastMessage = messages.length ? messages[messages.length - 1] : null;
+        const openConversationKey = `${accountId}:${target}`;
+        const lastMessageKey = messageNotificationKey(accountId, target, lastMessage);
+        const previousMessageKey = state.openConversationMessageKeys.get(openConversationKey) || "";
+        state.openConversationMessageKeys.set(openConversationKey, lastMessageKey);
+        if (silent && previousMessageKey && lastMessageKey !== previousMessageKey
+            && lastMessage && lastMessage.from !== myMid) {
+          playNotificationSoundForItems(accountId, [{mid: target, lastMessage}]);
+        }
+        if (lastMessage && lastMessage.id) {
+          try {
+            await markConversationRead(target, lastMessage.id);
+          } catch (err) { /* keep unread state when LINE cannot confirm the read receipt */ }
+        }
       } catch (err) {
         if (!silent) listError("messagesList", () => loadMessages());
         toastError(err);
@@ -4695,7 +5286,7 @@ INDEX_HTML = r"""<!doctype html>
         img.className = "msg-media";
         img.loading = "lazy";
         img.alt = t("content.image");
-        img.src = `/api/message-content?${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}`;
+        img.src = `/api/message-content?${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}&chat_mid=${encodeURIComponent(targetValue())}`;
         img.addEventListener("click", () => window.open(img.src, "_blank", "noopener"));
         img.addEventListener("error", () => img.replaceWith(mediaFallback(m)));
         return img;
@@ -4713,9 +5304,7 @@ INDEX_HTML = r"""<!doctype html>
       const isImgType = ct === 1 || ct === "1";
       const isFile = ct === 13 || ct === "13" || ct === 14 || ct === "14"
         || ct === 16 || ct === "16" || ct === 18 || ct === "18";
-      if ((isImgType || isFile) && m.encrypted) {
-        // Letter-Sealed (E2EE) media lives in OBS encrypted; we can't decrypt
-        // it here, so show an honest lock placeholder instead of a broken image.
+      if ((isImgType || isFile) && m.encrypted && !m.mediaReady) {
         const d = document.createElement("div");
         d.className = "msg-chip";
         d.textContent = isFile && m.fileName
@@ -4726,7 +5315,7 @@ INDEX_HTML = r"""<!doctype html>
       if (isFile && m.id) {
         const a = document.createElement("a");
         a.className = "msg-file";
-        a.href = `/api/message-content?${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}`;
+        a.href = `/api/message-content?${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}&chat_mid=${encodeURIComponent(targetValue())}`;
         a.setAttribute("download", m.fileName || "file");
         a.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg>';
         const span = document.createElement("span");
@@ -6039,26 +6628,26 @@ INDEX_HTML = r"""<!doctype html>
     $("beginAddAccountButton").addEventListener("click", () => startLogin().catch(toastError));
     $("cancelLoginButton").addEventListener("click", () => cancelLogin().catch(toastError));
     $("qrCopyButton").addEventListener("click", () => copyQrLink());
+    $("loadAllButton").addEventListener("click", () => setContactsSubtab("all"));
     $("loadContactsButton").addEventListener("click", () => {
       setContactsSubtab("people");
-      loadContacts().catch(toastError);
     });
-    $("contactSearchButton").addEventListener("click", () => loadContacts().catch(toastError));
+    $("contactSearchButton").addEventListener("click", () => refreshCurrentConversationList().catch(toastError));
     $("contactSearch").addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter") loadContacts().catch(toastError);
+      if (ev.key === "Enter") refreshCurrentConversationList().catch(toastError);
     });
     $("loadGroupsButton").addEventListener("click", () => {
       setContactsSubtab("groups");
-      loadGroups().catch(toastError);
     });
     $("contactsRefreshButton").addEventListener("click", () => {
-      (state.contactsSubtab === "groups" ? loadGroups() : loadContacts()).catch(toastError);
+      refreshCurrentConversationList().catch(toastError);
     });
     document.querySelectorAll(".tabbar .tab").forEach((btn) => {
       btn.addEventListener("click", () => setTab(btn.dataset.tab));
     });
     $("loadMessagesButton").addEventListener("click", () => loadMessages().catch(toastError));
     $("reloadMessagesButton").addEventListener("click", () => loadMessages().catch(toastError));
+    $("notificationButton").addEventListener("click", () => toggleNotifications().catch(toastError));
     $("sendButton").addEventListener("click", () => sendText(false).catch(toastError));
     $("sendEncryptedButton").addEventListener("click", () => sendText(true).catch(toastError));
     $("imageButton").addEventListener("click", () => $("imageFileInput").click());
@@ -6181,14 +6770,18 @@ INDEX_HTML = r"""<!doctype html>
 
     // Keep both Bot lists live without showing an overlay or disturbing scroll.
     setInterval(refreshBotInBackground, BOT_BACKGROUND_REFRESH_MS);
+    setInterval(refreshConversationsInBackground, CONVERSATION_BACKGROUND_REFRESH_MS);
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") refreshBotInBackground();
+      refreshConversationsInBackground();
+      if (document.visibilityState !== "visible") return;
+      refreshBotInBackground();
     });
 
     state.lang = localStorage.getItem("okline.lang") === "en" ? "en" : "th";
     state.advanced = true;
+    initializeNotifications();
     setTab(localStorage.getItem("okline.tab") || "line");
-    setContactsSubtab("people");
+    setContactsSubtab("all");
     applyI18n();
     applyAdvanced();
     setLoginStep(1);
@@ -6199,6 +6792,23 @@ INDEX_HTML = r"""<!doctype html>
   </script>
 </body>
 </html>
+"""
+
+SERVICE_WORKER_JS = r"""
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const data = event.notification.data || {};
+  event.waitUntil(
+    self.clients.matchAll({type: "window", includeUncontrolled: true}).then((clients) => {
+      for (const client of clients) {
+        client.postMessage({type: "linepassport-notification-click", ...data});
+        if ("focus" in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow("/");
+      return undefined;
+    })
+  );
+});
 """
 
 GOD_HTML = r"""<!doctype html>
@@ -9382,6 +9992,12 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         try:
             if method == "GET" and parsed.path == "/":
                 return self._html(INDEX_HTML)
+            if method == "GET" and parsed.path == "/service-worker.js":
+                return self._bytes(
+                    SERVICE_WORKER_JS.encode("utf-8"),
+                    "application/javascript; charset=utf-8",
+                    HTTPStatus.OK,
+                )
             if method == "GET" and parsed.path in {"/god", "/god/"}:
                 return self._html(GOD_HTML)
             if parsed.path == "/favicon.ico":
@@ -9770,12 +10386,19 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/groups":
             self._require_permission("read")
             return self._with_api(query, lambda api: self._groups(api, query))
+        if method == "GET" and path == "/api/conversations":
+            self._require_permission("read")
+            return self._with_api(query, lambda api: self._conversations(api, query))
         if method == "GET" and path == "/api/boxes":
             self._require_permission("read")
             return self._with_api(query, lambda api: self._boxes(api, query))
         if method == "GET" and path == "/api/messages":
             self._require_permission("read")
             return self._with_api(query, lambda api: self._messages(api, query))
+        if method == "POST" and path == "/api/messages/read":
+            self._require_permission("read")
+            body = self._read_json()
+            return self._with_api(body, lambda api: self._mark_messages_read(api, body))
         if method == "GET" and path == "/api/find-user":
             self._require_permission("tools")
             return self._with_api(query, lambda api: self._find_user(api, query))
@@ -9828,12 +10451,14 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
     def _contacts(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
         search = _query_one(query, "search", "").lower()
         limit = _query_int(query, "limit", 250, minimum=1, maximum=1000)
-        recency = _chat_recency_map(api)
+        chat_summaries = _chat_summary_map(api)
+        recency = _chat_recency_from_summaries(chat_summaries)
         rows = []
         for _mid, contact in _contact_rows(api):
             name = contact.get("name") or ""
             if search and search not in name.lower():
                 continue
+            contact.update(_chat_list_fields(chat_summaries.get(str(contact.get("mid") or ""))))
             rows.append(contact)
         rows.sort(key=lambda row: _recent_chat_sort_key(row, recency))
         rows = rows[:limit]
@@ -9845,21 +10470,40 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         mids = list(chat_mids.get("memberChatMids", []) or [])
         invited = set(chat_mids.get("invitedChatMids", []) or [])
         mids.extend([m for m in invited if m not in mids])
-        recency = _chat_recency_map(api)
+        chat_summaries = _chat_summary_map(api)
+        recency = _chat_recency_from_summaries(chat_summaries)
         groups = []
         for raw in api.get_chats(mids).get("chats", []) if mids else []:
             grp = Group.from_dict(raw)
-            groups.append(
-                {
-                    "mid": grp.chat_mid,
-                    "name": grp.name,
-                    "memberCount": grp.member_count,
-                    "invited": grp.chat_mid in invited,
-                }
-            )
+            group = {
+                "mid": grp.chat_mid,
+                "name": grp.name,
+                "memberCount": grp.member_count,
+                "invited": grp.chat_mid in invited,
+            }
+            group.update(_chat_list_fields(chat_summaries.get(grp.chat_mid)))
+            groups.append(group)
         groups.sort(key=lambda row: _recent_chat_sort_key(row, recency))
         groups = groups[:limit]
         return {"groups": groups, "count": len(groups)}
+
+    def _conversations(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
+        limit = _query_int(query, "limit", 1000, minimum=1, maximum=1000)
+        summaries = _chat_summary_map(api, limit)
+        conversations = []
+        for mid, summary in summaries.items():
+            item = {"mid": mid, "rank": _coerce_int(summary.get("rank"))}
+            item.update(_chat_list_fields(summary))
+            conversations.append(item)
+        conversations.sort(
+            key=lambda item: (
+                int(item.get("lastMessageAt") or 0) <= 0,
+                -int(item.get("lastMessageAt") or 0),
+                int(item.get("rank") or 0),
+                str(item.get("mid") or ""),
+            )
+        )
+        return {"conversations": conversations, "count": len(conversations)}
 
     def _boxes(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
         limit = _query_int(query, "limit", 20, minimum=1, maximum=100)
@@ -9901,6 +10545,16 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             "messages": [_message_summary(api, msg, names) for msg in reversed(messages)],
             "count": len(messages),
         }
+
+    def _mark_messages_read(self, api: OkLine, body: dict[str, Any]) -> dict[str, Any]:
+        chat_mid = str(body.get("chatMid") or "").strip()
+        last_message_id = str(body.get("lastMessageId") or "").strip()
+        if not chat_mid:
+            raise WebError(HTTPStatus.BAD_REQUEST, "chatMid is required.")
+        if not last_message_id:
+            raise WebError(HTTPStatus.BAD_REQUEST, "lastMessageId is required.")
+        api.send_chat_checked(chat_mid, last_message_id)
+        return {"ok": True, "chatMid": chat_mid, "lastMessageId": last_message_id}
 
     def _find_user(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
         userid = _query_one(query, "userid")
@@ -9951,15 +10605,15 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         return {"ok": True, "messageId": message_id, "result": result}
 
     def _message_content(self, query: dict[str, list[str]]) -> None:
-        """Proxy the raw bytes of a chat image/media object out of OBS so the
-        browser can display it inline (OBS needs the signed session)."""
+        """Proxy and, when needed, decrypt chat media from OBS."""
         self._require_permission("read")
         message_id = _query_one(query, "message_id")
+        chat_mid = _query_one(query, "chat_mid")
         if not message_id:
             raise WebError(HTTPStatus.BAD_REQUEST, "message_id is required.")
         try:
             data = self._with_api(
-                query, lambda api: api.obs.download_object("talk", "m", message_id)
+                query, lambda api: _download_message_content(api, message_id, chat_mid)
             )
         except WebError:
             raise
@@ -11739,7 +12393,26 @@ def _message_box_time(box: dict[str, Any]) -> int:
     return 0
 
 
-def _chat_recency_map(api: OkLine, limit: int = 1000) -> dict[str, tuple[int, int]]:
+def _message_box_messages(box: dict[str, Any]) -> list[dict[str, Any]]:
+    for candidate in (box, box.get("messageBox")):
+        if not isinstance(candidate, dict):
+            continue
+        messages = candidate.get("lastMessages")
+        if isinstance(messages, list):
+            return [message for message in messages if isinstance(message, dict)]
+    return []
+
+
+def _message_box_unread_count(box: dict[str, Any]) -> int:
+    for candidate in (box, box.get("messageBox")):
+        if not isinstance(candidate, dict):
+            continue
+        if "unreadCount" in candidate:
+            return max(0, _coerce_int(candidate.get("unreadCount")))
+    return 0
+
+
+def _chat_summary_map(api: OkLine, limit: int = 1000) -> dict[str, dict[str, Any]]:
     try:
         boxes = api.get_message_boxes(limit=limit, last_messages_per_box=1)
     except TypeError:
@@ -11750,21 +12423,56 @@ def _chat_recency_map(api: OkLine, limit: int = 1000) -> dict[str, tuple[int, in
     except Exception:
         return {}
     message_boxes = boxes.get("messageBoxes", []) if isinstance(boxes, dict) else []
-    recency: dict[str, tuple[int, int]] = {}
+    summaries: dict[str, dict[str, Any]] = {}
     for rank, box in enumerate(message_boxes):
         if not isinstance(box, dict):
             continue
         mid = _message_box_id(box)
-        if mid and mid not in recency:
-            recency[mid] = (rank, _message_box_time(box))
-    return recency
+        if not mid or mid in summaries:
+            continue
+        messages = _message_box_messages(box)
+        latest = max(
+            enumerate(messages),
+            key=lambda item: (_message_time(item[1]), item[0]),
+            default=(0, None),
+        )[1]
+        summaries[mid] = {
+            "rank": rank,
+            "lastAt": _message_box_time(box),
+            "unreadCount": _message_box_unread_count(box),
+            "lastMessage": _message_summary(api, latest, {}) if latest else None,
+        }
+    return summaries
+
+
+def _chat_recency_from_summaries(
+    summaries: dict[str, dict[str, Any]],
+) -> dict[str, tuple[int, int]]:
+    return {
+        mid: (_coerce_int(summary.get("rank")), _coerce_int(summary.get("lastAt")))
+        for mid, summary in summaries.items()
+    }
+
+
+def _chat_recency_map(api: OkLine, limit: int = 1000) -> dict[str, tuple[int, int]]:
+    return _chat_recency_from_summaries(_chat_summary_map(api, limit))
+
+
+def _chat_list_fields(summary: dict[str, Any] | None) -> dict[str, Any]:
+    if not summary:
+        return {"unreadCount": 0, "lastMessageAt": 0, "lastMessage": None}
+    return {
+        "unreadCount": max(0, _coerce_int(summary.get("unreadCount"))),
+        "lastMessageAt": _coerce_int(summary.get("lastAt")),
+        "lastMessage": summary.get("lastMessage"),
+    }
 
 
 def _recent_chat_sort_key(row: dict[str, Any], recency: dict[str, tuple[int, int]]):
     mid = str(row.get("mid") or "")
     rank, last_at = recency.get(mid, (1_000_000_000, 0))
     name = str(row.get("name") or "").casefold()
-    return (rank == 1_000_000_000, rank, -last_at, name, mid)
+    return (last_at <= 0, -last_at, rank, name, mid)
 
 
 def _contact_rows(api: OkLine) -> list[tuple[str, dict[str, Any]]]:
@@ -11836,21 +12544,57 @@ def _resolve_to(api: OkLine, value: str) -> str:
     raise WebError(HTTPStatus.BAD_REQUEST, f"{len(matches)} contacts match: {names}")
 
 
+def _download_message_content(api: OkLine, message_id: str, chat_mid: str = "") -> bytes:
+    message = None
+    if chat_mid:
+        recent = api.get_recent_messages(chat_mid, 200) or []
+        message = next(
+            (
+                item
+                for item in recent
+                if isinstance(item, dict) and str(item.get("id") or "") == message_id
+            ),
+            None,
+        )
+    if not message or not message.get("chunks"):
+        return api.obs.download_object("talk", "m", message_id)
+    if not api.e2ee.is_ready():
+        raise RuntimeError("E2EE keys are not available for this account")
+
+    decrypted = api.decrypt_message(message)
+    raw_meta = decrypted.get("contentMetadata")
+    meta = raw_meta if isinstance(raw_meta, dict) else {}
+    key_material = str(meta.get("ENC_KM") or "")
+    if not key_material:
+        raise RuntimeError("Encrypted media key is not available")
+    sid = str(meta.get("SID") or "m")
+    oid = str(meta.get("OID") or message_id)
+    encrypted = api.obs.download_object(
+        "talk",
+        sid,
+        oid,
+        talk_meta=encode_message_talk_meta(message_id),
+    )
+    return e2ee_frame.decrypt_media_blob(encrypted, key_material)
+
+
 def _message_summary(api: OkLine, msg: Any, names: dict[str, str]) -> dict[str, Any]:
     if not isinstance(msg, dict):
         return {"text": str(msg)}
+    resolved = msg
     text = msg.get("text")
     encrypted = bool(msg.get("chunks"))
     if encrypted:
         if api.e2ee.is_ready():
             try:
-                text = api.decrypt_message(msg).get("text")
+                resolved = api.decrypt_message(msg)
+                text = resolved.get("text")
             except Exception:
                 text = "[encrypted]"
         else:
             text = "[encrypted]"
     sender = msg.get("from") or ""
-    raw_meta = msg.get("contentMetadata")
+    raw_meta = resolved.get("contentMetadata")
     meta = raw_meta if isinstance(raw_meta, dict) else {}
     return {
         "id": msg.get("id"),
@@ -11863,6 +12607,7 @@ def _message_summary(api: OkLine, msg: Any, names: dict[str, str]) -> dict[str, 
         "fileName": meta.get("FILE_NAME"),
         "createdTime": msg.get("createdTime"),
         "encrypted": encrypted,
+        "mediaReady": not encrypted or bool(meta.get("ENC_KM")),
     }
 
 

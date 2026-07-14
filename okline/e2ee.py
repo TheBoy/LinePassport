@@ -220,6 +220,14 @@ class E2EEManager:
         out["text"] = plain.get("text")
         if plain.get("location") is not None:
             out["location"] = plain["location"]
+        meta = dict(out.get("contentMetadata") or {})
+        if plain.get("REPLACE") is not None:
+            meta["REPLACE"] = plain["REPLACE"]
+        if plain.get("keyMaterial"):
+            meta["ENC_KM"] = plain["keyMaterial"]
+        if plain.get("fileName"):
+            meta["FILE_NAME"] = plain["fileName"]
+        out["contentMetadata"] = meta
         out["_decrypted"] = True
         return out
 

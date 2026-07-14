@@ -10,9 +10,15 @@ from __future__ import annotations
 import base64
 import json
 
+import pytest
 from conftest import USER_MID, USER_MID2, FakeResp, build_api, enveloped
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from okline import e2ee_crypto as fr
+from okline.e2ee import E2EEManager
 
 
 # --- framing ---------------------------------------------------------------
@@ -51,6 +57,48 @@ def test_message_e2ee_version():
     assert fr.message_e2ee_version({"contentMetadata": {"e2eeVersion": "2"}}) == 2
     assert fr.message_e2ee_version({"contentMetadata": {}}) == 2  # default
     assert fr.message_e2ee_version({}) == 2
+
+
+def test_media_blob_decrypts_and_rejects_modified_hmac():
+    key_material = base64.b64encode(bytes(range(32))).decode("ascii")
+    derived = HKDF(
+        algorithm=hashes.SHA256(), length=76, salt=b"", info=b"FileEncryption"
+    ).derive(bytes(range(32)))
+    enc_key, mac_key, nonce = derived[:32], derived[32:64], derived[64:]
+    plaintext = b"\xff\xd8\xfftest image bytes"
+    encryptor = Cipher(
+        algorithms.AES(enc_key), modes.CTR(nonce + b"\0\0\0\0")
+    ).encryptor()
+    ciphertext = encryptor.update(plaintext) + encryptor.finalize()
+    signer = hmac.HMAC(mac_key, hashes.SHA256())
+    signer.update(ciphertext)
+    blob = ciphertext + signer.finalize()
+
+    assert fr.decrypt_media_blob(blob, key_material) == plaintext
+    with pytest.raises(InvalidSignature):
+        fr.decrypt_media_blob(blob[:-1] + bytes([blob[-1] ^ 1]), key_material)
+
+
+def test_finish_decrypt_restores_e2ee_media_metadata():
+    plain = {
+        "keyMaterial": "secret-media-key",
+        "fileName": "photo.jpg",
+        "REPLACE": {"sticon": {"resources": []}},
+    }
+    encoded = base64.b64encode(json.dumps(plain).encode()).decode()
+    manager = object.__new__(E2EEManager)
+    result = manager._finish_decrypt(
+        {"contentMetadata": {"SID": "emi", "OID": "object-id"}}, encoded
+    )
+
+    assert result["contentMetadata"] == {
+        "SID": "emi",
+        "OID": "object-id",
+        "ENC_KM": "secret-media-key",
+        "FILE_NAME": "photo.jpg",
+        "REPLACE": {"sticon": {"resources": []}},
+    }
+    assert result["_decrypted"] is True
 
 
 # --- cross-session key persistence -----------------------------------------

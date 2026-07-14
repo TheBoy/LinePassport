@@ -4,7 +4,8 @@ The actual encryption/decryption and key handling happen inside LINE's WASM
 module (driven via the Node bridge).  This module only does the *framing* around
 it, extracted verbatim from the extension bundle:
 
-* **plaintext**  = ``JSON.stringify({text, location, REPLACE})`` UTF-8  (``gL``/``wL``)
+* **plaintext**  = ``JSON.stringify({text, location, REPLACE, keyMaterial, fileName})``
+                     UTF-8  (``gL``/``wL``)
 * **chunks (V2)** = ``[b64(ct[0:16]), b64(ct[28:]), b64(ct[16:28]),
                        b64(keyId4BE_sender), b64(keyId4BE_receiver)]``  (``vL``)
 * **decrypt**    = reconstruct ``ct = c[0] + c[2] + c[1]``  (``hL``)
@@ -19,6 +20,10 @@ from __future__ import annotations
 import base64
 import json
 from typing import Any
+
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 
 def _b64e(b: bytes) -> str:
@@ -42,8 +47,8 @@ def key_id_from_bytes(b: bytes) -> int:
 def serialize_plaintext(message: dict[str, Any]) -> bytes:
     """``wL(gL(message))`` — the bytes that get encrypted.
 
-    JSON of ``{text, location, REPLACE}`` (omitting absent fields, like the JS
-    ``JSON.stringify`` drops ``undefined``).
+    JSON of ``{text, location, REPLACE, keyMaterial, fileName}`` (omitting
+    absent fields, like the JS ``JSON.stringify`` drops ``undefined``).
     """
     obj: dict[str, Any] = {}
     if message.get("text") is not None:
@@ -57,6 +62,11 @@ def serialize_plaintext(message: dict[str, Any]) -> bytes:
             obj["REPLACE"] = json.loads(replace) if isinstance(replace, str) else replace
         except (ValueError, TypeError):
             obj["REPLACE"] = replace
+    key_material = meta.get("ENC_KM")
+    if key_material:
+        obj["keyMaterial"] = key_material
+        if meta.get("FILE_NAME"):
+            obj["fileName"] = meta["FILE_NAME"]
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
@@ -69,6 +79,39 @@ def deserialize_plaintext(data: bytes) -> dict[str, Any]:
         return json.loads(text)
     except ValueError:
         return {"text": text}
+
+
+def decrypt_media_blob(data: bytes, key_material: str) -> bytes:
+    """Verify and decrypt a Letter-Sealed OBS image/file blob.
+
+    LINE derives an AES key, HMAC key, and 12-byte nonce with HKDF-SHA256.  The
+    final 32 bytes are an HMAC-SHA256 over the ciphertext and are always checked
+    before AES-CTR decryption.
+    """
+    blob = bytes(data)
+    if len(blob) <= 32:
+        raise ValueError("encrypted media blob is too short")
+    try:
+        source_key = base64.b64decode(key_material, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("invalid encrypted media key material") from exc
+    if not source_key:
+        raise ValueError("encrypted media key material is empty")
+
+    derived = HKDF(
+        algorithm=hashes.SHA256(),
+        length=76,
+        salt=b"",
+        info=b"FileEncryption",
+    ).derive(source_key)
+    enc_key, mac_key, nonce = derived[:32], derived[32:64], derived[64:]
+    ciphertext, expected_tag = blob[:-32], blob[-32:]
+    verifier = hmac.HMAC(mac_key, hashes.SHA256())
+    verifier.update(ciphertext)
+    verifier.verify(expected_tag)
+
+    decryptor = Cipher(algorithms.AES(enc_key), modes.CTR(nonce + b"\0\0\0\0")).decryptor()
+    return decryptor.update(ciphertext) + decryptor.finalize()
 
 
 def build_chunks(ciphertext: bytes, sender_key_id: int, receiver_key_id: int) -> list[str]:

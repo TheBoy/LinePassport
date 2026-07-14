@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import json
+import struct
 import threading
 from collections.abc import Iterator
 from html.parser import HTMLParser
@@ -11,6 +13,7 @@ import pytest
 import requests
 
 from okline import webapp as webapp_module
+from okline.obs import encode_message_talk_meta
 from okline.webapp import (
     GOD_HTML,
     INDEX_HTML,
@@ -605,13 +608,40 @@ def test_member_tenant_data_is_isolated_and_god_can_inspect(web_state):
 
 
 class _RecentChatFakeApi:
+    def __init__(self):
+        self.checked = None
+
     def get_message_boxes(self, *, limit=100, last_messages_per_box=5):
         return {
             "messageBoxes": [
-                {"id": "c_new", "lastMessages": [{"createdTime": "3000"}]},
-                {"id": "u_new", "lastMessages": [{"createdTime": "2500"}]},
-                {"id": "u_old", "lastMessages": [{"createdTime": "1000"}]},
-                {"id": "c_old", "lastMessages": [{"createdTime": "500"}]},
+                {"id": "u_old", "unreadCount": 0, "lastMessages": [{"createdTime": "1000"}]},
+                {"id": "c_old", "unreadCount": 0, "lastMessages": [{"createdTime": "500"}]},
+                {
+                    "id": "c_new",
+                    "unreadCount": 2,
+                    "lastMessages": [
+                        {
+                            "id": "gm-1",
+                            "from": "u1",
+                            "text": "group update",
+                            "contentType": 0,
+                            "createdTime": "3000",
+                        }
+                    ],
+                },
+                {
+                    "id": "u_new",
+                    "unreadCount": 3,
+                    "lastMessages": [
+                        {
+                            "id": "dm-1",
+                            "from": "u_new",
+                            "text": "hello unread",
+                            "contentType": 0,
+                            "createdTime": "2500",
+                        }
+                    ],
+                },
             ][:limit]
         }
 
@@ -657,6 +687,9 @@ class _RecentChatFakeApi:
             ]
         }
 
+    def send_chat_checked(self, chat_mid, last_message_id):
+        self.checked = (chat_mid, last_message_id)
+
 
 def test_contacts_and_groups_sort_by_recent_chat():
     handler = OkLineWebHandler.__new__(OkLineWebHandler)
@@ -664,9 +697,112 @@ def test_contacts_and_groups_sort_by_recent_chat():
 
     contacts = handler._contacts(api, {"limit": ["10"]})["contacts"]
     groups = handler._groups(api, {"limit": ["10"]})["groups"]
+    conversations = handler._conversations(api, {"limit": ["10"]})["conversations"]
 
     assert [contact["mid"] for contact in contacts] == ["u_new", "u_old", "u_never"]
     assert [group["mid"] for group in groups] == ["c_new", "c_old", "c_never"]
+    assert contacts[0]["unreadCount"] == 3
+    assert contacts[0]["lastMessage"]["text"] == "hello unread"
+    assert contacts[0]["lastMessageAt"] == 2500
+    assert groups[0]["unreadCount"] == 2
+    assert groups[0]["lastMessage"]["text"] == "group update"
+    assert contacts[-1]["unreadCount"] == 0
+    assert [item["mid"] for item in conversations] == [
+        "c_new",
+        "u_new",
+        "u_old",
+        "c_old",
+    ]
+
+
+def test_mark_messages_read_sends_line_read_receipt():
+    handler = OkLineWebHandler.__new__(OkLineWebHandler)
+    api = _RecentChatFakeApi()
+
+    result = handler._mark_messages_read(
+        api, {"chatMid": "u_new", "lastMessageId": "dm-1"}
+    )
+
+    assert result == {"ok": True, "chatMid": "u_new", "lastMessageId": "dm-1"}
+    assert api.checked == ("u_new", "dm-1")
+
+
+def test_web_ui_shows_unread_conversation_previews():
+    assert 'className = "line-row" + (unreadCount ? " has-unread" : "")' in INDEX_HTML
+    assert 'badge.className = "line-unread-badge";' in INDEX_HTML
+    assert "options.lastMessage ? contentLabel(options.lastMessage)" in INDEX_HTML
+    assert 'await post("/api/messages/read"' in INDEX_HTML
+    assert "function clearUnreadForTarget(mid)" in INDEX_HTML
+
+
+def test_web_ui_combines_contacts_and_groups_in_leftmost_all_tab():
+    all_tab = INDEX_HTML.index('id="loadAllButton"')
+    contacts_tab = INDEX_HTML.index('id="loadContactsButton"')
+    groups_tab = INDEX_HTML.index('id="loadGroupsButton"')
+
+    assert all_tab < contacts_tab < groups_tab
+    assert 'id="allList"' in INDEX_HTML
+    assert 'data-i18n="contacts.tab_all"' in INDEX_HTML
+    assert 'contactsSubtab: "all"' in INDEX_HTML
+    assert "function renderAllList()" in INDEX_HTML
+    assert 'setContactsSubtab("all");' in INDEX_HTML
+    assert '.sort((a, b) => compareConversationItems(a.item, b.item))' in INDEX_HTML
+
+
+def test_web_ui_notifies_only_after_conversation_baseline_is_ready():
+    assert 'id="notificationButton"' in INDEX_HTML
+    assert INDEX_HTML.index('id="notificationButton"') < INDEX_HTML.index('id="refreshAllButton"')
+    assert 'data-sound-status="idle"' in INDEX_HTML
+    assert "Notification.requestPermission()" in INDEX_HTML
+    assert 'navigator.serviceWorker.register("/service-worker.js")' in INDEX_HTML
+    assert "state.notificationWorker.showNotification(title, options)" in INDEX_HTML
+    assert "new Notification(" in INDEX_HTML
+    assert "function unlockNotificationSound()" in INDEX_HTML
+    assert "function playNotificationSound()" in INDEX_HTML
+    assert 'button.dataset.soundStatus = "played";' in INDEX_HTML
+    assert 'button.dataset.soundStatus = "blocked";' in INDEX_HTML
+    assert "function playNotificationSoundForItems(accountId, items)" in INDEX_HTML
+    assert "const permissionPromise = permission === \"default\"" in INDEX_HTML
+    assert "? Notification.requestPermission()" in INDEX_HTML
+    assert "if (permission !== \"granted\")" in INDEX_HTML
+    assert "state.notificationsEnabled = true;" in INDEX_HTML
+    assert "const soundReady = soundUnlocked && await playNotificationSound();" in INDEX_HTML
+    assert "state.notificationsEnabled = saved === \"on\"" in INDEX_HTML
+    assert "&& Notification.permission === \"granted\";" in INDEX_HTML
+    assert "silent && previousMessageKey && lastMessageKey !== previousMessageKey" in INDEX_HTML
+    assert "silent: false" in INDEX_HTML
+    assert "vibrate: [100, 60, 100]" in INDEX_HTML
+    assert "function processNewMessageNotifications(accountId, conversations)" in INDEX_HTML
+    assert "state.notificationAccountId !== accountId" in INDEX_HTML
+    assert "!state.conversationBaselineReady" in INDEX_HTML
+    assert "processNewMessageNotifications(accountId, conversations);" in INDEX_HTML
+    assert 'document.title = unread ? `(${count}) LinePassport` : "LinePassport";' in INDEX_HTML
+
+
+def test_notification_service_worker_is_public(live_server):
+    response = requests.get(f"{live_server}/service-worker.js", timeout=2)
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.headers["Content-Type"].startswith("application/javascript")
+    assert 'self.addEventListener("notificationclick"' in response.text
+
+
+def test_contacts_background_refresh_uses_lightweight_conversation_endpoint():
+    assert "const CONVERSATION_BACKGROUND_REFRESH_MS = 8000;" in INDEX_HTML
+    assert "function refreshConversationsInBackground()" in INDEX_HTML
+    assert 'api(`/api/conversations?${accountQuery(accountId)}&limit=1000`)' in INDEX_HTML
+    assert "if (signature === state.conversationSignature) return;" in INDEX_HTML
+    assert (
+        "setInterval(refreshConversationsInBackground, "
+        "CONVERSATION_BACKGROUND_REFRESH_MS);"
+    ) in INDEX_HTML
+    start = INDEX_HTML.index("async function refreshConversationsInBackground")
+    end = INDEX_HTML.index("function listLoading", start)
+    block = INDEX_HTML[start:end]
+    assert 'state.tab !== "line"' not in block
+    assert 'document.visibilityState !== "visible"' not in block
+    assert "loadContacts()" not in block
+    assert "loadGroups()" not in block
 
 
 def test_schedule_once_requires_and_sets_run_at():
@@ -910,6 +1046,100 @@ def test_message_summary_extracts_sticker_id():
     # a plain image message carries no sticker id
     img = webapp_module._message_summary(None, {"id": "1", "contentType": 1}, {})
     assert img["stickerId"] is None
+
+
+def test_message_summary_marks_decrypted_e2ee_image_ready_without_exposing_key():
+    class ReadyE2EE:
+        @staticmethod
+        def is_ready():
+            return True
+
+    class Api:
+        e2ee = ReadyE2EE()
+
+        @staticmethod
+        def decrypt_message(message):
+            return {
+                **message,
+                "contentMetadata": {
+                    **message["contentMetadata"],
+                    "ENC_KM": "private-key-material",
+                },
+            }
+
+    message = {
+        "id": "123",
+        "from": "u" + "0" * 32,
+        "contentType": 1,
+        "contentMetadata": {"e2eeVersion": "2", "SID": "emi"},
+        "chunks": ["a", "b", "c"],
+    }
+    summary = webapp_module._message_summary(Api(), message, {})
+
+    assert summary["encrypted"] is True
+    assert summary["mediaReady"] is True
+    assert "private-key-material" not in json.dumps(summary)
+
+
+def test_encode_message_talk_meta_matches_line_binary_shape():
+    message_id = "622631501804339664"
+    outer = json.loads(base64.b64decode(encode_message_talk_meta(message_id)))
+    payload = base64.b64decode(outer["message"])
+
+    assert payload[:3] == b"\x0b" + struct.pack(">h", 4)
+    size = struct.unpack(">I", payload[3:7])[0]
+    assert payload[7 : 7 + size] == message_id.encode()
+    assert payload[7 + size :] == b"\x0f" + struct.pack(">h", 27) + b"\x0c\0\0\0\0\0"
+
+
+def test_download_message_content_uses_e2ee_sid_oid_and_talk_meta(monkeypatch):
+    calls = {}
+
+    class ReadyE2EE:
+        @staticmethod
+        def is_ready():
+            return True
+
+    class Obs:
+        @staticmethod
+        def download_object(service, sid, oid, *, talk_meta=None):
+            calls["download"] = (service, sid, oid, talk_meta)
+            return b"encrypted"
+
+    class Api:
+        e2ee = ReadyE2EE()
+        obs = Obs()
+
+        @staticmethod
+        def get_recent_messages(chat_mid, count):
+            calls["recent"] = (chat_mid, count)
+            return [{"id": "123", "chunks": ["a", "b", "c"]}]
+
+        @staticmethod
+        def decrypt_message(message):
+            return {
+                **message,
+                "contentMetadata": {
+                    "SID": "emi",
+                    "OID": "encrypted-object",
+                    "ENC_KM": "media-key",
+                },
+            }
+
+    monkeypatch.setattr(
+        webapp_module.e2ee_frame,
+        "decrypt_media_blob",
+        lambda data, key: b"plain" if (data, key) == (b"encrypted", "media-key") else b"",
+    )
+
+    assert webapp_module._download_message_content(Api(), "123", "Uchat") == b"plain"
+    assert calls["recent"] == ("Uchat", 200)
+    assert calls["download"] == (
+        "talk",
+        "emi",
+        "encrypted-object",
+        encode_message_talk_meta("123"),
+    )
 
 
 def test_apply_placeholders_formats():
