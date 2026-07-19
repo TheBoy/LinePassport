@@ -7033,17 +7033,6 @@ GOD_HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       box-shadow: var(--shadow);
     }
-    .brand-mark {
-      width: 46px;
-      height: 46px;
-      display: grid;
-      place-items: center;
-      margin-bottom: 22px;
-      color: #fff;
-      background: var(--ink);
-      font-size: 19px;
-      font-weight: 800;
-    }
     h1, h2, h3, p { margin-top: 0; }
     h1 { margin-bottom: 5px; font-size: 27px; letter-spacing: 0; }
     h2 { margin-bottom: 4px; font-size: 23px; letter-spacing: 0; }
@@ -7083,8 +7072,7 @@ GOD_HTML = r"""<!doctype html>
       background: var(--surface);
       border-bottom: 1px solid var(--line);
     }
-    .topbar-brand { display: flex; align-items: center; gap: 12px; }
-    .topbar .brand-mark { width: 38px; height: 38px; margin: 0; font-size: 16px; }
+    .topbar-brand { min-width: 0; }
     .topbar strong { display: block; font-size: 17px; }
     .topbar small { color: var(--muted); }
     .page { width: min(1280px, 100%); margin: 0 auto; padding: 28px; }
@@ -7108,6 +7096,20 @@ GOD_HTML = r"""<!doctype html>
     }
     .badge.active { color: #087443; background: var(--accent-soft); }
     .badge.inactive { color: var(--danger); background: var(--danger-soft); }
+    .user-status {
+      flex: 0 0 auto;
+      min-width: 98px;
+      justify-content: center;
+      gap: 7px;
+    }
+    .user-status::before {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 7px;
+      border-radius: 50%;
+      background: currentColor;
+      content: "";
+    }
     .toolbar {
       display: flex;
       align-items: center;
@@ -7122,11 +7124,11 @@ GOD_HTML = r"""<!doctype html>
     .user-table { background: var(--surface); border: 1px solid var(--line); }
     .user-row {
       display: grid;
-      grid-template-columns: minmax(220px, 1.4fr) 150px 125px 185px;
+      grid-template-columns: minmax(260px, 1.5fr) 140px minmax(390px, .9fr);
       align-items: center;
       gap: 18px;
-      min-height: 72px;
-      padding: 12px 16px;
+      min-height: 82px;
+      padding: 14px 20px;
       border-top: 1px solid var(--line);
     }
     .user-row:first-child { border-top: 0; }
@@ -7134,7 +7136,38 @@ GOD_HTML = r"""<!doctype html>
     .identity { min-width: 0; }
     .identity strong, .identity span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .identity span { color: var(--muted); font-size: 13px; }
-    .actions { display: flex; justify-content: flex-end; gap: 7px; }
+    .user-role {
+      width: fit-content;
+      padding: 4px 9px;
+      color: #42514b;
+      background: #f0f4f2;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .user-control {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+    .action-button {
+      min-height: 38px;
+      padding: 7px 12px;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .action-button:hover { border-color: #9eada8; background: #f8faf9; }
+    .action-button:focus-visible { outline: 3px solid rgba(8, 127, 91, .18); outline-offset: 1px; }
+    .action-button.details-action { color: #076e50; background: var(--accent-soft); border-color: #b9dfd1; }
+    .action-button.delete-action { color: var(--danger); background: #fff; border-color: #efc4bf; }
+    .action-button.delete-action:hover { background: var(--danger-soft); border-color: #e39c94; }
     .empty { padding: 58px 20px; text-align: center; color: var(--muted); }
     .detail-panel {
       position: fixed;
@@ -7164,15 +7197,17 @@ GOD_HTML = r"""<!doctype html>
     .check-row { display: flex; align-items: center; gap: 9px; margin-top: 18px; font-weight: 600; }
     .check-row input { width: 18px; min-height: 18px; }
     .toast { position: fixed; right: 20px; bottom: 20px; z-index: 50; max-width: 420px; padding: 13px 16px; color: #fff; background: var(--ink); box-shadow: var(--shadow); }
-    @media (max-width: 760px) {
+    @media (max-width: 960px) {
       .topbar { padding: 0 16px; }
       .page { padding: 20px 14px; }
       .page-head { align-items: start; flex-direction: column; }
       .toolbar { align-items: stretch; flex-direction: column; }
       .search { max-width: none; }
-      .user-row { grid-template-columns: 1fr auto; gap: 10px; }
-      .user-row.head, .user-role, .user-status { display: none; }
-      .actions { grid-column: 1 / -1; justify-content: flex-start; }
+      .user-row { grid-template-columns: 1fr; gap: 10px; padding: 16px; }
+      .user-row.head { display: none; }
+      .user-control { align-items: flex-start; flex-direction: column; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+      .actions { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .action-button { width: 100%; padding-inline: 8px; }
       .two-col { grid-template-columns: 1fr; }
     }
   </style>
@@ -7182,7 +7217,7 @@ GOD_HTML = r"""<!doctype html>
     <form class="login-panel" id="loginForm">
       <h1>LinePassport God</h1>
       <p class="muted">User Management</p>
-      <label class="field">God login<input id="godUsername" autocomplete="username" required></label>
+      <label class="field">God login<input id="godUsername" autocomplete="username" autofocus required></label>
       <label class="field">รหัสผ่าน<input id="godPassword" type="password" autocomplete="current-password" required></label>
       <button class="primary" id="loginButton" type="submit">เข้าสู่ระบบ</button>
       <p class="error" id="loginError" role="alert"></p>
@@ -7191,7 +7226,7 @@ GOD_HTML = r"""<!doctype html>
 
   <div class="hidden" id="appView">
     <header class="topbar">
-      <div class="topbar-brand"><div class="brand-mark">G</div><div><strong>LinePassport God</strong><small>User Management</small></div></div>
+      <div class="topbar-brand"><strong>LinePassport God</strong><small>User Management</small></div>
       <button class="secondary" id="logoutButton">ออกจากระบบ</button>
     </header>
     <main class="page">
@@ -7204,7 +7239,7 @@ GOD_HTML = r"""<!doctype html>
         <button class="secondary" id="refreshButton">รีเฟรช</button>
       </div>
       <div class="user-table" id="userTable">
-        <div class="user-row head"><span>สมาชิก</span><span>บทบาท</span><span>สถานะ</span><span></span></div>
+        <div class="user-row head"><span>สมาชิก</span><span>บทบาท</span><span>สถานะและการจัดการ</span></div>
         <div class="empty">กำลังโหลด...</div>
       </div>
     </main>
@@ -7268,6 +7303,7 @@ GOD_HTML = r"""<!doctype html>
       $("loginView").classList.remove("hidden");
       $("appView").classList.add("hidden");
       closeDetail();
+      $("godUsername").focus({preventScroll: true});
     }
 
     function showApp() {
@@ -7293,6 +7329,7 @@ GOD_HTML = r"""<!doctype html>
 
     function makeButton(label, cls, handler) {
       const button = document.createElement("button");
+      button.type = "button";
       button.className = cls;
       button.textContent = label;
       button.addEventListener("click", handler);
@@ -7322,14 +7359,17 @@ GOD_HTML = r"""<!doctype html>
         const status = document.createElement("span");
         status.className = `badge user-status ${user.active ? "active" : "inactive"}`;
         status.textContent = user.active ? "ใช้งานอยู่" : "ปิดใช้งาน";
+        const control = document.createElement("div");
+        control.className = "user-control";
         const actions = document.createElement("div");
         actions.className = "actions";
         actions.append(
-          makeButton("รายละเอียด", "secondary", () => openDetail(user)),
-          makeButton("แก้ไข", "secondary", () => openEdit(user)),
-          makeButton("ลบ", "danger-button", () => openDelete(user))
+          makeButton("รายละเอียด", "action-button details-action", () => openDetail(user)),
+          makeButton("แก้ไข", "action-button edit-action", () => openEdit(user)),
+          makeButton("ลบ", "action-button delete-action", () => openDelete(user))
         );
-        row.append(identity, role, status, actions);
+        control.append(status, actions);
+        row.append(identity, role, control);
         table.appendChild(row);
       }
       if (!users.length) {
@@ -8269,30 +8309,19 @@ class WebAuth:
     def _login_for_portal(
         self, username: str, password: str, *, god_only: bool, source: str = ""
     ) -> str:
-        portal = "god" if god_only else "app"
-        identity_key = f"{portal}:identity:{(username or '').strip().casefold()}"
-        source_key = f"{portal}:source:{(source or 'local').strip().casefold()}"
-        rate_keys = {identity_key, source_key}
+        # Sign-in lockouts are intentionally disabled. Invalid credentials still
+        # receive the same generic response without blocking later valid logins.
         with self.lock:
-            for key in rate_keys:
-                self._check_login_rate_limit(key)
             if not self.configured():
                 raise WebError(HTTPStatus.BAD_REQUEST, "Web auth is not configured.")
             user = self._find_user_by_username(username)
             if user is None or not self._is_active_user(user):
-                for key in rate_keys:
-                    self._record_login_failure(key)
                 raise WebError(HTTPStatus.UNAUTHORIZED, "Invalid username or password.")
             is_god = self._is_god(user)
             if is_god != god_only:
-                for key in rate_keys:
-                    self._record_login_failure(key)
                 raise WebError(HTTPStatus.UNAUTHORIZED, "Invalid username or password.")
             if not self._password_matches(user, password or ""):
-                for key in rate_keys:
-                    self._record_login_failure(key)
                 raise WebError(HTTPStatus.UNAUTHORIZED, "Invalid username or password.")
-            self.login_failures.pop(identity_key, None)
             if int(user.get("passwordIterations") or self.legacy_iterations) < self.iterations:
                 salt = secrets.token_hex(16)
                 user["salt"] = salt

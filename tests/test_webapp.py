@@ -475,18 +475,18 @@ def test_web_auth_registration_requires_unique_valid_email(tmp_path):
     assert invalid.value.code == "email_invalid"
 
 
-def test_auth_rate_limits_password_spraying_by_source(tmp_path, monkeypatch):
+def test_auth_does_not_lock_out_valid_login_after_repeated_failures(tmp_path):
     auth = WebAuth(str(tmp_path / "auth.json"))
     auth.setup("owner@example.com", "secret-pass")
-    monkeypatch.setattr(auth, "login_max_failures", 2)
 
-    for email in ("one@example.com", "two@example.com"):
-        with pytest.raises(WebError):
-            auth.login(email, "wrong-password", source="203.0.113.10")
+    for _ in range(10):
+        with pytest.raises(WebError) as caught:
+            auth.login("owner@example.com", "wrong-password", source="203.0.113.10")
+        assert caught.value.status == HTTPStatus.UNAUTHORIZED
 
-    with pytest.raises(WebError) as caught:
-        auth.login("three@example.com", "wrong-password", source="203.0.113.10")
-    assert caught.value.status == HTTPStatus.TOO_MANY_REQUESTS
+    token = auth.login("owner@example.com", "secret-pass", source="203.0.113.10")
+
+    assert auth.is_authenticated(WebAuth.cookie_header(token)) is True
 
 
 def test_registration_rate_limit_is_per_source(tmp_path, monkeypatch):
@@ -586,7 +586,14 @@ def test_god_portal_is_separate_and_management_only(god_live_server):
 
 def test_god_portal_html_has_only_user_management_actions():
     assert 'id="loginView"' in GOD_HTML
+    assert 'id="godUsername" autocomplete="username" autofocus required' in GOD_HTML
+    assert '$("godUsername").focus({preventScroll: true})' in GOD_HTML
     assert 'id="userTable"' in GOD_HTML
+    assert 'class="brand-mark"' not in GOD_HTML
+    assert "สถานะและการจัดการ" in GOD_HTML
+    assert 'control.className = "user-control"' in GOD_HTML
+    assert '"action-button details-action"' in GOD_HTML
+    assert '"action-button delete-action"' in GOD_HTML
     assert 'id="editDialog"' in GOD_HTML
     assert 'id="deleteDialog"' in GOD_HTML
     assert '"/api/god/login"' in GOD_HTML
