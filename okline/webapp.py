@@ -1117,6 +1117,19 @@ INDEX_HTML = r"""<!doctype html>
     .assistant-queue-question { margin: 10px 0; white-space: pre-wrap; word-break: break-word; }
     .assistant-queue-row textarea { width: 100%; min-height: 88px; resize: vertical; }
     .assistant-empty { padding: 48px 20px; color: var(--muted); text-align: center; }
+    .assistant-view-nav { margin-bottom: 12px; }
+    .assistant-knowledge-editor { min-height: 320px; font-family: Consolas, "Courier New", monospace; line-height: 1.55; resize: vertical; }
+    .assistant-knowledge-grid { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; }
+    .assistant-knowledge-grid .wide { grid-column: 1 / -1; }
+    .assistant-knowledge-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .assistant-source-list { display: grid; gap: 10px; }
+    .assistant-source-row { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); background: #f7f9f8; }
+    .assistant-source-row-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .assistant-source-row .mono { overflow-wrap: anywhere; }
+    @media (max-width: 720px) {
+      .assistant-knowledge-grid { grid-template-columns: 1fr; }
+      .assistant-knowledge-grid .wide { grid-column: auto; }
+    }
 
     /* Date fields: a dd/mm/yyyy text display sits over the native date input so
        the calendar picker stays, but the shown format is not the browser locale's. */
@@ -2622,10 +2635,9 @@ INDEX_HTML = r"""<!doctype html>
       <div class="workspace hidden" id="workspace">
         <div class="tabbar" role="tablist" aria-label="LinePassport sections">
           <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line" data-i18n="tabs.line">LINE</button>
-          <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai" data-i18n="tabs.assistant">Ask AI</button>
+          <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai" data-i18n="tabs.assistant">AI Chat Bot</button>
           <button class="tab" id="tabTools" type="button" role="tab" aria-selected="false" aria-controls="tabPanelTools" data-tab="tools" data-i18n="tabs.tools">Tools</button>
           <button class="tab" id="tabBot" type="button" role="tab" aria-selected="false" aria-controls="tabPanelBot" data-tab="bot" data-i18n="tabs.bot">Bot</button>
-          <button class="tab" id="tabAi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAi" data-tab="ai" data-i18n="tabs.ai">AI Settings</button>
         </div>
         <div class="tab-panels">
           <div class="tab-panel active" data-tab-panel="line" id="tabPanelLine" role="tabpanel" aria-labelledby="tabLine">
@@ -2700,6 +2712,11 @@ INDEX_HTML = r"""<!doctype html>
 
           <div class="tab-panel" data-tab-panel="assistant" id="tabPanelAssistant" role="tabpanel" aria-labelledby="tabAssistant">
             <div class="tab-panel-inner assistant-panel-inner">
+              <div class="subtabs assistant-view-nav" role="tablist" aria-label="AI Chat Bot">
+                <button id="assistantChatViewButton" class="subtab active" type="button" role="tab" aria-selected="true" data-assistant-view-target="chat" data-i18n="assistant.nav_chat">Chat</button>
+                <button id="assistantKnowledgeViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="knowledge" data-i18n="assistant.nav_knowledge">Knowledge / RAG</button>
+              </div>
+              <div id="assistantChatView" data-assistant-view="chat">
               <section class="section">
                 <div class="section-head">
                   <div>
@@ -2738,17 +2755,70 @@ INDEX_HTML = r"""<!doctype html>
                 </div>
                 <div class="section-body assistant-queue" id="assistantUnansweredList"></div>
               </section>
+              </div>
+
+              <div id="assistantKnowledgeView" class="hidden" data-assistant-view="knowledge">
+                <section class="section">
+                  <div class="section-head">
+                    <div>
+                      <h2 data-i18n="assistant.knowledge_title">Knowledge / RAG ของฉัน</h2>
+                      <span class="muted" data-i18n="assistant.knowledge_hint">ข้อมูลนี้เป็นของบัญชีผู้ใช้คุณและไม่แชร์กับสมาชิกคนอื่น</span>
+                    </div>
+                    <div class="assistant-knowledge-status">
+                      <span class="pill" id="assistantKnowledgeChunkCount">0 chunks</span>
+                      <span class="pill" id="assistantKnowledgeIndexMode">Not indexed</span>
+                    </div>
+                  </div>
+                  <div class="section-body">
+                    <label>
+                      <span>knowledge.md</span>
+                      <textarea id="assistantKnowledgeMarkdown" class="assistant-knowledge-editor" spellcheck="false" maxlength="750000" data-i18n-ph="assistant.knowledge_ph" placeholder="# Knowledge"></textarea>
+                    </label>
+                    <div class="row compact" style="margin-top:12px">
+                      <button id="assistantKnowledgeSaveButton" class="primary" type="button" data-requires-permission="ask_ai" data-i18n="assistant.knowledge_save">บันทึกและสร้างดัชนี</button>
+                      <button id="assistantKnowledgeReindexButton" type="button" data-requires-permission="ask_ai" data-i18n="assistant.knowledge_reindex">สร้างดัชนีใหม่</button>
+                      <span class="muted" id="assistantKnowledgeState" aria-live="polite"></span>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="section">
+                  <div class="section-head">
+                    <div><h2>Knowledge API</h2><span class="muted" data-i18n="assistant.api_hint">ดึงข้อมูลผ่าน GET รองรับ JSON path และ Bearer token</span></div>
+                  </div>
+                  <div class="section-body">
+                    <input id="assistantSourceId" type="hidden">
+                    <div class="assistant-knowledge-grid">
+                      <label><span data-i18n="assistant.api_name">ชื่อแหล่งข้อมูล</span><input id="assistantSourceName" maxlength="120" data-i18n-ph="assistant.api_name_ph" placeholder="Product API"></label>
+                      <label><span>API URL</span><input id="assistantSourceUrl" type="url" maxlength="2048" placeholder="https://api.example.com/knowledge"></label>
+                      <label><span>JSON path</span><input id="assistantSourceJsonPath" maxlength="500" placeholder="data.items"></label>
+                      <label><span>Bearer token</span><input id="assistantSourceApiKey" type="password" autocomplete="off" data-i18n-ph="assistant.api_key_ph" placeholder="เว้นว่างเพื่อใช้ค่าเดิม"></label>
+                      <label class="wide row compact"><input id="assistantSourceEnabled" type="checkbox" checked style="width:auto"><span data-i18n="assistant.api_enabled">เปิดใช้แหล่งข้อมูลนี้</span></label>
+                    </div>
+                    <div class="row compact" style="margin-top:12px">
+                      <button id="assistantSourceSaveButton" class="primary" type="button" data-i18n="assistant.api_save">บันทึก API</button>
+                      <button id="assistantSourceCancelButton" class="hidden" type="button" data-i18n="common.cancel">ยกเลิก</button>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="section">
+                  <div class="section-head"><h2 data-i18n="assistant.api_list">รายการ Knowledge API</h2><span class="pill" id="assistantSourceCount">0</span></div>
+                  <div class="section-body assistant-source-list" id="assistantSourceList"></div>
+                </section>
+              </div>
             </div>
           </div>
 
           <div class="tab-panel" data-tab-panel="bot" id="tabPanelBot" role="tabpanel" aria-labelledby="tabBot">
             <div class="tab-panel-inner">
-          <div class="bot-shell">
+          <div class="bot-shell" id="botShell">
           <div class="bot-page-nav" role="tablist" aria-label="Bot tools">
             <button type="button" id="botNavSchedules" data-bot-page-target="schedules" class="active" role="tab" aria-selected="true" data-i18n="bot.nav_schedules">Schedules</button>
             <button type="button" id="botNavScheduleForm" data-bot-page-target="schedule" role="tab" aria-selected="false" data-requires-account data-requires-permission="schedule" data-i18n="bot.nav_new">New schedule</button>
             <button type="button" id="botNavPatterns" data-bot-page-target="patterns" role="tab" aria-selected="false" data-requires-account data-requires-permission="schedule" data-i18n="bot.nav_patterns">Patterns</button>
             <button type="button" id="botNavLogs" data-bot-page-target="logs" role="tab" aria-selected="false" data-requires-account data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
+            <button type="button" id="botNavAiSettings" data-bot-page-target="ai-settings" role="tab" aria-selected="false" data-requires-permission="manage_accounts" data-i18n="bot.nav_ai_settings">AI Settings</button>
           </div>
           <div id="botScheduler" class="bot-page" data-bot-page="schedules">
           <section class="section scheduler-list-panel">
@@ -3050,7 +3120,7 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           </div>
 
-          <div class="tab-panel" data-tab-panel="ai" id="tabPanelAi" role="tabpanel" aria-labelledby="tabAi">
+          <div class="bot-page hidden" data-bot-page="ai-settings" id="botAiSettings" role="tabpanel" aria-labelledby="botNavAiSettings">
             <div class="tab-panel-inner">
               <section class="section">
                 <div class="section-head">
@@ -3179,6 +3249,51 @@ INDEX_HTML = r"""<!doctype html>
     // Each key holds { th, en }.  t(key) resolves for the current language;
     // missing keys fall back to English, then to the key itself.
     const I18N = {
+      "common.you": {th: "คุณ", en: "You"},
+      "tabs.assistant": {th: "AI Chat Bot", en: "AI Chat Bot"},
+      "bot.nav_ai_settings": {th: "ตั้งค่า AI", en: "AI Settings"},
+      "assistant.title": {th: "ถาม LinePassport AI", en: "Ask LinePassport AI"},
+      "assistant.subtitle": {th: "คำตอบอ้างอิงจาก Knowledge ที่ผู้ดูแลระบบกำหนด", en: "Answers use the shared knowledge managed by your administrator."},
+      "assistant.checking": {th: "กำลังตรวจสอบ", en: "Checking"},
+      "assistant.loading": {th: "กำลังโหลดคำถาม...", en: "Loading questions..."},
+      "assistant.question_label": {th: "คำถาม", en: "Question"},
+      "assistant.question_ph": {th: "ถามจากข้อมูล Knowledge ที่มีอยู่", en: "Ask about the available knowledge"},
+      "assistant.ask": {th: "ถาม AI", en: "Ask AI"},
+      "assistant.unanswered_title": {th: "คำถามที่ AI ตอบไม่ได้", en: "Questions AI could not answer"},
+      "assistant.unanswered_hint": {th: "คำตอบที่อนุมัติจะถูกเพิ่มเข้า Knowledge ส่วนกลาง", en: "Approved answers become part of shared knowledge."},
+      "assistant.empty": {th: "ยังไม่มีคำถาม", en: "No questions yet."},
+      "assistant.pending": {th: "AI ตอบไม่ได้ และส่งให้ผู้ดูแลตรวจสอบแล้ว", en: "AI could not answer; sent for review."},
+      "assistant.no_unanswered": {th: "ไม่มีคำถามค้างตอบ", en: "No unanswered questions."},
+      "assistant.answer_ph": {th: "พิมพ์คำตอบที่อนุมัติให้ AI ใช้ต่อไป", en: "Write an approved answer for the AI knowledge base."},
+      "assistant.approve": {th: "บันทึกคำตอบ", en: "Save answer"},
+      "assistant.answer_required": {th: "กรุณากรอกคำตอบ", en: "Answer is required."},
+      "assistant.answer_saved": {th: "บันทึกคำตอบและเพิ่มเข้า Knowledge แล้ว", en: "Answer saved to Knowledge."},
+      "assistant.ready": {th: "พร้อมใช้งาน", en: "Ready"},
+      "assistant.not_configured": {th: "ยังไม่ได้ตั้งค่า", en: "Not configured"},
+      "assistant.asking": {th: "กำลังถาม Ollama...", en: "Asking Ollama..."},
+      "assistant.nav_chat": {th: "แชท", en: "Chat"},
+      "assistant.nav_knowledge": {th: "Knowledge / RAG", en: "Knowledge / RAG"},
+      "assistant.knowledge_title": {th: "Knowledge / RAG ของฉัน", en: "My Knowledge / RAG"},
+      "assistant.knowledge_hint": {th: "ข้อมูลนี้เป็นของบัญชีผู้ใช้คุณและไม่แชร์กับสมาชิกคนอื่น", en: "This knowledge belongs to your user account and is not shared with other members."},
+      "assistant.knowledge_ph": {th: "# Knowledge\n\nใส่ข้อมูลที่ต้องการให้ AI ใช้ตอบคำถาม", en: "# Knowledge\n\nAdd information for the AI to use when answering."},
+      "assistant.knowledge_save": {th: "บันทึกและสร้างดัชนี", en: "Save and index"},
+      "assistant.knowledge_reindex": {th: "สร้างดัชนีใหม่", en: "Reindex"},
+      "assistant.knowledge_saved": {th: "บันทึก Knowledge และสร้างดัชนีแล้ว", en: "Knowledge saved and indexed."},
+      "assistant.api_hint": {th: "ดึงข้อมูลผ่าน GET รองรับ JSON path และ Bearer token", en: "Fetch with GET using an optional JSON path and Bearer token."},
+      "assistant.api_name": {th: "ชื่อแหล่งข้อมูล", en: "Source name"},
+      "assistant.api_name_ph": {th: "เช่น Product API", en: "e.g. Product API"},
+      "assistant.api_key_ph": {th: "เว้นว่างเพื่อใช้ค่าเดิม", en: "Leave blank to keep the current token"},
+      "assistant.api_enabled": {th: "เปิดใช้แหล่งข้อมูลนี้", en: "Enable this source"},
+      "assistant.api_save": {th: "บันทึก API", en: "Save API"},
+      "assistant.api_list": {th: "รายการ Knowledge API", en: "Knowledge API sources"},
+      "assistant.api_empty": {th: "ยังไม่มี Knowledge API", en: "No Knowledge API sources yet."},
+      "assistant.api_sync": {th: "ดึงข้อมูล", en: "Sync"},
+      "assistant.api_edit": {th: "แก้ไข", en: "Edit"},
+      "assistant.api_delete": {th: "ลบ", en: "Delete"},
+      "assistant.api_saved": {th: "บันทึก Knowledge API แล้ว", en: "Knowledge API saved."},
+      "assistant.api_synced": {th: "ดึงข้อมูลและสร้างดัชนีแล้ว", en: "Source synced and indexed."},
+      "assistant.api_deleted": {th: "ลบ Knowledge API แล้ว", en: "Knowledge API deleted."},
+      "assistant.api_delete_confirm": {th: "ลบ Knowledge API นี้?", en: "Delete this Knowledge API source?"},
       "auth.secure": {th: "เข้าถึงอย่างปลอดภัย", en: "Secure access"},
       "auth.signin_label": {th: "เข้าสู่ระบบ LinePassport", en: "Sign in to LinePassport"},
       "auth.create_label": {th: "ตั้งรหัสผ่านสำหรับเปิด LinePassport", en: "Create admin user"},
@@ -3657,6 +3772,7 @@ INDEX_HTML = r"""<!doctype html>
       patternCategories: [],
       patternCategoryFilter: "all",
       editingPatternId: null,
+      assistantKnowledge: null,
       lang: "th",
       advanced: true,
       tab: "line",
@@ -3765,8 +3881,8 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     // ---- top-level tabs (LINE / Tools / Bot / AI) ----------------------
-    const TABS = ["line", "assistant", "tools", "bot", "ai"];
-    const BOT_PAGES = ["schedules", "schedule", "patterns", "pattern-categories", "logs"];
+    const TABS = ["line", "assistant", "tools", "bot"];
+    const BOT_PAGES = ["schedules", "schedule", "patterns", "pattern-categories", "logs", "ai-settings"];
     function setTab(tab) {
       if (!TABS.includes(tab)) tab = "line";
       state.tab = tab;
@@ -3787,7 +3903,6 @@ INDEX_HTML = r"""<!doctype html>
       }
       if (tab === "line") refreshConversationsInBackground();
       if (tab === "assistant") loadAssistant().catch(toastError);
-      if (tab === "ai") loadAiSettings();
     }
 
     function setBotPage(page) {
@@ -3806,6 +3921,7 @@ INDEX_HTML = r"""<!doctype html>
       if (page === "pattern-categories") loadPatterns();
       if (page === "schedules") loadSchedules().catch(toastError);
       if (page === "logs") loadBotLogs().catch(toastError);
+      if (page === "ai-settings") loadAiSettings();
     }
 
     // ---- contacts sub-tabs (all / people / groups) ---------------------
@@ -6947,6 +7063,156 @@ INDEX_HTML = r"""<!doctype html>
       finally { button.disabled = false; $("assistantAskState").textContent = ""; }
     }
 
+    function setAssistantView(view) {
+      const selected = view === "knowledge" ? "knowledge" : "chat";
+      document.querySelectorAll("[data-assistant-view]").forEach((panel) => {
+        panel.classList.toggle("hidden", panel.dataset.assistantView !== selected);
+      });
+      document.querySelectorAll("[data-assistant-view-target]").forEach((button) => {
+        const active = button.dataset.assistantViewTarget === selected;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      });
+      if (selected === "knowledge") loadAssistantKnowledge().catch(toastError);
+    }
+
+    function assistantIndexModeLabel(mode) {
+      if (mode === "embedding") return "Vector index";
+      if (mode === "keyword") return "Keyword index";
+      if (mode === "empty") return "Empty";
+      return "Not indexed";
+    }
+
+    function clearAssistantSourceForm() {
+      $("assistantSourceId").value = "";
+      $("assistantSourceName").value = "";
+      $("assistantSourceUrl").value = "";
+      $("assistantSourceJsonPath").value = "";
+      $("assistantSourceApiKey").value = "";
+      $("assistantSourceEnabled").checked = true;
+      $("assistantSourceCancelButton").classList.add("hidden");
+    }
+
+    function editAssistantSource(source) {
+      $("assistantSourceId").value = source.id || "";
+      $("assistantSourceName").value = source.name || "";
+      $("assistantSourceUrl").value = source.url || "";
+      $("assistantSourceJsonPath").value = source.jsonPath || "";
+      $("assistantSourceApiKey").value = "";
+      $("assistantSourceEnabled").checked = source.enabled !== false;
+      $("assistantSourceCancelButton").classList.remove("hidden");
+      $("assistantSourceName").focus();
+    }
+
+    function renderAssistantSources(sources) {
+      const root = $("assistantSourceList");
+      root.replaceChildren();
+      $("assistantSourceCount").textContent = String((sources || []).length);
+      if (!(sources || []).length) {
+        root.appendChild(textSpan(t("assistant.api_empty"), "assistant-empty"));
+        return;
+      }
+      for (const source of sources) {
+        const row = document.createElement("article");
+        row.className = "assistant-source-row";
+        const head = document.createElement("div");
+        head.className = "assistant-source-row-head";
+        const identity = document.createElement("div");
+        identity.append(textSpan(source.name || "API", "strong"), textSpan(source.url || "", "muted mono"));
+        const status = textSpan(source.lastError || (source.lastSyncAt ? `Synced ${source.lastSyncAt}` : "Not synced"), source.lastError ? "pill error" : "pill");
+        head.append(identity, status);
+        const actions = document.createElement("div");
+        actions.className = "row compact";
+        const sync = document.createElement("button");
+        sync.type = "button";
+        sync.textContent = t("assistant.api_sync");
+        sync.addEventListener("click", () => syncAssistantSource(source.id, sync).catch(toastError));
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = t("assistant.api_edit");
+        edit.addEventListener("click", () => editAssistantSource(source));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "danger";
+        remove.textContent = t("assistant.api_delete");
+        remove.addEventListener("click", () => deleteAssistantSource(source.id).catch(toastError));
+        actions.append(sync, edit, remove);
+        row.append(head, actions);
+        root.appendChild(row);
+      }
+    }
+
+    function renderAssistantKnowledge(data) {
+      state.assistantKnowledge = data || {};
+      $("assistantKnowledgeMarkdown").value = data.knowledgeMarkdown || "";
+      $("assistantKnowledgeChunkCount").textContent = `${data.chunkCount || 0} chunks`;
+      $("assistantKnowledgeIndexMode").textContent = assistantIndexModeLabel(data.indexMode);
+      $("assistantKnowledgeState").textContent = data.indexError || (data.indexedAt ? `Indexed ${data.indexedAt}` : "");
+      renderAssistantSources(data.apiSources || []);
+    }
+
+    async function loadAssistantKnowledge() {
+      if (!hasPermission("ask_ai")) return;
+      renderAssistantKnowledge(await api("/api/assistant/knowledge"));
+    }
+
+    async function saveAssistantKnowledge() {
+      const button = $("assistantKnowledgeSaveButton");
+      button.disabled = true;
+      try {
+        const data = await post("/api/assistant/knowledge", {knowledgeMarkdown: $("assistantKnowledgeMarkdown").value});
+        renderAssistantKnowledge(data);
+        toast(t("assistant.knowledge_saved"));
+      } finally { button.disabled = false; }
+    }
+
+    async function reindexAssistantKnowledge() {
+      const button = $("assistantKnowledgeReindexButton");
+      button.disabled = true;
+      try {
+        const data = await post("/api/assistant/knowledge/reindex", {});
+        renderAssistantKnowledge(data);
+        toast(t("assistant.knowledge_saved"));
+      } finally { button.disabled = false; }
+    }
+
+    async function saveAssistantSource() {
+      const payload = {
+        id: $("assistantSourceId").value,
+        name: $("assistantSourceName").value.trim(),
+        url: $("assistantSourceUrl").value.trim(),
+        jsonPath: $("assistantSourceJsonPath").value.trim(),
+        enabled: $("assistantSourceEnabled").checked
+      };
+      const apiKey = $("assistantSourceApiKey").value.trim();
+      if (apiKey) payload.apiKey = apiKey;
+      const data = await post("/api/assistant/knowledge/sources/save", payload);
+      renderAssistantKnowledge(data);
+      clearAssistantSourceForm();
+      toast(t("assistant.api_saved"));
+    }
+
+    async function syncAssistantSource(id, button) {
+      button.disabled = true;
+      try {
+        const data = await post("/api/assistant/knowledge/sources/sync", {id});
+        renderAssistantKnowledge(data);
+        toast(t("assistant.api_synced"));
+      } finally { button.disabled = false; }
+    }
+
+    async function deleteAssistantSource(id) {
+      if (!confirm(t("assistant.api_delete_confirm"))) return;
+      const data = await post("/api/assistant/knowledge/sources/delete", {id});
+      renderAssistantKnowledge(data);
+      clearAssistantSourceForm();
+      toast(t("assistant.api_deleted"));
+    }
+
+    // The image-generation settings belong to the Bot workspace. Keep the
+    // markup reusable while mounting it alongside the other Bot pages.
+    $("botShell").appendChild($("botAiSettings"));
+
     // ---- wiring --------------------------------------------------------
     $("authForm").addEventListener("submit", (ev) => {
       ev.preventDefault();
@@ -6962,6 +7228,13 @@ INDEX_HTML = r"""<!doctype html>
     $("refreshAllButton").addEventListener("click", () => refreshStatus(true));
     $("assistantForm").addEventListener("submit", (ev) => { ev.preventDefault(); askAssistant().catch(toastError); });
     $("assistantRefreshButton").addEventListener("click", () => loadAssistant().catch(toastError));
+    document.querySelectorAll("[data-assistant-view-target]").forEach((button) => {
+      button.addEventListener("click", () => setAssistantView(button.dataset.assistantViewTarget));
+    });
+    $("assistantKnowledgeSaveButton").addEventListener("click", () => saveAssistantKnowledge().catch(toastError));
+    $("assistantKnowledgeReindexButton").addEventListener("click", () => reindexAssistantKnowledge().catch(toastError));
+    $("assistantSourceSaveButton").addEventListener("click", () => saveAssistantSource().catch(toastError));
+    $("assistantSourceCancelButton").addEventListener("click", clearAssistantSourceForm);
     $("accountSelect").addEventListener("change", () => selectAccount().catch(toastError));
     $("settingsButton").addEventListener("click", toggleSettingsMenu);
     $("changePasswordMenuButton").addEventListener("click", () => openSettings("password"));
@@ -10010,6 +10283,13 @@ class WebState:
         encrypt_global_record(global_ai.get("settings"))
         for source in global_ai.get("apiSources", []):
             encrypt_global_record(source)
+        knowledge_tenants = global_ai.get("tenants")
+        if isinstance(knowledge_tenants, dict):
+            for tenant in knowledge_tenants.values():
+                if not isinstance(tenant, dict):
+                    continue
+                for source in tenant.get("apiSources", []):
+                    encrypt_global_record(source)
         if global_changed:
             self.store.set("global_ai", global_ai)
 
@@ -10943,6 +11223,20 @@ class WebState:
                 if isinstance(tenants, dict):
                     tenants.pop(user_id, None)
 
+                raw_global_ai = self.store.get("global_ai", {})
+                global_ai = (
+                    copy.deepcopy(raw_global_ai) if isinstance(raw_global_ai, dict) else {}
+                )
+                knowledge_tenants = global_ai.get("tenants")
+                if isinstance(knowledge_tenants, dict):
+                    knowledge_tenants.pop(user_id, None)
+                global_ai["questions"] = [
+                    question
+                    for question in global_ai.get("questions", [])
+                    if not isinstance(question, dict)
+                    or str(question.get("userId") or "") != user_id
+                ]
+
                 raw_logs = self.store.get("bot_logs", {"logs": []})
                 log_data = copy.deepcopy(raw_logs) if isinstance(raw_logs, dict) else {}
                 log_data["logs"] = [
@@ -10958,6 +11252,7 @@ class WebState:
                         "schedules": {"schedules": schedules},
                         "patterns": pattern_data,
                         "ai_settings": ai_root,
+                        "global_ai": global_ai,
                         "bot_logs": log_data,
                     }
                 )
@@ -11730,7 +12025,30 @@ class WebState:
             data["chunks"] = []
         if not isinstance(data.get("questions"), list):
             data["questions"] = []
+        if not isinstance(data.get("tenants"), dict):
+            data["tenants"] = {}
         return data
+
+    @staticmethod
+    def _assistant_owner_id(user: dict[str, Any] | None) -> str:
+        owner_id = str((user or {}).get("id") or "").strip()
+        if not owner_id:
+            raise WebError(HTTPStatus.UNAUTHORIZED, "User authentication required.")
+        return owner_id
+
+    def _tenant_ai_knowledge(
+        self, data: dict[str, Any], user: dict[str, Any] | None
+    ) -> tuple[str, dict[str, Any]]:
+        owner_id = self._assistant_owner_id(user)
+        tenants = data["tenants"]
+        tenant = tenants.get(owner_id)
+        if not isinstance(tenant, dict):
+            tenant = {}
+            tenants[owner_id] = tenant
+        for key in ("apiSources", "manualAnswers", "chunks"):
+            if not isinstance(tenant.get(key), list):
+                tenant[key] = []
+        return owner_id, tenant
 
     def _global_ai_private_settings(self, data: dict[str, Any]) -> dict[str, Any]:
         raw = data.get("settings")
@@ -11849,6 +12167,14 @@ class WebState:
                 for chunk in data["chunks"]:
                     if isinstance(chunk, dict):
                         chunk.pop("embedding", None)
+                for tenant in data["tenants"].values():
+                    if not isinstance(tenant, dict):
+                        continue
+                    for chunk in tenant.get("chunks", []):
+                        if isinstance(chunk, dict):
+                            chunk.pop("embedding", None)
+                    tenant["indexMode"] = "needs-reindex"
+                    tenant["indexError"] = ""
                 data["indexMode"] = "needs-reindex"
                 data["indexError"] = ""
             self.store.set("global_ai", data)
@@ -11910,6 +12236,100 @@ class WebState:
             "indexError": str(data.get("indexError") or ""),
             "indexedAt": str(data.get("indexedAt") or ""),
         }
+
+    def assistant_knowledge(
+        self, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        data = self._global_ai_all()
+        _, tenant = self._tenant_ai_knowledge(data, user)
+        return {
+            "knowledgeMarkdown": str(tenant.get("knowledgeMarkdown") or ""),
+            "apiSources": [
+                self._knowledge_source_view(source)
+                for source in tenant["apiSources"]
+                if isinstance(source, dict)
+            ],
+            "manualAnswerCount": len(tenant["manualAnswers"]),
+            "chunkCount": len(tenant["chunks"]),
+            "indexMode": str(tenant.get("indexMode") or "none"),
+            "indexError": str(tenant.get("indexError") or ""),
+            "indexedAt": str(tenant.get("indexedAt") or ""),
+            "globalChunkCount": len(data["chunks"]),
+        }
+
+    def save_assistant_knowledge(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        markdown = str(body.get("knowledgeMarkdown") or "")
+        if len(markdown) > MAX_GLOBAL_KNOWLEDGE_LENGTH:
+            raise WebError(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                "knowledge.md is too large.",
+                "knowledge_too_large",
+            )
+        with self.lock:
+            data = self._global_ai_all()
+            _, tenant = self._tenant_ai_knowledge(data, user)
+            tenant["knowledgeMarkdown"] = markdown
+            tenant["knowledgeUpdatedAt"] = _now_iso()
+            self.store.set("global_ai", data)
+        return {"ok": True, **self.reindex_assistant_knowledge(user)}
+
+    def save_assistant_api_source(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        source_id = str(body.get("id") or "").strip()
+        name = str(body.get("name") or "").strip()[:MAX_NAME_LENGTH]
+        if not name:
+            raise WebError(HTTPStatus.BAD_REQUEST, "API source name is required.")
+        url = self._validate_knowledge_api_url(str(body.get("url") or ""))
+        json_path = str(body.get("jsonPath") or "").strip()[:500]
+        with self.lock:
+            data = self._global_ai_all()
+            _, tenant = self._tenant_ai_knowledge(data, user)
+            sources = [item for item in tenant["apiSources"] if isinstance(item, dict)]
+            existing = next((item for item in sources if item.get("id") == source_id), None)
+            if existing is None and len(sources) >= MAX_KNOWLEDGE_API_SOURCES:
+                raise WebError(HTTPStatus.CONFLICT, "Too many knowledge API sources.")
+            current_key = (
+                self._decrypt_secret(str(existing.get("apiKey") or "")) if existing else ""
+            )
+            if body.get("clearApiKey"):
+                api_key = ""
+            elif str(body.get("apiKey") or "").strip():
+                api_key = str(body["apiKey"]).strip()
+            else:
+                api_key = current_key
+            record = existing or {"id": uuid.uuid4().hex, "createdAt": _now_iso()}
+            record.update(
+                {
+                    "name": name,
+                    "url": url,
+                    "jsonPath": json_path,
+                    "apiKey": self._encrypt_secret(api_key),
+                    "enabled": bool(body.get("enabled", True)),
+                    "updatedAt": _now_iso(),
+                }
+            )
+            if existing is None:
+                sources.append(record)
+            tenant["apiSources"] = sources
+            self.store.set("global_ai", data)
+        return {"ok": True, **self.assistant_knowledge(user)}
+
+    def delete_assistant_api_source(
+        self, source_id: str, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        with self.lock:
+            data = self._global_ai_all()
+            _, tenant = self._tenant_ai_knowledge(data, user)
+            sources = [item for item in tenant["apiSources"] if isinstance(item, dict)]
+            kept = [item for item in sources if str(item.get("id") or "") != source_id]
+            if len(kept) == len(sources):
+                raise WebError(HTTPStatus.NOT_FOUND, "Knowledge API source not found.")
+            tenant["apiSources"] = kept
+            self.store.set("global_ai", data)
+        return {"ok": True, **self.reindex_assistant_knowledge(user)}
 
     def save_global_ai_knowledge(self, body: dict[str, Any]) -> dict[str, Any]:
         markdown = str(body.get("knowledgeMarkdown") or "")
@@ -12077,7 +12497,77 @@ class WebState:
         self.store.set("global_ai", data)
         return {"ok": True, **self.reindex_global_ai()}
 
-    def _build_global_ai_chunks(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+    def _sync_knowledge_source_record(self, source: dict[str, Any]) -> None:
+        headers = {"Accept": "application/json, text/plain, text/markdown"}
+        api_key = self._decrypt_secret(str(source.get("apiKey") or ""))
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        response: requests.Response | None = None
+        try:
+            response, _ = _open_public_response(
+                "GET", str(source.get("url") or ""), timeout=20, headers=headers
+            )
+            raw = _read_limited_response(response, MAX_KNOWLEDGE_API_BYTES)
+            if not response.ok:
+                raise WebError(
+                    HTTPStatus.BAD_GATEWAY,
+                    f"Knowledge API returned HTTP {response.status_code}.",
+                    "knowledge_api_error",
+                )
+            content_type = str(response.headers.get("content-type") or "").lower()
+            decoded = raw.decode(response.encoding or "utf-8", errors="replace")
+            if "json" in content_type:
+                try:
+                    parsed = json.loads(decoded)
+                except ValueError as exc:
+                    raise WebError(
+                        HTTPStatus.BAD_GATEWAY,
+                        "Knowledge API returned invalid JSON.",
+                        "knowledge_api_invalid_json",
+                    ) from exc
+                selected = self._json_path_value(
+                    parsed, str(source.get("jsonPath") or "")
+                )
+                content = (
+                    selected
+                    if isinstance(selected, str)
+                    else json.dumps(selected, ensure_ascii=False, indent=2)
+                )
+            else:
+                content = decoded
+            source["content"] = str(content)[:MAX_GLOBAL_KNOWLEDGE_LENGTH]
+            source["lastSyncAt"] = _now_iso()
+            source["lastError"] = ""
+        finally:
+            if response is not None:
+                response.close()
+
+    def sync_assistant_api_source(
+        self, source_id: str, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        data = self._global_ai_all()
+        _, tenant = self._tenant_ai_knowledge(data, user)
+        source = next(
+            (
+                item
+                for item in tenant["apiSources"]
+                if isinstance(item, dict) and str(item.get("id") or "") == source_id
+            ),
+            None,
+        )
+        if source is None:
+            raise WebError(HTTPStatus.NOT_FOUND, "Knowledge API source not found.")
+        try:
+            self._sync_knowledge_source_record(source)
+        except Exception as exc:
+            source["lastError"] = _safe_log_detail(exc, 500)
+            self.store.set("global_ai", data)
+            raise
+        self.store.set("global_ai", data)
+        return {"ok": True, **self.reindex_assistant_knowledge(user)}
+
+    @staticmethod
+    def _build_knowledge_chunks(data: dict[str, Any], *, scope: str) -> list[dict[str, Any]]:
         chunks: list[dict[str, Any]] = []
 
         def append_chunks(source_id: str, source_name: str, text: str) -> None:
@@ -12085,7 +12575,7 @@ class WebState:
                 chunks.append(
                     {
                         "id": hashlib.sha256(
-                            f"{source_id}:{index}:{chunk}".encode("utf-8")
+                            f"{scope}:{source_id}:{index}:{chunk}".encode("utf-8")
                         ).hexdigest()[:24],
                         "sourceId": source_id,
                         "sourceName": source_name,
@@ -12093,12 +12583,8 @@ class WebState:
                     }
                 )
 
-        append_chunks(
-            "knowledge-md",
-            "knowledge.md",
-            str(data.get("knowledgeMarkdown") or ""),
-        )
-        for source in data["apiSources"]:
+        append_chunks("knowledge-md", "knowledge.md", str(data.get("knowledgeMarkdown") or ""))
+        for source in data.get("apiSources", []):
             if not isinstance(source, dict) or not source.get("enabled", True):
                 continue
             append_chunks(
@@ -12106,7 +12592,7 @@ class WebState:
                 str(source.get("name") or source.get("url") or "API"),
                 str(source.get("content") or ""),
             )
-        for item in data["manualAnswers"]:
+        for item in data.get("manualAnswers", []):
             if not isinstance(item, dict):
                 continue
             append_chunks(
@@ -12115,6 +12601,41 @@ class WebState:
                 f"Question: {item.get('question', '')}\n\nAnswer: {item.get('answer', '')}",
             )
         return chunks
+
+    def reindex_assistant_knowledge(
+        self, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        data = self._global_ai_all()
+        settings = self._global_ai_private_settings(data)
+        owner_id, tenant = self._tenant_ai_knowledge(data, user)
+        chunks = self._build_knowledge_chunks(tenant, scope=f"tenant:{owner_id}")
+        index_mode = "keyword"
+        index_error = ""
+        embedding_model = settings["embeddingModel"]
+        if chunks and embedding_model:
+            try:
+                client = self._ollama_client(settings)
+                for start in range(0, len(chunks), 32):
+                    batch = chunks[start : start + 32]
+                    vectors = client.embed(
+                        embedding_model, [str(item["text"]) for item in batch]
+                    )
+                    for item, vector in zip(batch, vectors):
+                        item["embedding"] = vector
+                index_mode = "embedding"
+            except OllamaError as exc:
+                index_error = str(exc)
+        tenant["chunks"] = chunks
+        tenant["embeddingModel"] = embedding_model if index_mode == "embedding" else ""
+        tenant["indexMode"] = index_mode if chunks else "empty"
+        tenant["indexError"] = index_error
+        tenant["indexedAt"] = _now_iso()
+        with self.lock:
+            self.store.set("global_ai", data)
+        return self.assistant_knowledge(user)
+
+    def _build_global_ai_chunks(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        return self._build_knowledge_chunks(data, scope="global")
 
     def reindex_global_ai(self) -> dict[str, Any]:
         data = self._global_ai_all()
@@ -12172,6 +12693,7 @@ class WebState:
             raise WebError(HTTPStatus.BAD_REQUEST, "Question is too long.")
         data = self._global_ai_all()
         settings = self._global_ai_private_settings(data)
+        _, tenant = self._tenant_ai_knowledge(data, user)
         if not settings["enabled"] or not settings["chatModel"]:
             raise WebError(
                 HTTPStatus.CONFLICT,
@@ -12180,10 +12702,15 @@ class WebState:
             )
         client = self._ollama_client(settings)
         query_embedding: list[float] | None = None
+        knowledge_chunks = [
+            item
+            for item in [*data["chunks"], *tenant["chunks"]]
+            if isinstance(item, dict)
+        ]
         if (
-            settings["embeddingModel"]
-            and data.get("indexMode") == "embedding"
-            and data.get("embeddingModel") == settings["embeddingModel"]
+            knowledge_chunks
+            and settings["embeddingModel"]
+            and all(isinstance(item.get("embedding"), list) for item in knowledge_chunks)
         ):
             try:
                 query_embedding = client.embed(settings["embeddingModel"], [question])[0]
@@ -12191,7 +12718,7 @@ class WebState:
                 query_embedding = None
         ranked = rank_chunks(
             question,
-            [item for item in data["chunks"] if isinstance(item, dict)],
+            knowledge_chunks,
             query_embedding=query_embedding,
             top_k=settings["topK"],
         )
@@ -12312,7 +12839,25 @@ class WebState:
             target["status"] = "resolved"
             target["resolvedBy"] = responder
             target["updatedAt"] = _now_iso()
-            manual = [item for item in data["manualAnswers"] if isinstance(item, dict)]
+            target_owner_id = str(target.get("userId") or "").strip()
+            if target_owner_id:
+                tenants = data["tenants"]
+                tenant = tenants.get(target_owner_id)
+                if not isinstance(tenant, dict):
+                    tenant = {}
+                    tenants[target_owner_id] = tenant
+                if not isinstance(tenant.get("manualAnswers"), list):
+                    tenant["manualAnswers"] = []
+                if not isinstance(tenant.get("apiSources"), list):
+                    tenant["apiSources"] = []
+                if not isinstance(tenant.get("chunks"), list):
+                    tenant["chunks"] = []
+                manual_owner = tenant
+            else:
+                manual_owner = data
+            manual = [
+                item for item in manual_owner["manualAnswers"] if isinstance(item, dict)
+            ]
             existing = next(
                 (item for item in manual if item.get("questionId") == question_id), None
             )
@@ -12331,9 +12876,13 @@ class WebState:
             )
             if existing is None:
                 manual.append(record)
-            data["manualAnswers"] = manual
+            manual_owner["manualAnswers"] = manual
             self.store.set("global_ai", data)
-        knowledge = self.reindex_global_ai()
+        knowledge = (
+            self.reindex_assistant_knowledge({"id": target_owner_id})
+            if target_owner_id
+            else self.reindex_global_ai()
+        )
         return {
             "ok": True,
             "question": self._public_assistant_question(target),
@@ -12872,6 +13421,34 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             body = self._read_json()
             return self.state.ask_global_ai(
                 str(body.get("question") or ""), self.current_user
+            )
+        if method == "GET" and path == "/api/assistant/knowledge":
+            self._require_permission("ask_ai")
+            return self.state.assistant_knowledge(self.current_user)
+        if method == "POST" and path == "/api/assistant/knowledge":
+            self._require_permission("ask_ai")
+            return self.state.save_assistant_knowledge(
+                self._read_json(max_bytes=MAX_JSON_BODY_BYTES), self.current_user
+            )
+        if method == "POST" and path == "/api/assistant/knowledge/reindex":
+            self._require_permission("ask_ai")
+            return {"ok": True, **self.state.reindex_assistant_knowledge(self.current_user)}
+        if method == "POST" and path == "/api/assistant/knowledge/sources/save":
+            self._require_permission("ask_ai")
+            return self.state.save_assistant_api_source(
+                self._read_json(), self.current_user
+            )
+        if method == "POST" and path == "/api/assistant/knowledge/sources/sync":
+            self._require_permission("ask_ai")
+            body = self._read_json()
+            return self.state.sync_assistant_api_source(
+                str(body.get("id") or ""), self.current_user
+            )
+        if method == "POST" and path == "/api/assistant/knowledge/sources/delete":
+            self._require_permission("ask_ai")
+            body = self._read_json()
+            return self.state.delete_assistant_api_source(
+                str(body.get("id") or ""), self.current_user
             )
         if method == "GET" and path == "/api/assistant/unanswered":
             self._require_permission("manage_ai")

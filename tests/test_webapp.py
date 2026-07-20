@@ -355,7 +355,12 @@ def test_web_ui_tab_panels_are_siblings():
             node_id = data.get("id", "")
             classes = (data.get("class") or "").split()
             self.stack.append((tag, node_id, classes))
-            if node_id in {"tabPanelLine", "tabPanelTools", "tabPanelBot", "tabPanelAi"}:
+            if node_id in {
+                "tabPanelLine",
+                "tabPanelAssistant",
+                "tabPanelTools",
+                "tabPanelBot",
+            }:
                 self.parents[node_id] = [
                     n_id or ".".join(n_classes) or n_tag
                     for n_tag, n_id, n_classes in self.stack[-4:]
@@ -371,8 +376,8 @@ def test_web_ui_tab_panels_are_siblings():
     parser.feed(INDEX_HTML)
 
     assert parser.parents["tabPanelLine"][-2] == "tab-panels"
+    assert parser.parents["tabPanelAssistant"][-2] == "tab-panels"
     assert parser.parents["tabPanelBot"][-2] == "tab-panels"
-    assert parser.parents["tabPanelAi"][-2] == "tab-panels"
     assert parser.parents["tabPanelTools"][-2] == "tab-panels"
     assert 'id="authModeToggle"' in INDEX_HTML
     assert '"/api/auth/register"' in INDEX_HTML
@@ -2068,11 +2073,13 @@ def test_registered_member_can_add_line_but_cannot_manage_users(live_server):
 
 
 # -- AI image providers ----------------------------------------------------
-def test_web_ui_has_ai_settings_tab_and_source():
-    # Top tab bar gains an AI Settings tab + panel.
-    assert 'data-tab="ai"' in INDEX_HTML
-    assert 'data-tab-panel="ai"' in INDEX_HTML
-    assert '"tabs.ai"' in INDEX_HTML
+def test_web_ui_has_bot_ai_settings_page_and_source():
+    # Image generation settings live under Bot, separate from AI Chat Bot.
+    assert 'data-tab="assistant"' in INDEX_HTML
+    assert 'data-tab-panel="assistant"' in INDEX_HTML
+    assert 'data-bot-page-target="ai-settings"' in INDEX_HTML
+    assert 'data-bot-page="ai-settings"' in INDEX_HTML
+    assert 'id="botAiSettings"' in INDEX_HTML
     assert 'id="aiApiKey"' in INDEX_HTML
     assert 'id="aiTestButton"' in INDEX_HTML
     assert 'id="aiProvider"' in INDEX_HTML  # provider selector (Google / Nano / fal.ai)
