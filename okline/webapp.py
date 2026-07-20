@@ -42,6 +42,13 @@ from requests.adapters import HTTPAdapter
 from urllib3 import HTTPConnectionPool, HTTPSConnectionPool
 
 from . import __version__
+from .assistant import (
+    OllamaClient,
+    OllamaError,
+    chunk_markdown,
+    normalize_ollama_base_url,
+    rank_chunks,
+)
 from . import e2ee_crypto as e2ee_frame
 from ._util import is_mid
 from .client import OkLine
@@ -1054,6 +1061,7 @@ INDEX_HTML = r"""<!doctype html>
 
     .tab-panel[data-tab-panel="tools"].active,
     .tab-panel[data-tab-panel="bot"].active,
+    .tab-panel[data-tab-panel="assistant"].active,
     .tab-panel[data-tab-panel="ai"].active {
       overflow: auto;
       padding: 16px;
@@ -1066,6 +1074,49 @@ INDEX_HTML = r"""<!doctype html>
       border-radius: 12px;
       border: 1px solid var(--line);
     }
+
+    .assistant-panel-inner { width: min(920px, 100%); }
+    .assistant-history {
+      min-height: 320px;
+      max-height: min(560px, 56vh);
+      overflow-y: auto;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #f5f8f7;
+    }
+    .assistant-entry { padding: 18px 20px; border-bottom: 1px solid var(--line); }
+    .assistant-entry:last-child { border-bottom: 0; }
+    .assistant-entry-head,
+    .assistant-answer-head,
+    .assistant-queue-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .assistant-entry time,
+    .assistant-source,
+    .assistant-queue-meta { color: var(--muted); font-size: 12px; }
+    .assistant-question { margin-top: 8px; font-weight: 700; white-space: pre-wrap; word-break: break-word; }
+    .assistant-answer {
+      margin-top: 12px;
+      padding-left: 14px;
+      border-left: 3px solid var(--accent);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .assistant-answer.pending { border-left-color: #d7a33d; color: var(--muted); }
+    .assistant-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .assistant-source { padding: 3px 8px; background: #e9efed; border-radius: 999px; }
+    .assistant-composer { display: grid; gap: 10px; }
+    .assistant-composer textarea { min-height: 96px; resize: vertical; }
+    .assistant-composer-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+    .assistant-queue { display: grid; }
+    .assistant-queue-row { padding: 18px 0; border-bottom: 1px solid var(--line); }
+    .assistant-queue-row:last-child { border-bottom: 0; }
+    .assistant-queue-question { margin: 10px 0; white-space: pre-wrap; word-break: break-word; }
+    .assistant-queue-row textarea { width: 100%; min-height: 88px; resize: vertical; }
+    .assistant-empty { padding: 48px 20px; color: var(--muted); text-align: center; }
 
     /* Date fields: a dd/mm/yyyy text display sits over the native date input so
        the calendar picker stays, but the shown format is not the browser locale's. */
@@ -2571,6 +2622,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="workspace hidden" id="workspace">
         <div class="tabbar" role="tablist" aria-label="LinePassport sections">
           <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line" data-i18n="tabs.line">LINE</button>
+          <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai" data-i18n="tabs.assistant">Ask AI</button>
           <button class="tab" id="tabTools" type="button" role="tab" aria-selected="false" aria-controls="tabPanelTools" data-tab="tools" data-i18n="tabs.tools">Tools</button>
           <button class="tab" id="tabBot" type="button" role="tab" aria-selected="false" aria-controls="tabPanelBot" data-tab="bot" data-i18n="tabs.bot">Bot</button>
           <button class="tab" id="tabAi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAi" data-tab="ai" data-i18n="tabs.ai">AI Settings</button>
@@ -2644,6 +2696,49 @@ INDEX_HTML = r"""<!doctype html>
             <button class="send-btn" id="sendButton" type="button" data-requires-account data-requires-permission="send" data-i18n-title="chat.send" title="Send" aria-label="Send"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4l17.4-8a1 1 0 0 0 0-1.8l-17.4-8A1 1 0 0 0 2 3.5L4 11l10 1-10 1-2 7.5a1 1 0 0 0 1.4 1z"/></svg></button>
           </div>
         </section>
+          </div>
+
+          <div class="tab-panel" data-tab-panel="assistant" id="tabPanelAssistant" role="tabpanel" aria-labelledby="tabAssistant">
+            <div class="tab-panel-inner assistant-panel-inner">
+              <section class="section">
+                <div class="section-head">
+                  <div>
+                    <h2 data-i18n="assistant.title">Ask LinePassport AI</h2>
+                    <span class="muted" data-i18n="assistant.subtitle">Answers use the shared knowledge managed by your administrator.</span>
+                  </div>
+                  <div class="row compact">
+                    <span class="pill" id="assistantStatusPill" data-i18n="assistant.checking">Checking</span>
+                    <button id="assistantRefreshButton" type="button" data-requires-permission="ask_ai" data-i18n="common.refresh">Refresh</button>
+                  </div>
+                </div>
+                <div class="assistant-history" id="assistantHistory" role="log" aria-live="polite">
+                  <div class="assistant-empty" data-i18n="assistant.loading">Loading questions...</div>
+                </div>
+                <div class="section-body">
+                  <form class="assistant-composer" id="assistantForm">
+                    <label>
+                      <span data-i18n="assistant.question_label">Question</span>
+                      <textarea id="assistantQuestion" maxlength="4000" rows="3" data-requires-permission="ask_ai" data-i18n-ph="assistant.question_ph" placeholder="Ask about the available knowledge" required></textarea>
+                    </label>
+                    <div class="assistant-composer-actions">
+                      <span class="muted" id="assistantAskState" aria-live="polite"></span>
+                      <button class="primary" id="assistantAskButton" type="submit" data-requires-permission="ask_ai" data-i18n="assistant.ask">Ask AI</button>
+                    </div>
+                  </form>
+                </div>
+              </section>
+
+              <section class="section hidden" id="assistantAdminPanel">
+                <div class="section-head">
+                  <div>
+                    <h2 data-i18n="assistant.unanswered_title">Questions AI could not answer</h2>
+                    <span class="muted" data-i18n="assistant.unanswered_hint">Approved answers become part of shared knowledge.</span>
+                  </div>
+                  <span class="pill" id="assistantUnansweredCount">0</span>
+                </div>
+                <div class="section-body assistant-queue" id="assistantUnansweredList"></div>
+              </section>
+            </div>
           </div>
 
           <div class="tab-panel" data-tab-panel="bot" id="tabPanelBot" role="tabpanel" aria-labelledby="tabBot">
@@ -3670,7 +3765,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     // ---- top-level tabs (LINE / Tools / Bot / AI) ----------------------
-    const TABS = ["line", "tools", "bot", "ai"];
+    const TABS = ["line", "assistant", "tools", "bot", "ai"];
     const BOT_PAGES = ["schedules", "schedule", "patterns", "pattern-categories", "logs"];
     function setTab(tab) {
       if (!TABS.includes(tab)) tab = "line";
@@ -3691,6 +3786,7 @@ INDEX_HTML = r"""<!doctype html>
         loadBotLogs().catch(toastError);
       }
       if (tab === "line") refreshConversationsInBackground();
+      if (tab === "assistant") loadAssistant().catch(toastError);
       if (tab === "ai") loadAiSettings();
     }
 
@@ -6753,6 +6849,104 @@ INDEX_HTML = r"""<!doctype html>
       });
     }
 
+    // ---- Ollama assistant ---------------------------------------------
+    function renderAssistantHistory(items) {
+      const root = $("assistantHistory");
+      root.replaceChildren();
+      const questions = [...(items || [])].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+      if (!questions.length) {
+        root.appendChild(textSpan(t("assistant.empty"), "assistant-empty"));
+        return;
+      }
+      for (const item of questions) {
+        const entry = document.createElement("article");
+        entry.className = "assistant-entry";
+        const head = document.createElement("div");
+        head.className = "assistant-entry-head";
+        head.append(textSpan(item.userName || t("common.you")), textSpan(item.createdAt || "", "assistant-source"));
+        const question = textSpan(item.question || "", "assistant-question");
+        const answer = textSpan(item.answer || t("assistant.pending"), "assistant-answer" + (item.answer ? "" : " pending"));
+        entry.append(head, question, answer);
+        if (item.sources && item.sources.length) {
+          const sources = document.createElement("div");
+          sources.className = "assistant-sources";
+          for (const source of item.sources) sources.appendChild(textSpan(`${source.name || "Knowledge"} (${Math.round(Number(source.score || 0) * 100)}%)`, "assistant-source"));
+          entry.appendChild(sources);
+        }
+        root.appendChild(entry);
+      }
+      root.scrollTop = root.scrollHeight;
+    }
+
+    function renderAssistantUnanswered(items) {
+      const root = $("assistantUnansweredList");
+      root.replaceChildren();
+      $("assistantUnansweredCount").textContent = String((items || []).length);
+      if (!(items || []).length) {
+        root.appendChild(textSpan(t("assistant.no_unanswered"), "assistant-empty"));
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("article");
+        row.className = "assistant-queue-row";
+        const head = document.createElement("div");
+        head.className = "assistant-queue-head";
+        head.append(textSpan(item.userName || "Member"), textSpan(item.createdAt || "", "assistant-queue-meta"));
+        const question = textSpan(item.question || "", "assistant-queue-question");
+        const answer = document.createElement("textarea");
+        answer.className = "answer-editor";
+        answer.maxLength = 12000;
+        answer.placeholder = t("assistant.answer_ph");
+        const button = document.createElement("button");
+        button.className = "primary";
+        button.type = "button";
+        button.textContent = t("assistant.approve");
+        button.addEventListener("click", async () => {
+          if (!answer.value.trim()) return toast(t("assistant.answer_required"), true);
+          button.disabled = true;
+          try {
+            await post("/api/assistant/answer", {id: item.id, answer: answer.value.trim()});
+            toast(t("assistant.answer_saved"));
+            await loadAssistantUnanswered();
+          } catch (err) { toastError(err); }
+          finally { button.disabled = false; }
+        });
+        row.append(head, question, answer, button);
+        root.appendChild(row);
+      }
+    }
+
+    async function loadAssistantUnanswered() {
+      if (!hasPermission("manage_ai")) return;
+      const data = await api("/api/assistant/unanswered?limit=500");
+      renderAssistantUnanswered(data.questions || []);
+    }
+
+    async function loadAssistant() {
+      if (!hasPermission("ask_ai")) return;
+      const data = await api("/api/assistant/history?limit=100");
+      const configured = Boolean(data.settings && data.settings.configured);
+      $("assistantStatusPill").textContent = configured ? t("assistant.ready") : t("assistant.not_configured");
+      renderAssistantHistory(data.questions || []);
+      $("assistantAdminPanel").classList.toggle("hidden", !hasPermission("manage_ai"));
+      await loadAssistantUnanswered();
+    }
+
+    async function askAssistant() {
+      const input = $("assistantQuestion");
+      const question = input.value.trim();
+      if (!question) return;
+      const button = $("assistantAskButton");
+      button.disabled = true;
+      $("assistantAskState").textContent = t("assistant.asking");
+      try {
+        await post("/api/assistant/ask", {question});
+        input.value = "";
+        await loadAssistant();
+      } catch (err) { toastError(err); }
+      finally { button.disabled = false; $("assistantAskState").textContent = ""; }
+    }
+
     // ---- wiring --------------------------------------------------------
     $("authForm").addEventListener("submit", (ev) => {
       ev.preventDefault();
@@ -6766,6 +6960,8 @@ INDEX_HTML = r"""<!doctype html>
     $("webLogoutButton").addEventListener("click", () => webLogout().catch(toastError));
     $("homeLogoButton").addEventListener("click", () => goHome().catch(toastError));
     $("refreshAllButton").addEventListener("click", () => refreshStatus(true));
+    $("assistantForm").addEventListener("submit", (ev) => { ev.preventDefault(); askAssistant().catch(toastError); });
+    $("assistantRefreshButton").addEventListener("click", () => loadAssistant().catch(toastError));
     $("accountSelect").addEventListener("change", () => selectAccount().catch(toastError));
     $("settingsButton").addEventListener("click", toggleSettingsMenu);
     $("changePasswordMenuButton").addEventListener("click", () => openSettings("password"));
@@ -7015,7 +7211,7 @@ GOD_HTML = r"""<!doctype html>
       background: var(--bg);
       font: 15px/1.5 "Segoe UI", Tahoma, sans-serif;
     }
-    button, input, select { font: inherit; }
+    button, input, select, textarea { font: inherit; }
     button { cursor: pointer; }
     button:disabled { cursor: not-allowed; opacity: .55; }
     .hidden { display: none !important; }
@@ -7039,7 +7235,7 @@ GOD_HTML = r"""<!doctype html>
     h3 { margin-bottom: 12px; font-size: 16px; letter-spacing: 0; }
     .muted { color: var(--muted); }
     .field { display: grid; gap: 7px; margin-top: 18px; font-weight: 600; }
-    input, select {
+    input, select, textarea {
       width: 100%;
       min-height: 44px;
       padding: 9px 12px;
@@ -7049,7 +7245,8 @@ GOD_HTML = r"""<!doctype html>
       border-radius: 4px;
       outline: none;
     }
-    input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(8, 127, 91, .12); }
+    textarea { min-height: 130px; resize: vertical; }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(8, 127, 91, .12); }
     .primary, .secondary, .danger-button, .icon-button {
       min-height: 40px;
       padding: 8px 14px;
@@ -7075,7 +7272,29 @@ GOD_HTML = r"""<!doctype html>
     .topbar-brand { min-width: 0; }
     .topbar strong { display: block; font-size: 17px; }
     .topbar small { color: var(--muted); }
+    .god-nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      overflow-x: auto;
+      padding: 0 28px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .god-nav button {
+      min-height: 48px;
+      padding: 0 16px;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-bottom: 3px solid transparent;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .god-nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .nav-count { margin-left: 5px; color: var(--danger); }
     .page { width: min(1280px, 100%); margin: 0 auto; padding: 28px; }
+    .god-page.hidden { display: none; }
     .page-head {
       display: flex;
       align-items: end;
@@ -7168,6 +7387,72 @@ GOD_HTML = r"""<!doctype html>
     .action-button.details-action { color: #076e50; background: var(--accent-soft); border-color: #b9dfd1; }
     .action-button.delete-action { color: var(--danger); background: #fff; border-color: #efc4bf; }
     .action-button.delete-action:hover { background: var(--danger-soft); border-color: #e39c94; }
+    .panel {
+      margin-bottom: 18px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-head h2, .panel-head h3 { margin: 0; }
+    .panel-body { padding: 20px; }
+    .form-grid { display: grid; gap: 16px; }
+    .form-grid label { display: grid; gap: 7px; color: var(--muted); font-weight: 700; }
+    .field-row { display: flex; align-items: center; gap: 9px; }
+    .field-row > input, .field-row > select { flex: 1; }
+    .switch-row {
+      display: flex !important;
+      grid-template-columns: none;
+      align-items: center;
+      gap: 10px !important;
+      color: var(--ink) !important;
+    }
+    .switch-row input { width: 19px; min-height: 19px; }
+    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .settings-grid .wide { grid-column: 1 / -1; }
+    .button-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+    .connection-state {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 12px;
+      color: var(--muted);
+      background: #f7f9f8;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+    .connection-state.ok { color: #087443; background: var(--accent-soft); border-color: #b9dfd1; }
+    .connection-state.error-state { color: var(--danger); background: var(--danger-soft); border-color: #efc4bf; }
+    .knowledge-editor { min-height: 360px; font-family: Consolas, "Courier New", monospace; line-height: 1.55; }
+    .source-form { display: grid; grid-template-columns: 1fr 1.4fr; gap: 14px; }
+    .source-form .wide { grid-column: 1 / -1; }
+    .source-list, .question-list { display: grid; gap: 10px; }
+    .source-row, .question-row {
+      padding: 15px 16px;
+      background: #f8faf9;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+    }
+    .source-row-head, .question-row-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .source-row strong, .source-row span, .question-row strong, .question-row span { display: block; }
+    .source-url { overflow-wrap: anywhere; }
+    .question-text { margin: 10px 0; font-size: 16px; white-space: pre-wrap; }
+    .question-meta { color: var(--muted); font-size: 13px; }
+    .answer-editor { min-height: 92px; margin-top: 12px; }
+    .empty-panel { padding: 54px 20px; text-align: center; color: var(--muted); }
     .empty { padding: 58px 20px; text-align: center; color: var(--muted); }
     .detail-panel {
       position: fixed;
@@ -7199,6 +7484,7 @@ GOD_HTML = r"""<!doctype html>
     .toast { position: fixed; right: 20px; bottom: 20px; z-index: 50; max-width: 420px; padding: 13px 16px; color: #fff; background: var(--ink); box-shadow: var(--shadow); }
     @media (max-width: 960px) {
       .topbar { padding: 0 16px; }
+      .god-nav { padding: 0 12px; }
       .page { padding: 20px 14px; }
       .page-head { align-items: start; flex-direction: column; }
       .toolbar { align-items: stretch; flex-direction: column; }
@@ -7208,7 +7494,8 @@ GOD_HTML = r"""<!doctype html>
       .user-control { align-items: flex-start; flex-direction: column; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
       .actions { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .action-button { width: 100%; padding-inline: 8px; }
-      .two-col { grid-template-columns: 1fr; }
+      .two-col, .settings-grid, .source-form { grid-template-columns: 1fr; }
+      .settings-grid .wide, .source-form .wide { grid-column: auto; }
     }
   </style>
 </head>
@@ -7226,22 +7513,94 @@ GOD_HTML = r"""<!doctype html>
 
   <div class="hidden" id="appView">
     <header class="topbar">
-      <div class="topbar-brand"><strong>LinePassport God</strong><small>User Management</small></div>
+      <div class="topbar-brand"><strong>LinePassport God</strong><small>System Management</small></div>
       <button class="secondary" id="logoutButton">ออกจากระบบ</button>
     </header>
+    <nav class="god-nav" role="tablist" aria-label="เมนูจัดการระบบ">
+      <button class="active" type="button" role="tab" aria-selected="true" data-god-page-target="members">สมาชิก</button>
+      <button type="button" role="tab" aria-selected="false" data-god-page-target="ai-settings">Ollama</button>
+      <button type="button" role="tab" aria-selected="false" data-god-page-target="knowledge">Knowledge / RAG</button>
+      <button type="button" role="tab" aria-selected="false" data-god-page-target="unanswered">ตอบไม่ได้ <span class="nav-count" id="godUnansweredCount"></span></button>
+    </nav>
     <main class="page">
-      <div class="page-head">
-        <div><h2>สมาชิก</h2><span class="muted">บัญชีที่สมัครใช้งาน LinePassport</span></div>
-        <div class="summary"><span id="totalUsers">0 สมาชิก</span><span id="activeUsers">0 ใช้งานอยู่</span></div>
-      </div>
-      <div class="toolbar">
-        <input class="search" id="searchInput" type="search" placeholder="ค้นหาอีเมลหรือชื่อสมาชิก" aria-label="ค้นหาสมาชิก">
-        <button class="secondary" id="refreshButton">รีเฟรช</button>
-      </div>
-      <div class="user-table" id="userTable">
-        <div class="user-row head"><span>สมาชิก</span><span>บทบาท</span><span>สถานะและการจัดการ</span></div>
-        <div class="empty">กำลังโหลด...</div>
-      </div>
+      <section class="god-page" data-god-page="members">
+        <div class="page-head">
+          <div><h2>สมาชิก</h2><span class="muted">บัญชีที่สมัครใช้งาน LinePassport</span></div>
+          <div class="summary"><span id="totalUsers">0 สมาชิก</span><span id="activeUsers">0 ใช้งานอยู่</span></div>
+        </div>
+        <div class="toolbar">
+          <input class="search" id="searchInput" type="search" placeholder="ค้นหาอีเมลหรือชื่อสมาชิก" aria-label="ค้นหาสมาชิก">
+          <button class="secondary" id="refreshButton">รีเฟรช</button>
+        </div>
+        <div class="user-table" id="userTable">
+          <div class="user-row head"><span>สมาชิก</span><span>บทบาท</span><span>สถานะและการจัดการ</span></div>
+          <div class="empty">กำลังโหลด...</div>
+        </div>
+      </section>
+
+      <section class="god-page hidden" data-god-page="ai-settings">
+        <div class="page-head">
+          <div><h2>Global AI / Ollama</h2><span class="muted">ตั้งค่า AI สนทนาส่วนกลางสำหรับสมาชิกทุกคน</span></div>
+          <span class="badge" id="globalAiStatus">ยังไม่ได้ตั้งค่า</span>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>การเชื่อมต่อ</h3><button class="secondary" type="button" id="testOllamaButton">ทดสอบและโหลดโมเดล</button></div>
+          <div class="panel-body form-grid">
+            <label class="switch-row"><input id="globalAiEnabled" type="checkbox"> เปิดใช้ AI สนทนา</label>
+            <div class="settings-grid">
+              <label>Ollama Base URL<input id="ollamaBaseUrl" type="url" placeholder="http://127.0.0.1:11434"></label>
+              <label>API key (ถ้ามี)<div class="field-row"><input id="ollamaApiKey" type="password" autocomplete="off" placeholder="เว้นว่างเพื่อใช้ค่าเดิม"><button class="secondary" type="button" id="toggleOllamaKeyButton">แสดง</button></div><span class="muted" id="ollamaApiKeyCurrent"></span></label>
+              <label>Chat model<input id="ollamaChatModel" list="ollamaModelOptions" placeholder="เช่น gemma3:4b"></label>
+              <label>Embedding model<input id="ollamaEmbeddingModel" list="ollamaModelOptions" placeholder="เช่น embeddinggemma"></label>
+              <datalist id="ollamaModelOptions"></datalist>
+              <label>Top K<input id="ollamaTopK" type="number" min="1" max="12" value="5"></label>
+              <label>Temperature<input id="ollamaTemperature" type="number" min="0" max="2" step="0.1" value="0.2"></label>
+              <label>Timeout (วินาที)<input id="ollamaTimeout" type="number" min="5" max="600" value="120"></label>
+              <label class="switch-row"><input id="ollamaStrictKnowledge" type="checkbox" checked> ตอบจาก Knowledge เท่านั้น</label>
+              <label class="wide">System prompt<textarea id="ollamaSystemPrompt" rows="5"></textarea></label>
+            </div>
+            <div class="connection-state" id="ollamaConnectionState">ยังไม่ได้ทดสอบการเชื่อมต่อ</div>
+            <div class="button-row"><button class="primary" type="button" id="saveGlobalAiButton">บันทึกการตั้งค่า</button><button class="secondary" type="button" id="reindexKnowledgeButton">สร้างดัชนีใหม่</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="god-page hidden" data-god-page="knowledge">
+        <div class="page-head">
+          <div><h2>Knowledge / RAG</h2><span class="muted">จัดการ knowledge.md และข้อมูลจาก API ภายนอก</span></div>
+          <div class="summary"><span id="knowledgeChunkCount">0 chunks</span><span id="knowledgeIndexMode">ยังไม่ Index</span></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>knowledge.md</h3><button class="primary" type="button" id="saveKnowledgeButton">บันทึกและ Index</button></div>
+          <div class="panel-body"><textarea class="knowledge-editor" id="knowledgeMarkdown" spellcheck="false" placeholder="# Knowledge&#10;&#10;ใส่ข้อมูลที่ต้องการให้ AI ใช้ตอบคำถาม"></textarea><div class="connection-state" id="knowledgeIndexState">ยังไม่มีข้อมูลดัชนี</div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Knowledge API</h3><span class="muted">รองรับ GET และ Bearer token</span></div>
+          <div class="panel-body form-grid">
+            <input id="knowledgeSourceId" type="hidden">
+            <div class="source-form">
+              <label>ชื่อแหล่งข้อมูล<input id="knowledgeSourceName" placeholder="เช่น Product API"></label>
+              <label>API URL<input id="knowledgeSourceUrl" type="url" placeholder="https://api.example.com/knowledge"></label>
+              <label>JSON path<input id="knowledgeSourceJsonPath" placeholder="เช่น data.items (ไม่บังคับ)"></label>
+              <label>Bearer token<div class="field-row"><input id="knowledgeSourceApiKey" type="password" autocomplete="off" placeholder="เว้นว่างเพื่อใช้ค่าเดิม"></div></label>
+              <label class="switch-row wide"><input id="knowledgeSourceEnabled" type="checkbox" checked> เปิดใช้แหล่งข้อมูลนี้</label>
+            </div>
+            <div class="button-row"><button class="primary" type="button" id="saveKnowledgeSourceButton">บันทึก API</button><button class="secondary hidden" type="button" id="cancelKnowledgeSourceButton">ยกเลิกแก้ไข</button></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>รายการ API</h3><button class="secondary" type="button" id="refreshKnowledgeButton">รีเฟรช</button></div>
+          <div class="panel-body source-list" id="knowledgeSourceList"></div>
+        </div>
+      </section>
+
+      <section class="god-page hidden" data-god-page="unanswered">
+        <div class="page-head">
+          <div><h2>คำถามที่ AI ตอบไม่ได้</h2><span class="muted">คำตอบที่อนุมัติจะถูกเพิ่มเข้า Knowledge อัตโนมัติ</span></div>
+          <button class="secondary" type="button" id="refreshUnansweredButton">รีเฟรช</button>
+        </div>
+        <div class="question-list" id="godUnansweredList"><div class="empty-panel">กำลังโหลด...</div></div>
+      </section>
     </main>
   </div>
 
@@ -7275,7 +7634,7 @@ GOD_HTML = r"""<!doctype html>
   <div class="toast hidden" id="toast" role="status"></div>
 
   <script>
-    const state = {users: [], roles: {}, deleteUser: null};
+    const state = {users: [], roles: {}, deleteUser: null, page: "members", globalAi: null, knowledge: null, unanswered: []};
     const $ = (id) => document.getElementById(id);
 
     const editPasswordConfirmLabel = document.createElement("label");
@@ -7393,6 +7752,304 @@ GOD_HTML = r"""<!doctype html>
       }
     }
 
+    async function setGodPage(page) {
+      const allowed = ["members", "ai-settings", "knowledge", "unanswered"];
+      state.page = allowed.includes(page) ? page : "members";
+      document.querySelectorAll("[data-god-page-target]").forEach((button) => {
+        const active = button.dataset.godPageTarget === state.page;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      });
+      document.querySelectorAll("[data-god-page]").forEach((panel) => {
+        panel.classList.toggle("hidden", panel.dataset.godPage !== state.page);
+      });
+      if (state.page === "members") await loadUsers();
+      if (state.page === "ai-settings") await loadGlobalAiSettings();
+      if (state.page === "knowledge") await loadKnowledge();
+      if (state.page === "unanswered") await loadUnanswered();
+    }
+
+    function setConnectionState(message, kind = "") {
+      const element = $("ollamaConnectionState");
+      element.textContent = message;
+      element.className = `connection-state ${kind}`.trim();
+    }
+
+    function populateOllamaModels(models) {
+      const datalist = $("ollamaModelOptions");
+      datalist.replaceChildren();
+      for (const model of models || []) {
+        const option = document.createElement("option");
+        option.value = model.name || "";
+        option.label = [model.parameterSize, model.quantization].filter(Boolean).join(" · ");
+        datalist.appendChild(option);
+      }
+    }
+
+    function renderGlobalAiSettings(config) {
+      state.globalAi = config || {};
+      $("globalAiEnabled").checked = Boolean(config.enabled);
+      $("ollamaBaseUrl").value = config.baseUrl || "http://127.0.0.1:11434";
+      $("ollamaApiKey").value = "";
+      $("ollamaApiKeyCurrent").textContent = config.hasApiKey
+        ? `บันทึก key แล้ว ${config.apiKeyPreview || ""}`
+        : "Local Ollama ไม่ต้องใช้ API key";
+      $("ollamaChatModel").value = config.chatModel || "";
+      $("ollamaEmbeddingModel").value = config.embeddingModel || "";
+      $("ollamaTopK").value = config.topK || 5;
+      $("ollamaTemperature").value = config.temperature ?? 0.2;
+      $("ollamaTimeout").value = config.timeout || 120;
+      $("ollamaStrictKnowledge").checked = config.strictKnowledge !== false;
+      $("ollamaSystemPrompt").value = config.systemPrompt || "";
+      $("globalAiStatus").textContent = config.configured ? "พร้อมใช้งาน" : "ยังไม่ได้ตั้งค่า";
+      $("globalAiStatus").className = `badge ${config.configured ? "active" : "inactive"}`;
+      $("godUnansweredCount").textContent = config.unansweredCount ? `(${config.unansweredCount})` : "";
+      if (config.indexError) setConnectionState(config.indexError, "error-state");
+    }
+
+    async function loadGlobalAiSettings() {
+      const config = await api("/api/god/ai/settings");
+      renderGlobalAiSettings(config);
+      return config;
+    }
+
+    async function testOllama() {
+      const button = $("testOllamaButton");
+      button.disabled = true;
+      setConnectionState("กำลังเชื่อมต่อ Ollama...");
+      try {
+        const data = await api("/api/god/ai/test", {
+          method: "POST",
+          body: JSON.stringify({
+            baseUrl: $("ollamaBaseUrl").value.trim(),
+            apiKey: $("ollamaApiKey").value.trim()
+          })
+        });
+        state.ollamaModels = data.models || [];
+        populateOllamaModels(state.ollamaModels);
+        const names = state.ollamaModels.map((item) => item.name);
+        if (!$("ollamaChatModel").value) {
+          $("ollamaChatModel").value = names.find((name) => !/embed|minilm/i.test(name)) || names[0] || "";
+        }
+        if (!$("ollamaEmbeddingModel").value) {
+          $("ollamaEmbeddingModel").value = names.find((name) => /embed|minilm/i.test(name)) || "";
+        }
+        setConnectionState(`เชื่อมต่อแล้ว · พบ ${names.length} โมเดล`, "ok");
+      } catch (error) {
+        setConnectionState(error.message, "error-state");
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function saveGlobalAiSettings() {
+      const payload = {
+        enabled: $("globalAiEnabled").checked,
+        baseUrl: $("ollamaBaseUrl").value.trim(),
+        chatModel: $("ollamaChatModel").value.trim(),
+        embeddingModel: $("ollamaEmbeddingModel").value.trim(),
+        topK: Number($("ollamaTopK").value),
+        temperature: Number($("ollamaTemperature").value),
+        timeout: Number($("ollamaTimeout").value),
+        strictKnowledge: $("ollamaStrictKnowledge").checked,
+        systemPrompt: $("ollamaSystemPrompt").value.trim()
+      };
+      if ($("ollamaApiKey").value.trim()) payload.apiKey = $("ollamaApiKey").value.trim();
+      const config = await api("/api/god/ai/settings", {method: "POST", body: JSON.stringify(payload)});
+      renderGlobalAiSettings(config);
+      toast("บันทึก Global AI แล้ว");
+    }
+
+    async function reindexKnowledge() {
+      $("reindexKnowledgeButton").disabled = true;
+      try {
+        const data = await api("/api/god/ai/reindex", {method: "POST", body: "{}"});
+        renderKnowledge(data);
+        await loadGlobalAiSettings();
+        toast("สร้างดัชนี Knowledge แล้ว");
+      } finally {
+        $("reindexKnowledgeButton").disabled = false;
+      }
+    }
+
+    function renderKnowledge(data) {
+      state.knowledge = data || {};
+      $("knowledgeMarkdown").value = data.knowledgeMarkdown || "";
+      $("knowledgeChunkCount").textContent = `${data.chunkCount || 0} chunks`;
+      $("knowledgeIndexMode").textContent = data.indexMode === "embedding" ? "Vector index" : data.indexMode === "keyword" ? "Keyword index" : "ยังไม่ Index";
+      const status = $("knowledgeIndexState");
+      if (data.indexError) {
+        status.textContent = `บันทึกแล้ว แต่ Embedding ใช้งานไม่ได้: ${data.indexError}`;
+        status.className = "connection-state error-state";
+      } else if (data.indexedAt) {
+        status.textContent = `Index ล่าสุด ${data.indexedAt} · ${data.chunkCount || 0} chunks · ${data.indexMode || "empty"}`;
+        status.className = "connection-state ok";
+      } else {
+        status.textContent = "ยังไม่มีข้อมูลดัชนี";
+        status.className = "connection-state";
+      }
+      renderKnowledgeSources();
+    }
+
+    async function loadKnowledge() {
+      renderKnowledge(await api("/api/god/ai/knowledge"));
+    }
+
+    async function saveKnowledge() {
+      $("saveKnowledgeButton").disabled = true;
+      try {
+        const data = await api("/api/god/ai/knowledge", {
+          method: "POST",
+          body: JSON.stringify({knowledgeMarkdown: $("knowledgeMarkdown").value})
+        });
+        renderKnowledge(data);
+        toast("บันทึก knowledge.md และสร้างดัชนีแล้ว");
+      } finally {
+        $("saveKnowledgeButton").disabled = false;
+      }
+    }
+
+    function clearKnowledgeSourceForm() {
+      $("knowledgeSourceId").value = "";
+      $("knowledgeSourceName").value = "";
+      $("knowledgeSourceUrl").value = "";
+      $("knowledgeSourceJsonPath").value = "";
+      $("knowledgeSourceApiKey").value = "";
+      $("knowledgeSourceEnabled").checked = true;
+      $("cancelKnowledgeSourceButton").classList.add("hidden");
+      $("saveKnowledgeSourceButton").textContent = "บันทึก API";
+    }
+
+    function editKnowledgeSource(source) {
+      $("knowledgeSourceId").value = source.id || "";
+      $("knowledgeSourceName").value = source.name || "";
+      $("knowledgeSourceUrl").value = source.url || "";
+      $("knowledgeSourceJsonPath").value = source.jsonPath || "";
+      $("knowledgeSourceApiKey").value = "";
+      $("knowledgeSourceEnabled").checked = source.enabled !== false;
+      $("cancelKnowledgeSourceButton").classList.remove("hidden");
+      $("saveKnowledgeSourceButton").textContent = "บันทึกการแก้ไข";
+      $("knowledgeSourceName").focus();
+    }
+
+    function renderKnowledgeSources() {
+      const list = $("knowledgeSourceList");
+      list.replaceChildren();
+      const sources = (state.knowledge && state.knowledge.apiSources) || [];
+      if (!sources.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-panel";
+        empty.textContent = "ยังไม่มี Knowledge API";
+        list.appendChild(empty);
+        return;
+      }
+      for (const source of sources) {
+        const row = document.createElement("div");
+        row.className = "source-row";
+        const head = document.createElement("div");
+        head.className = "source-row-head";
+        const info = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = source.name || "API";
+        const url = document.createElement("span");
+        url.className = "muted source-url";
+        url.textContent = source.url || "";
+        const meta = document.createElement("span");
+        meta.className = "question-meta";
+        meta.textContent = source.lastError
+          ? `ผิดพลาด: ${source.lastError}`
+          : source.lastSyncAt ? `Sync ล่าสุด ${source.lastSyncAt} · ${source.contentLength || 0} ตัวอักษร` : "ยังไม่ได้ Sync";
+        info.append(name, url, meta);
+        const actions = document.createElement("div");
+        actions.className = "button-row";
+        actions.append(
+          makeButton("แก้ไข", "secondary", () => editKnowledgeSource(source)),
+          makeButton("ซิงก์", "primary", () => syncKnowledgeSource(source.id)),
+          makeButton("ลบ", "danger-button", () => deleteKnowledgeSource(source.id))
+        );
+        head.append(info, actions);
+        row.appendChild(head);
+        list.appendChild(row);
+      }
+    }
+
+    async function saveKnowledgeSource() {
+      const payload = {
+        id: $("knowledgeSourceId").value,
+        name: $("knowledgeSourceName").value.trim(),
+        url: $("knowledgeSourceUrl").value.trim(),
+        jsonPath: $("knowledgeSourceJsonPath").value.trim(),
+        enabled: $("knowledgeSourceEnabled").checked
+      };
+      if ($("knowledgeSourceApiKey").value.trim()) payload.apiKey = $("knowledgeSourceApiKey").value.trim();
+      const data = await api("/api/god/ai/sources/save", {method: "POST", body: JSON.stringify(payload)});
+      clearKnowledgeSourceForm();
+      renderKnowledge(data);
+      toast("บันทึก Knowledge API แล้ว");
+    }
+
+    async function syncKnowledgeSource(id) {
+      const data = await api("/api/god/ai/sources/sync", {method: "POST", body: JSON.stringify({id})});
+      renderKnowledge(data);
+      toast("Sync และสร้างดัชนีแล้ว");
+    }
+
+    async function deleteKnowledgeSource(id) {
+      if (!confirm("ลบ Knowledge API นี้?")) return;
+      const data = await api("/api/god/ai/sources/delete", {method: "POST", body: JSON.stringify({id})});
+      renderKnowledge(data);
+      toast("ลบ Knowledge API แล้ว");
+    }
+
+    function renderUnanswered() {
+      const list = $("godUnansweredList");
+      list.replaceChildren();
+      $("godUnansweredCount").textContent = state.unanswered.length ? `(${state.unanswered.length})` : "";
+      if (!state.unanswered.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-panel panel";
+        empty.textContent = "ไม่มีคำถามค้างตอบ";
+        list.appendChild(empty);
+        return;
+      }
+      for (const item of state.unanswered) {
+        const row = document.createElement("article");
+        row.className = "question-row";
+        const head = document.createElement("div");
+        head.className = "question-row-head";
+        const user = document.createElement("strong");
+        user.textContent = item.userName || "Member";
+        const created = document.createElement("span");
+        created.className = "question-meta";
+        created.textContent = item.createdAt || "";
+        head.append(user, created);
+        const question = document.createElement("div");
+        question.className = "question-text";
+        question.textContent = item.question || "";
+        const answer = document.createElement("textarea");
+        answer.className = "answer-editor";
+        answer.placeholder = "พิมพ์คำตอบที่ถูกต้องเพื่อเพิ่มเข้า Knowledge";
+        const save = makeButton("บันทึกคำตอบ", "primary", async () => {
+          if (!answer.value.trim()) return answer.focus();
+          save.disabled = true;
+          try {
+            await api("/api/god/ai/answer", {method: "POST", body: JSON.stringify({id: item.id, answer: answer.value.trim()})});
+            toast("บันทึกคำตอบและเพิ่มเข้า Knowledge แล้ว");
+            await loadUnanswered();
+          } catch (error) { toast(error.message); }
+          finally { save.disabled = false; }
+        });
+        row.append(head, question, answer, save);
+        list.appendChild(row);
+      }
+    }
+
+    async function loadUnanswered() {
+      const data = await api("/api/god/ai/unanswered?limit=500");
+      state.unanswered = data.questions || [];
+      renderUnanswered();
+    }
+
     function renderRoleOptions() {
       const select = $("editRole");
       select.replaceChildren();
@@ -7490,7 +8147,8 @@ GOD_HTML = r"""<!doctype html>
         await api("/api/god/login", {method: "POST", body: JSON.stringify({username: $("godUsername").value.trim(), password: $("godPassword").value})});
         $("godPassword").value = "";
         showApp();
-        await loadUsers();
+        await setGodPage(state.page || "members");
+        loadGlobalAiSettings().catch(() => {});
       } catch (error) {
         $("loginError").textContent = error.message;
       } finally {
@@ -7534,12 +8192,30 @@ GOD_HTML = r"""<!doctype html>
     $("detailScrim").addEventListener("click", closeDetail);
     $("searchInput").addEventListener("input", renderUsers);
     $("refreshButton").addEventListener("click", () => loadUsers().catch((error) => toast(error.message)));
+    document.querySelectorAll("[data-god-page-target]").forEach((button) => {
+      button.addEventListener("click", () => setGodPage(button.dataset.godPageTarget).catch((error) => toast(error.message)));
+    });
+    $("testOllamaButton").addEventListener("click", () => testOllama().catch((error) => toast(error.message)));
+    $("saveGlobalAiButton").addEventListener("click", () => saveGlobalAiSettings().catch((error) => toast(error.message)));
+    $("reindexKnowledgeButton").addEventListener("click", () => reindexKnowledge().catch((error) => toast(error.message)));
+    $("saveKnowledgeButton").addEventListener("click", () => saveKnowledge().catch((error) => toast(error.message)));
+    $("saveKnowledgeSourceButton").addEventListener("click", () => saveKnowledgeSource().catch((error) => toast(error.message)));
+    $("cancelKnowledgeSourceButton").addEventListener("click", clearKnowledgeSourceForm);
+    $("refreshKnowledgeButton").addEventListener("click", () => loadKnowledge().catch((error) => toast(error.message)));
+    $("refreshUnansweredButton").addEventListener("click", () => loadUnanswered().catch((error) => toast(error.message)));
+    $("toggleOllamaKeyButton").addEventListener("click", () => {
+      const input = $("ollamaApiKey");
+      const revealing = input.type === "password";
+      input.type = revealing ? "text" : "password";
+      $("toggleOllamaKeyButton").textContent = revealing ? "ซ่อน" : "แสดง";
+    });
     $("logoutButton").addEventListener("click", async () => { await api("/api/god/logout", {method: "POST", body: "{}"}); showLogin(); });
 
     api("/api/god/status").then((data) => {
       if (!data.authenticated) return showLogin();
       showApp();
-      return loadUsers();
+      loadGlobalAiSettings().catch(() => {});
+      return setGodPage(state.page || "members");
     }).catch(showLogin);
   </script>
 </body>
@@ -7618,6 +8294,18 @@ MAX_PATTERNS_PER_USER = 500
 MAX_PATTERN_CATEGORIES_PER_USER = 100
 MAX_USERS = 1000
 MAX_ACCOUNTS_PER_USER = 20
+MAX_ASSISTANT_QUESTION_LENGTH = 4000
+MAX_ASSISTANT_ANSWER_LENGTH = 20_000
+MAX_GLOBAL_KNOWLEDGE_LENGTH = 750_000
+MAX_KNOWLEDGE_API_BYTES = 750_000
+MAX_KNOWLEDGE_API_SOURCES = 50
+MAX_ASSISTANT_QUESTIONS = 5000
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
+    "You are LinePassport Assistant. Answer clearly and concisely in the same "
+    "language as the user. Never invent facts that are not supported by the supplied "
+    "knowledge when strict knowledge mode is enabled."
+)
 
 
 def _is_loopback_bind(host: str) -> bool:
@@ -7861,6 +8549,8 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "tools",
             "manage_accounts",
             "manage_users",
+            "manage_ai",
+            "ask_ai",
             "change_password",
         ],
     },
@@ -7872,6 +8562,8 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "schedule",
             "tools",
             "manage_accounts",
+            "manage_ai",
+            "ask_ai",
             "change_password",
         ],
     },
@@ -7883,16 +8575,24 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "schedule",
             "tools",
             "manage_accounts",
+            "ask_ai",
             "change_password",
         ],
     },
     "operator": {
         "label": "Operator",
-        "permissions": ["read", "send", "schedule", "tools", "change_password"],
+        "permissions": [
+            "read",
+            "send",
+            "schedule",
+            "tools",
+            "ask_ai",
+            "change_password",
+        ],
     },
     "viewer": {
         "label": "Viewer",
-        "permissions": ["read", "change_password"],
+        "permissions": ["read", "ask_ai", "change_password"],
     },
 }
 
@@ -7994,6 +8694,7 @@ class FileStateStore(StateStore):
             "auth": config.auth_file,
             "patterns": str(Path(config.schedules_file).parent / "patterns.json"),
             "ai_settings": str(Path(config.schedules_file).parent / "ai_settings.json"),
+            "global_ai": str(Path(config.schedules_file).parent / "global_ai.json"),
             "bot_logs": str(Path(config.schedules_file).parent / "bot_logs.json"),
         }
 
@@ -8099,6 +8800,7 @@ class PostgresStateStore(StateStore):
             "auth": (config.auth_file, {}),
             "patterns": (str(Path(config.schedules_file).parent / "patterns.json"), {"patterns": []}),
             "ai_settings": (str(Path(config.schedules_file).parent / "ai_settings.json"), {}),
+            "global_ai": (str(Path(config.schedules_file).parent / "global_ai.json"), {}),
             "bot_logs": (str(Path(config.schedules_file).parent / "bot_logs.json"), {"logs": []}),
         }
         for key, (path, default) in legacy.items():
@@ -9267,8 +9969,6 @@ class WebState:
 
     def _migrate_stored_secrets(self) -> None:
         root = self.store.get("ai_settings", {})
-        if not isinstance(root, dict):
-            return
         changed = False
 
         def encrypt_record(record: Any) -> None:
@@ -9280,17 +9980,38 @@ class WebState:
                 record["apiKey"] = self._encrypt_secret(key)
                 changed = True
 
-        encrypt_record(root)
-        tenants = root.get("tenants")
-        if isinstance(tenants, dict):
-            for tenant in tenants.values():
-                if not isinstance(tenant, dict):
-                    continue
-                encrypt_record(tenant)
-                for provider in AI_PROVIDERS:
-                    encrypt_record(tenant.get(provider))
-        if changed:
-            self.store.set("ai_settings", root)
+        if isinstance(root, dict):
+            encrypt_record(root)
+            tenants = root.get("tenants")
+            if isinstance(tenants, dict):
+                for tenant in tenants.values():
+                    if not isinstance(tenant, dict):
+                        continue
+                    encrypt_record(tenant)
+                    for provider in AI_PROVIDERS:
+                        encrypt_record(tenant.get(provider))
+            if changed:
+                self.store.set("ai_settings", root)
+
+        global_ai = self.store.get("global_ai", {})
+        if not isinstance(global_ai, dict):
+            return
+        global_changed = False
+
+        def encrypt_global_record(record: Any) -> None:
+            nonlocal global_changed
+            if not isinstance(record, dict):
+                return
+            key = str(record.get("apiKey") or "")
+            if key and not key.startswith("fernet:"):
+                record["apiKey"] = self._encrypt_secret(key)
+                global_changed = True
+
+        encrypt_global_record(global_ai.get("settings"))
+        for source in global_ai.get("apiSources", []):
+            encrypt_global_record(source)
+        if global_changed:
+            self.store.set("global_ai", global_ai)
 
     def _decrypt_secret(self, value: str) -> str:
         if not value or not value.startswith("fernet:"):
@@ -10994,6 +11715,631 @@ class WebState:
             "name": result["name"],
         }
 
+    # -- Global Ollama assistant and RAG ---------------------------------
+    def _global_ai_all(self) -> dict[str, Any]:
+        data = self.store.get("global_ai", {})
+        if not isinstance(data, dict):
+            data = {}
+        if not isinstance(data.get("settings"), dict):
+            data["settings"] = {}
+        if not isinstance(data.get("apiSources"), list):
+            data["apiSources"] = []
+        if not isinstance(data.get("manualAnswers"), list):
+            data["manualAnswers"] = []
+        if not isinstance(data.get("chunks"), list):
+            data["chunks"] = []
+        if not isinstance(data.get("questions"), list):
+            data["questions"] = []
+        return data
+
+    def _global_ai_private_settings(self, data: dict[str, Any]) -> dict[str, Any]:
+        raw = data.get("settings")
+        settings = raw if isinstance(raw, dict) else {}
+        try:
+            top_k = max(1, min(int(settings.get("topK") or 5), 12))
+        except (TypeError, ValueError):
+            top_k = 5
+        try:
+            temperature = max(0.0, min(float(settings.get("temperature") or 0.2), 2.0))
+        except (TypeError, ValueError):
+            temperature = 0.2
+        try:
+            timeout = max(5.0, min(float(settings.get("timeout") or 120), 600.0))
+        except (TypeError, ValueError):
+            timeout = 120.0
+        return {
+            "enabled": bool(settings.get("enabled")),
+            "baseUrl": str(settings.get("baseUrl") or DEFAULT_OLLAMA_BASE_URL),
+            "apiKey": self._decrypt_secret(str(settings.get("apiKey") or "")),
+            "chatModel": str(settings.get("chatModel") or "").strip(),
+            "embeddingModel": str(settings.get("embeddingModel") or "").strip(),
+            "systemPrompt": str(
+                settings.get("systemPrompt") or DEFAULT_ASSISTANT_SYSTEM_PROMPT
+            ).strip(),
+            "strictKnowledge": bool(settings.get("strictKnowledge", True)),
+            "topK": top_k,
+            "temperature": temperature,
+            "timeout": timeout,
+        }
+
+    def global_ai_settings(self, *, reveal: bool = False) -> dict[str, Any]:
+        data = self._global_ai_all()
+        settings = self._global_ai_private_settings(data)
+        if reveal:
+            return settings
+        questions = [item for item in data["questions"] if isinstance(item, dict)]
+        return {
+            "enabled": settings["enabled"],
+            "baseUrl": settings["baseUrl"],
+            "hasApiKey": bool(settings["apiKey"]),
+            "apiKeyPreview": _mask_secret(settings["apiKey"]),
+            "chatModel": settings["chatModel"],
+            "embeddingModel": settings["embeddingModel"],
+            "systemPrompt": settings["systemPrompt"],
+            "strictKnowledge": settings["strictKnowledge"],
+            "topK": settings["topK"],
+            "temperature": settings["temperature"],
+            "timeout": settings["timeout"],
+            "configured": bool(settings["enabled"] and settings["chatModel"]),
+            "chunkCount": len(data["chunks"]),
+            "unansweredCount": sum(
+                1 for item in questions if item.get("status") == "unanswered"
+            ),
+            "indexMode": str(data.get("indexMode") or "none"),
+            "indexError": str(data.get("indexError") or ""),
+            "indexedAt": str(data.get("indexedAt") or ""),
+        }
+
+    def save_global_ai_settings(self, body: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            data = self._global_ai_all()
+            current = self._global_ai_private_settings(data)
+            try:
+                base_url = normalize_ollama_base_url(
+                    str(body.get("baseUrl") or current["baseUrl"])
+                )
+            except ValueError as exc:
+                raise WebError(HTTPStatus.BAD_REQUEST, str(exc), "ollama_url_invalid") from exc
+            raw_key = body.get("apiKey")
+            if body.get("clearApiKey"):
+                api_key = ""
+            elif raw_key is None or not str(raw_key).strip():
+                api_key = current["apiKey"]
+            else:
+                api_key = str(raw_key).strip()
+            chat_model = str(body.get("chatModel") or current["chatModel"]).strip()[:200]
+            embedding_model = str(
+                body.get("embeddingModel") or current["embeddingModel"]
+            ).strip()[:200]
+            system_prompt = str(
+                body.get("systemPrompt") or current["systemPrompt"]
+            ).strip()[:20_000]
+            try:
+                top_k = max(1, min(int(body.get("topK", current["topK"])), 12))
+                temperature = max(
+                    0.0,
+                    min(float(body.get("temperature", current["temperature"])), 2.0),
+                )
+                timeout = max(
+                    5.0, min(float(body.get("timeout", current["timeout"])), 600.0)
+                )
+            except (TypeError, ValueError) as exc:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    "AI numeric settings are invalid.",
+                    "ai_settings_invalid",
+                ) from exc
+            previous_embedding_model = current["embeddingModel"]
+            data["settings"] = {
+                "enabled": bool(body.get("enabled", current["enabled"])),
+                "baseUrl": base_url,
+                "apiKey": self._encrypt_secret(api_key),
+                "chatModel": chat_model,
+                "embeddingModel": embedding_model,
+                "systemPrompt": system_prompt or DEFAULT_ASSISTANT_SYSTEM_PROMPT,
+                "strictKnowledge": bool(
+                    body.get("strictKnowledge", current["strictKnowledge"])
+                ),
+                "topK": top_k,
+                "temperature": temperature,
+                "timeout": timeout,
+                "updatedAt": _now_iso(),
+            }
+            if embedding_model != previous_embedding_model:
+                for chunk in data["chunks"]:
+                    if isinstance(chunk, dict):
+                        chunk.pop("embedding", None)
+                data["indexMode"] = "needs-reindex"
+                data["indexError"] = ""
+            self.store.set("global_ai", data)
+        return {"ok": True, **self.global_ai_settings()}
+
+    def _ollama_client(
+        self, settings: dict[str, Any] | None = None
+    ) -> OllamaClient:
+        cfg = settings or self.global_ai_settings(reveal=True)
+        return OllamaClient(
+            str(cfg.get("baseUrl") or DEFAULT_OLLAMA_BASE_URL),
+            api_key=str(cfg.get("apiKey") or ""),
+            timeout=float(cfg.get("timeout") or 120),
+        )
+
+    def test_global_ai(self, body: dict[str, Any]) -> dict[str, Any]:
+        settings = self.global_ai_settings(reveal=True)
+        if body.get("baseUrl"):
+            try:
+                settings["baseUrl"] = normalize_ollama_base_url(str(body["baseUrl"]))
+            except ValueError as exc:
+                raise WebError(HTTPStatus.BAD_REQUEST, str(exc), "ollama_url_invalid") from exc
+        if str(body.get("apiKey") or "").strip():
+            settings["apiKey"] = str(body["apiKey"]).strip()
+        try:
+            models = self._ollama_client(settings).list_models()
+        except OllamaError as exc:
+            raise WebError(
+                HTTPStatus.BAD_GATEWAY, str(exc), "ollama_unavailable"
+            ) from exc
+        return {"ok": True, "baseUrl": settings["baseUrl"], "models": models}
+
+    @staticmethod
+    def _knowledge_source_view(source: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(source.get("id") or ""),
+            "name": str(source.get("name") or ""),
+            "url": str(source.get("url") or ""),
+            "jsonPath": str(source.get("jsonPath") or ""),
+            "enabled": bool(source.get("enabled", True)),
+            "hasApiKey": bool(source.get("apiKey")),
+            "lastSyncAt": str(source.get("lastSyncAt") or ""),
+            "lastError": str(source.get("lastError") or ""),
+            "contentLength": len(str(source.get("content") or "")),
+        }
+
+    def global_ai_knowledge(self) -> dict[str, Any]:
+        data = self._global_ai_all()
+        return {
+            "knowledgeMarkdown": str(data.get("knowledgeMarkdown") or ""),
+            "apiSources": [
+                self._knowledge_source_view(source)
+                for source in data["apiSources"]
+                if isinstance(source, dict)
+            ],
+            "manualAnswerCount": len(data["manualAnswers"]),
+            "chunkCount": len(data["chunks"]),
+            "indexMode": str(data.get("indexMode") or "none"),
+            "indexError": str(data.get("indexError") or ""),
+            "indexedAt": str(data.get("indexedAt") or ""),
+        }
+
+    def save_global_ai_knowledge(self, body: dict[str, Any]) -> dict[str, Any]:
+        markdown = str(body.get("knowledgeMarkdown") or "")
+        if len(markdown) > MAX_GLOBAL_KNOWLEDGE_LENGTH:
+            raise WebError(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                "knowledge.md is too large.",
+                "knowledge_too_large",
+            )
+        with self.lock:
+            data = self._global_ai_all()
+            data["knowledgeMarkdown"] = markdown
+            data["knowledgeUpdatedAt"] = _now_iso()
+            self.store.set("global_ai", data)
+        return {"ok": True, **self.reindex_global_ai()}
+
+    @staticmethod
+    def _validate_knowledge_api_url(value: str) -> str:
+        url = value.strip()
+        parsed = urlparse(url)
+        if (
+            len(url) > MAX_URL_LENGTH
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "Knowledge API URL is invalid.",
+                "knowledge_api_url_invalid",
+            )
+        return url
+
+    def save_global_ai_api_source(self, body: dict[str, Any]) -> dict[str, Any]:
+        source_id = str(body.get("id") or "").strip()
+        name = str(body.get("name") or "").strip()[:MAX_NAME_LENGTH]
+        if not name:
+            raise WebError(HTTPStatus.BAD_REQUEST, "API source name is required.")
+        url = self._validate_knowledge_api_url(str(body.get("url") or ""))
+        json_path = str(body.get("jsonPath") or "").strip()[:500]
+        with self.lock:
+            data = self._global_ai_all()
+            sources = [item for item in data["apiSources"] if isinstance(item, dict)]
+            existing = next((item for item in sources if item.get("id") == source_id), None)
+            if existing is None and len(sources) >= MAX_KNOWLEDGE_API_SOURCES:
+                raise WebError(HTTPStatus.CONFLICT, "Too many knowledge API sources.")
+            current_key = (
+                self._decrypt_secret(str(existing.get("apiKey") or "")) if existing else ""
+            )
+            if body.get("clearApiKey"):
+                api_key = ""
+            elif str(body.get("apiKey") or "").strip():
+                api_key = str(body["apiKey"]).strip()
+            else:
+                api_key = current_key
+            record = existing or {"id": uuid.uuid4().hex, "createdAt": _now_iso()}
+            record.update(
+                {
+                    "name": name,
+                    "url": url,
+                    "jsonPath": json_path,
+                    "apiKey": self._encrypt_secret(api_key),
+                    "enabled": bool(body.get("enabled", True)),
+                    "updatedAt": _now_iso(),
+                }
+            )
+            if existing is None:
+                sources.append(record)
+            data["apiSources"] = sources
+            self.store.set("global_ai", data)
+        return {"ok": True, **self.global_ai_knowledge()}
+
+    def delete_global_ai_api_source(self, source_id: str) -> dict[str, Any]:
+        with self.lock:
+            data = self._global_ai_all()
+            sources = [item for item in data["apiSources"] if isinstance(item, dict)]
+            kept = [item for item in sources if str(item.get("id") or "") != source_id]
+            if len(kept) == len(sources):
+                raise WebError(HTTPStatus.NOT_FOUND, "Knowledge API source not found.")
+            data["apiSources"] = kept
+            self.store.set("global_ai", data)
+        return {"ok": True, **self.reindex_global_ai()}
+
+    @staticmethod
+    def _json_path_value(value: Any, path: str) -> Any:
+        current = value
+        if not path:
+            return current
+        for part in path.split("."):
+            key = part.strip()
+            if not key:
+                continue
+            if isinstance(current, dict) and key in current:
+                current = current[key]
+            elif isinstance(current, list) and key.isdigit() and int(key) < len(current):
+                current = current[int(key)]
+            else:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    f"JSON path not found: {path}",
+                    "knowledge_json_path_not_found",
+                )
+        return current
+
+    def sync_global_ai_api_source(self, source_id: str) -> dict[str, Any]:
+        data = self._global_ai_all()
+        source = next(
+            (
+                item
+                for item in data["apiSources"]
+                if isinstance(item, dict) and str(item.get("id") or "") == source_id
+            ),
+            None,
+        )
+        if source is None:
+            raise WebError(HTTPStatus.NOT_FOUND, "Knowledge API source not found.")
+        headers = {"Accept": "application/json, text/plain, text/markdown"}
+        api_key = self._decrypt_secret(str(source.get("apiKey") or ""))
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        response: requests.Response | None = None
+        try:
+            response, _ = _open_public_response(
+                "GET", str(source.get("url") or ""), timeout=20, headers=headers
+            )
+            raw = _read_limited_response(response, MAX_KNOWLEDGE_API_BYTES)
+            if not response.ok:
+                raise WebError(
+                    HTTPStatus.BAD_GATEWAY,
+                    f"Knowledge API returned HTTP {response.status_code}.",
+                    "knowledge_api_error",
+                )
+            content_type = str(response.headers.get("content-type") or "").lower()
+            decoded = raw.decode(response.encoding or "utf-8", errors="replace")
+            if "json" in content_type:
+                try:
+                    parsed = json.loads(decoded)
+                except ValueError as exc:
+                    raise WebError(
+                        HTTPStatus.BAD_GATEWAY,
+                        "Knowledge API returned invalid JSON.",
+                        "knowledge_api_invalid_json",
+                    ) from exc
+                selected = self._json_path_value(
+                    parsed, str(source.get("jsonPath") or "")
+                )
+                content = (
+                    selected
+                    if isinstance(selected, str)
+                    else json.dumps(selected, ensure_ascii=False, indent=2)
+                )
+            else:
+                content = decoded
+            source["content"] = str(content)[:MAX_GLOBAL_KNOWLEDGE_LENGTH]
+            source["lastSyncAt"] = _now_iso()
+            source["lastError"] = ""
+        except Exception as exc:
+            source["lastError"] = _safe_log_detail(exc, 500)
+            self.store.set("global_ai", data)
+            raise
+        finally:
+            if response is not None:
+                response.close()
+        self.store.set("global_ai", data)
+        return {"ok": True, **self.reindex_global_ai()}
+
+    def _build_global_ai_chunks(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        chunks: list[dict[str, Any]] = []
+
+        def append_chunks(source_id: str, source_name: str, text: str) -> None:
+            for index, chunk in enumerate(chunk_markdown(text)):
+                chunks.append(
+                    {
+                        "id": hashlib.sha256(
+                            f"{source_id}:{index}:{chunk}".encode("utf-8")
+                        ).hexdigest()[:24],
+                        "sourceId": source_id,
+                        "sourceName": source_name,
+                        "text": chunk,
+                    }
+                )
+
+        append_chunks(
+            "knowledge-md",
+            "knowledge.md",
+            str(data.get("knowledgeMarkdown") or ""),
+        )
+        for source in data["apiSources"]:
+            if not isinstance(source, dict) or not source.get("enabled", True):
+                continue
+            append_chunks(
+                f"api:{source.get('id')}",
+                str(source.get("name") or source.get("url") or "API"),
+                str(source.get("content") or ""),
+            )
+        for item in data["manualAnswers"]:
+            if not isinstance(item, dict):
+                continue
+            append_chunks(
+                f"answer:{item.get('id')}",
+                "Approved answers",
+                f"Question: {item.get('question', '')}\n\nAnswer: {item.get('answer', '')}",
+            )
+        return chunks
+
+    def reindex_global_ai(self) -> dict[str, Any]:
+        data = self._global_ai_all()
+        settings = self._global_ai_private_settings(data)
+        chunks = self._build_global_ai_chunks(data)
+        index_mode = "keyword"
+        index_error = ""
+        embedding_model = settings["embeddingModel"]
+        if chunks and embedding_model:
+            try:
+                client = self._ollama_client(settings)
+                for start in range(0, len(chunks), 32):
+                    batch = chunks[start : start + 32]
+                    vectors = client.embed(
+                        embedding_model, [str(item["text"]) for item in batch]
+                    )
+                    for item, vector in zip(batch, vectors):
+                        item["embedding"] = vector
+                index_mode = "embedding"
+            except OllamaError as exc:
+                index_error = str(exc)
+        data["chunks"] = chunks
+        data["embeddingModel"] = embedding_model if index_mode == "embedding" else ""
+        data["indexMode"] = index_mode if chunks else "empty"
+        data["indexError"] = index_error
+        data["indexedAt"] = _now_iso()
+        with self.lock:
+            self.store.set("global_ai", data)
+        return self.global_ai_knowledge()
+
+    @staticmethod
+    def _public_assistant_question(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(item.get("id") or ""),
+            "userId": str(item.get("userId") or ""),
+            "userName": str(item.get("userName") or ""),
+            "question": str(item.get("question") or ""),
+            "answer": str(item.get("answer") or ""),
+            "status": str(item.get("status") or "unanswered"),
+            "confidence": float(item.get("confidence") or 0),
+            "sources": list(item.get("sources") or []),
+            "model": str(item.get("model") or ""),
+            "createdAt": str(item.get("createdAt") or ""),
+            "updatedAt": str(item.get("updatedAt") or ""),
+            "resolvedBy": str(item.get("resolvedBy") or ""),
+        }
+
+    def ask_global_ai(
+        self, question: str, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        question = question.strip()
+        if not question:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Question is required.")
+        if len(question) > MAX_ASSISTANT_QUESTION_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Question is too long.")
+        data = self._global_ai_all()
+        settings = self._global_ai_private_settings(data)
+        if not settings["enabled"] or not settings["chatModel"]:
+            raise WebError(
+                HTTPStatus.CONFLICT,
+                "AI assistant is not configured by God.",
+                "assistant_not_configured",
+            )
+        client = self._ollama_client(settings)
+        query_embedding: list[float] | None = None
+        if (
+            settings["embeddingModel"]
+            and data.get("indexMode") == "embedding"
+            and data.get("embeddingModel") == settings["embeddingModel"]
+        ):
+            try:
+                query_embedding = client.embed(settings["embeddingModel"], [question])[0]
+            except OllamaError:
+                query_embedding = None
+        ranked = rank_chunks(
+            question,
+            [item for item in data["chunks"] if isinstance(item, dict)],
+            query_embedding=query_embedding,
+            top_k=settings["topK"],
+        )
+        context = "\n\n---\n\n".join(
+            f"SOURCE: {item.get('sourceName', 'Knowledge')}\n{item.get('text', '')}"
+            for item in ranked
+        )
+        if settings["strictKnowledge"] and not ranked:
+            result = {
+                "answer": "",
+                "canAnswer": False,
+                "confidence": 0.0,
+                "model": settings["chatModel"],
+            }
+        else:
+            try:
+                result = client.chat(
+                    model=settings["chatModel"],
+                    question=question,
+                    context=context,
+                    system_prompt=settings["systemPrompt"],
+                    strict_knowledge=settings["strictKnowledge"],
+                    temperature=settings["temperature"],
+                )
+            except OllamaError as exc:
+                raise WebError(
+                    HTTPStatus.BAD_GATEWAY, str(exc), "ollama_unavailable"
+                ) from exc
+        can_answer = bool(result.get("canAnswer"))
+        answer = str(result.get("answer") or "").strip() if can_answer else ""
+        now = _now_iso()
+        item = {
+            "id": uuid.uuid4().hex,
+            "userId": str((user or {}).get("id") or ""),
+            "userName": str(
+                (user or {}).get("displayName")
+                or (user or {}).get("email")
+                or (user or {}).get("username")
+                or "Member"
+            ),
+            "question": question,
+            "answer": answer,
+            "status": "answered" if answer else "unanswered",
+            "confidence": float(result.get("confidence") or 0),
+            "sources": [
+                {
+                    "name": str(chunk.get("sourceName") or "Knowledge"),
+                    "score": float(chunk.get("score") or 0),
+                }
+                for chunk in ranked
+            ],
+            "model": str(result.get("model") or settings["chatModel"]),
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        with self.lock:
+            latest = self._global_ai_all()
+            questions = [q for q in latest["questions"] if isinstance(q, dict)]
+            questions.append(item)
+            latest["questions"] = questions[-MAX_ASSISTANT_QUESTIONS:]
+            self.store.set("global_ai", latest)
+        return {"ok": True, "question": self._public_assistant_question(item)}
+
+    def assistant_history(
+        self, user: dict[str, Any] | None, *, limit: int = 100
+    ) -> dict[str, Any]:
+        owner_id = str((user or {}).get("id") or "")
+        data = self._global_ai_all()
+        items = [
+            self._public_assistant_question(item)
+            for item in data["questions"]
+            if isinstance(item, dict) and str(item.get("userId") or "") == owner_id
+        ]
+        items.sort(key=lambda item: item["createdAt"], reverse=True)
+        return {
+            "questions": items[: max(1, min(int(limit), 500))],
+            "settings": self.global_ai_settings(),
+        }
+
+    def assistant_unanswered(self, *, limit: int = 500) -> dict[str, Any]:
+        data = self._global_ai_all()
+        items = [
+            self._public_assistant_question(item)
+            for item in data["questions"]
+            if isinstance(item, dict) and item.get("status") == "unanswered"
+        ]
+        items.sort(key=lambda item: item["createdAt"], reverse=True)
+        return {"questions": items[: max(1, min(int(limit), 1000))]}
+
+    def answer_assistant_question(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        question_id = str(body.get("id") or "").strip()
+        answer = str(body.get("answer") or "").strip()
+        if not question_id or not answer:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Question and answer are required.")
+        if len(answer) > MAX_ASSISTANT_ANSWER_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Answer is too long.")
+        with self.lock:
+            data = self._global_ai_all()
+            target = next(
+                (
+                    item
+                    for item in data["questions"]
+                    if isinstance(item, dict) and str(item.get("id") or "") == question_id
+                ),
+                None,
+            )
+            if target is None:
+                raise WebError(HTTPStatus.NOT_FOUND, "Question not found.")
+            responder = str(
+                (user or {}).get("displayName")
+                or (user or {}).get("email")
+                or (user or {}).get("username")
+                or "Administrator"
+            )
+            target["answer"] = answer
+            target["status"] = "resolved"
+            target["resolvedBy"] = responder
+            target["updatedAt"] = _now_iso()
+            manual = [item for item in data["manualAnswers"] if isinstance(item, dict)]
+            existing = next(
+                (item for item in manual if item.get("questionId") == question_id), None
+            )
+            record = existing or {
+                "id": uuid.uuid4().hex,
+                "questionId": question_id,
+                "createdAt": _now_iso(),
+            }
+            record.update(
+                {
+                    "question": str(target.get("question") or ""),
+                    "answer": answer,
+                    "answeredBy": responder,
+                    "updatedAt": _now_iso(),
+                }
+            )
+            if existing is None:
+                manual.append(record)
+            data["manualAnswers"] = manual
+            self.store.set("global_ai", data)
+        knowledge = self.reindex_global_ai()
+        return {
+            "ok": True,
+            "question": self._public_assistant_question(target),
+            "knowledge": knowledge,
+        }
+
     def disable_schedules_for_account(self, account_id: str) -> None:
         with self.schedule_lock:
             changed = False
@@ -11364,6 +12710,36 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.update_user(self._read_json(), self.current_user)
         if method == "POST" and path == "/api/god/users/delete":
             return self.state.delete_user(self._read_json(), self.current_user or {})
+        if method == "GET" and path == "/api/god/ai/settings":
+            return self.state.global_ai_settings()
+        if method == "POST" and path == "/api/god/ai/settings":
+            return self.state.save_global_ai_settings(self._read_json())
+        if method == "POST" and path == "/api/god/ai/test":
+            return self.state.test_global_ai(self._read_json())
+        if method == "GET" and path == "/api/god/ai/knowledge":
+            return self.state.global_ai_knowledge()
+        if method == "POST" and path == "/api/god/ai/knowledge":
+            return self.state.save_global_ai_knowledge(
+                self._read_json(max_bytes=MAX_JSON_BODY_BYTES)
+            )
+        if method == "POST" and path == "/api/god/ai/sources/save":
+            return self.state.save_global_ai_api_source(self._read_json())
+        if method == "POST" and path == "/api/god/ai/sources/sync":
+            body = self._read_json()
+            return self.state.sync_global_ai_api_source(str(body.get("id") or ""))
+        if method == "POST" and path == "/api/god/ai/sources/delete":
+            body = self._read_json()
+            return self.state.delete_global_ai_api_source(str(body.get("id") or ""))
+        if method == "POST" and path == "/api/god/ai/reindex":
+            return {"ok": True, **self.state.reindex_global_ai()}
+        if method == "GET" and path == "/api/god/ai/unanswered":
+            return self.state.assistant_unanswered(
+                limit=_query_int(query, "limit", 500, minimum=1, maximum=1000)
+            )
+        if method == "POST" and path == "/api/god/ai/answer":
+            return self.state.answer_assistant_question(
+                self._read_json(), self.current_user
+            )
         if method == "GET" and path == "/api/auth/status":
             auth = self.state.web_auth
             setup_token: str | None = (
@@ -11484,6 +12860,28 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return WebResult(
                 {"ok": True},
                 headers=[("Set-Cookie", self._clear_cookie_header())],
+            )
+        if method == "GET" and path == "/api/assistant/history":
+            self._require_permission("ask_ai")
+            return self.state.assistant_history(
+                self.current_user,
+                limit=_query_int(query, "limit", 100, minimum=1, maximum=500),
+            )
+        if method == "POST" and path == "/api/assistant/ask":
+            self._require_permission("ask_ai")
+            body = self._read_json()
+            return self.state.ask_global_ai(
+                str(body.get("question") or ""), self.current_user
+            )
+        if method == "GET" and path == "/api/assistant/unanswered":
+            self._require_permission("manage_ai")
+            return self.state.assistant_unanswered(
+                limit=_query_int(query, "limit", 500, minimum=1, maximum=1000)
+            )
+        if method == "POST" and path == "/api/assistant/answer":
+            self._require_permission("manage_ai")
+            return self.state.answer_assistant_question(
+                self._read_json(), self.current_user
             )
         if method == "GET" and path == "/api/status":
             return self.state.status(_query_one(query, "accountId", ""), self.current_user)
