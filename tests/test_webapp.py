@@ -1041,10 +1041,18 @@ def test_web_ui_shows_unread_conversation_previews():
     assert "function clearUnreadForTarget(mid)" in INDEX_HTML
 
 
-def test_web_ui_only_treats_line_file_content_type_as_downloadable():
-    assert 'const isFile = ct === 14 || ct === "14";' in INDEX_HTML
+def test_web_ui_renders_line_media_and_structured_message_types():
+    assert "const isMediaType = [1, 2, 3, 5, 14, 21].includes(ct);" in INDEX_HTML
+    assert 'document.createElement("video")' in INDEX_HTML
+    assert 'document.createElement("audio")' in INDEX_HTML
+    assert "function locationBody(m)" in INDEX_HTML
+    assert "function contactBody(m)" in INDEX_HTML
+    assert "https://www.google.com/maps/search/?api=1&query=" in INDEX_HTML
+    assert "if (ct === 15 && m.location) return locationBody(m);" in INDEX_HTML
+    assert "if (ct === 13) return contactBody(m);" in INDEX_HTML
     assert 'm.contentType === "18") return chatEventLabel(m);' in INDEX_HTML
     assert '13: "content.contact"' in INDEX_HTML
+    assert '22: "content.flex"' in INDEX_HTML
 
 
 def test_web_ui_combines_contacts_and_groups_in_leftmost_all_tab():
@@ -1356,8 +1364,75 @@ def test_sniff_content_type_detects_media_and_documents():
     assert webapp_module._sniff_content_type(b"RIFF\x00\x00\x00\x00WEBPxxxx") == "image/webp"
     assert webapp_module._sniff_content_type(b"%PDF-1.7") == "application/pdf"
     assert webapp_module._sniff_content_type(b"PK\x03\x04rest") == "application/zip"
+    assert webapp_module._sniff_content_type(b"RIFF\x00\x00\x00\x00WAVEdata") == "audio/wav"
+    assert webapp_module._sniff_content_type(b"OggSrest") == "application/ogg"
+    assert webapp_module._sniff_content_type(b"fLaCrest") == "audio/flac"
+    assert webapp_module._sniff_content_type(b"ID3rest") == "audio/mpeg"
+    assert webapp_module._sniff_content_type(b"\xff\xf1rest") == "audio/aac"
+    assert webapp_module._sniff_content_type(b"\x1aE\xdf\xa3rest") == "application/webm"
+    assert webapp_module._sniff_content_type(b"\x00\x00\x00\x18ftypisom") == "application/mp4"
     assert webapp_module._sniff_content_type(b"nope") == "application/octet-stream"
     assert webapp_module._message_content_type(b"nope", "notes.txt") == "text/plain"
+    assert (
+        webapp_module._message_content_type(b"\x00\x00\x00\x18ftypisom", "", 2)
+        == "video/mp4"
+    )
+    assert (
+        webapp_module._message_content_type(b"\x00\x00\x00\x18ftypM4A ", "", 3)
+        == "audio/mp4"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "size", "expected"),
+    [
+        ("bytes=0-99", 1000, (0, 99)),
+        ("bytes=500-", 1000, (500, 999)),
+        ("bytes=-100", 1000, (900, 999)),
+        ("bytes=0-9999", 1000, (0, 999)),
+        ("bytes=1000-", 1000, None),
+        ("bytes=2-1", 1000, None),
+        ("bytes=0-1,4-5", 1000, None),
+        ("invalid", 1000, None),
+    ],
+)
+def test_parse_byte_range(value, size, expected):
+    assert webapp_module._parse_byte_range(value, size) == expected
+
+
+def test_message_content_serves_single_range_for_media_players():
+    handler = OkLineWebHandler.__new__(OkLineWebHandler)
+    handler.headers = {"range": "bytes=2-5"}
+    captured = {}
+    handler._require_permission = lambda permission: None
+    handler._with_api = lambda query, callback: (b"0123456789", "clip.mp4", 2)
+
+    def capture(payload, content_type, status, *, headers=None):
+        captured.update(
+            payload=payload,
+            content_type=content_type,
+            status=status,
+            headers=dict(headers or []),
+        )
+
+    handler._bytes = capture
+    handler._message_content(
+        {
+            "account_id": ["account-1"],
+            "message_id": ["message-1"],
+            "chat_mid": ["Uchat"],
+        }
+    )
+
+    assert captured == {
+        "payload": b"2345",
+        "content_type": "video/mp4",
+        "status": HTTPStatus.PARTIAL_CONTENT,
+        "headers": {
+            "accept-ranges": "bytes",
+            "content-range": "bytes 2-5/10",
+        },
+    }
 
 
 def test_message_summary_extracts_sticker_id():
@@ -1373,6 +1448,87 @@ def test_message_summary_extracts_sticker_id():
     # a plain image message carries no sticker id
     img = webapp_module._message_summary(None, {"id": "1", "contentType": 1}, {})
     assert img["stickerId"] is None
+
+
+def test_message_summary_exposes_safe_structured_content_metadata():
+    contact_mid = "u" + "7" * 32
+    location = webapp_module._message_summary(
+        None,
+        {
+            "id": "loc-1",
+            "contentType": 15,
+            "location": {
+                "title": "Tokyo Tower",
+                "address": "Minato, Tokyo",
+                "latitude": "35.6586",
+                "longitude": "139.7454",
+                "phone": "03-1234-5678",
+            },
+        },
+        {},
+    )
+    assert location["location"] == {
+        "title": "Tokyo Tower",
+        "address": "Minato, Tokyo",
+        "phone": "03-1234-5678",
+        "latitude": 35.6586,
+        "longitude": 139.7454,
+    }
+
+    contact = webapp_module._message_summary(
+        None,
+        {
+            "id": "contact-1",
+            "contentType": 13,
+            "contentMetadata": {"mid": contact_mid, "displayName": "Alice"},
+        },
+        {contact_mid: "Alice LINE"},
+    )
+    assert contact["contactMid"] == contact_mid
+    assert contact["contactName"] == "Alice LINE"
+
+    video = webapp_module._message_summary(
+        None,
+        {
+            "id": "video-1",
+            "contentType": 2,
+            "contentMetadata": {
+                "DURATION": "4200",
+                "PREVIEW_URL": "https://manager.line-scdn.net/preview",
+            },
+        },
+        {},
+    )
+    assert video["durationMs"] == 4200
+    assert video["mediaReady"] is True
+    assert video["hasPreview"] is True
+    assert "PREVIEW_URL" not in video
+
+    flex = webapp_module._message_summary(
+        None,
+        {
+            "id": "flex-1",
+            "contentType": 22,
+            "contentMetadata": {"ALT_TEXT": "Order summary"},
+        },
+        {},
+    )
+    assert flex["altText"] == "Order summary"
+
+
+def test_message_summary_rejects_unsafe_location_and_link_values():
+    summary = webapp_module._message_summary(
+        None,
+        {
+            "contentType": 12,
+            "text": "javascript:alert(1)",
+            "location": {"latitude": 999, "longitude": -999},
+            "contentMetadata": {"URL": "https://user:pass@example.com/private"},
+        },
+        {},
+    )
+    assert summary["linkUrl"] is None
+    assert summary["location"] is None
 
 
 def test_message_summary_exposes_chat_event_names_instead_of_a_fake_file():
@@ -1528,7 +1684,8 @@ def test_download_message_content_prefers_line_cdn_urls_for_plain_images(monkeyp
                 }
             ]
 
-    def fake_download(url):
+    def fake_download(url, *, session=None):
+        assert session is None
         calls.append(url)
         return b"preview" if url.endswith("preview") else b"full"
 
@@ -1542,6 +1699,49 @@ def test_download_message_content_prefers_line_cdn_urls_for_plain_images(monkeyp
         "https://manager.line-scdn.net/image/preview",
         "https://manager.line-scdn.net/image/full",
     ]
+
+
+def test_download_message_content_uses_account_session_for_plain_video(monkeypatch):
+    calls = []
+    session = object()
+
+    class Transport:
+        pass
+
+    class Obs:
+        @staticmethod
+        def download_object(*args, **kwargs):
+            raise AssertionError("OBS fallback should not be used")
+
+    class Api:
+        transport = Transport()
+        transport.session = session
+        obs = Obs()
+
+        @staticmethod
+        def get_recent_messages(chat_mid, count):
+            assert (chat_mid, count) == ("Uchat", 200)
+            return [
+                {
+                    "id": "video-123",
+                    "contentType": 2,
+                    "contentMetadata": {
+                        "PREVIEW_URL": "https://manager.line-scdn.net/video/preview",
+                        "DOWNLOAD_URL": "https://manager.line-scdn.net/video/full",
+                    },
+                }
+            ]
+
+    def fake_download(url, *, session=None):
+        calls.append((url, session))
+        return b"video"
+
+    monkeypatch.setattr(webapp_module, "_download_line_media_url", fake_download)
+
+    assert webapp_module._download_message_content(
+        Api(), "video-123", "Uchat"
+    ) == b"video"
+    assert calls == [("https://manager.line-scdn.net/video/full", session)]
 
 
 @pytest.mark.parametrize(

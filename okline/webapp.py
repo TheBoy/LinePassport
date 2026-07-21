@@ -2090,6 +2090,20 @@ INDEX_HTML = r"""<!doctype html>
       border-radius: 8px;
       object-fit: cover;
     }
+    .msg-video {
+      display: block;
+      width: min(360px, 68vw);
+      max-width: 100%;
+      max-height: 420px;
+      border-radius: 8px;
+      background: #11181d;
+    }
+    .msg-audio {
+      display: block;
+      width: min(320px, 68vw);
+      max-width: 100%;
+      height: 42px;
+    }
     .msg-media-button {
       min-height: 0;
       display: block;
@@ -2122,6 +2136,44 @@ INDEX_HTML = r"""<!doctype html>
     }
     .msg-file:hover { text-decoration: underline; }
     .msg-file svg { width: 20px; height: 20px; flex: 0 0 auto; }
+    .msg-detail-card {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-width: min(270px, 62vw);
+      max-width: min(360px, 72vw);
+      color: inherit;
+      text-decoration: none;
+    }
+    button.msg-detail-card {
+      width: 100%;
+      min-height: 0;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      text-align: left;
+    }
+    .msg-detail-card[href]:hover .msg-detail-title,
+    button.msg-detail-card:hover .msg-detail-title { text-decoration: underline; }
+    .msg-detail-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: rgba(15, 23, 42, .09);
+      color: currentColor;
+      font-weight: 800;
+    }
+    .bubble.me .msg-detail-icon { background: rgba(255, 255, 255, .2); }
+    .msg-detail-icon svg { width: 21px; height: 21px; }
+    .msg-detail-copy { min-width: 0; display: grid; gap: 2px; }
+    .msg-detail-title { font-weight: 700; overflow-wrap: anywhere; }
+    .msg-detail-meta { color: #687680; font-size: 12px; overflow-wrap: anywhere; }
+    .bubble.me .msg-detail-meta { color: rgba(255, 255, 255, .82); }
+    .msg-special { display: grid; gap: 5px; max-width: min(360px, 72vw); }
+    .msg-special a { color: inherit; font-weight: 700; overflow-wrap: anywhere; }
     .image-viewer {
       position: fixed;
       inset: 0;
@@ -3276,6 +3328,26 @@ INDEX_HTML = r"""<!doctype html>
     // Each key holds { th, en }.  t(key) resolves for the current language;
     // missing keys fall back to English, then to the key itself.
     const I18N = {
+      "chat.media_load_error": {th: "\u0e42\u0e2b\u0e25\u0e14\u0e2a\u0e37\u0e48\u0e2d\u0e44\u0e21\u0e48\u0e2a\u0e33\u0e40\u0e23\u0e47\u0e08", en: "Could not load media"},
+      "chat.sealed_media": {th: "\ud83d\udd12 {kind} (\u0e40\u0e02\u0e49\u0e32\u0e23\u0e2b\u0e31\u0e2a - \u0e40\u0e1b\u0e34\u0e14\u0e43\u0e19\u0e41\u0e2d\u0e1b LINE)", en: "\ud83d\udd12 {kind} (encrypted - open in LINE)"},
+      "chat.open_map": {th: "\u0e40\u0e1b\u0e34\u0e14\u0e41\u0e1c\u0e19\u0e17\u0e35\u0e48", en: "Open map"},
+      "chat.open_contact": {th: "\u0e40\u0e1b\u0e34\u0e14\u0e41\u0e0a\u0e17", en: "Open chat"},
+      "chat.coordinates": {th: "\u0e1e\u0e34\u0e01\u0e31\u0e14 {lat}, {lng}", en: "{lat}, {lng}"},
+      "chat.download_media": {th: "\u0e14\u0e32\u0e27\u0e19\u0e4c\u0e42\u0e2b\u0e25\u0e14", en: "Download"},
+      "content.html": {th: "[HTML]", en: "[HTML]"},
+      "content.pdf": {th: "[PDF]", en: "[PDF]"},
+      "content.call": {th: "[\u0e01\u0e32\u0e23\u0e42\u0e17\u0e23]", en: "[call]"},
+      "content.presence": {th: "[\u0e2a\u0e16\u0e32\u0e19\u0e30]", en: "[presence]"},
+      "content.gift": {th: "[\u0e02\u0e2d\u0e07\u0e02\u0e27\u0e31\u0e0d]", en: "[gift]"},
+      "content.groupboard": {th: "[\u0e42\u0e1e\u0e2a\u0e15\u0e4c\u0e01\u0e25\u0e38\u0e48\u0e21]", en: "[group post]"},
+      "content.applink": {th: "[\u0e25\u0e34\u0e07\u0e01\u0e4c\u0e41\u0e2d\u0e1b]", en: "[app link]"},
+      "content.link": {th: "[\u0e25\u0e34\u0e07\u0e01\u0e4c]", en: "[link]"},
+      "content.postnotification": {th: "[\u0e41\u0e08\u0e49\u0e07\u0e40\u0e15\u0e37\u0e2d\u0e19\u0e42\u0e1e\u0e2a\u0e15\u0e4c]", en: "[post notification]"},
+      "content.rich": {th: "[\u0e01\u0e32\u0e23\u0e4c\u0e14\u0e02\u0e49\u0e2d\u0e04\u0e27\u0e32\u0e21]", en: "[rich message]"},
+      "content.music": {th: "[\u0e40\u0e1e\u0e25\u0e07]", en: "[music]"},
+      "content.payment": {th: "[\u0e01\u0e32\u0e23\u0e0a\u0e33\u0e23\u0e30\u0e40\u0e07\u0e34\u0e19]", en: "[payment]"},
+      "content.extimage": {th: "[\u0e23\u0e39\u0e1b\u0e20\u0e32\u0e1e]", en: "[image]"},
+      "content.flex": {th: "[Flex message]", en: "[Flex message]"},
       "common.you": {th: "คุณ", en: "You"},
       "tabs.assistant": {th: "AI Chat Bot", en: "AI Chat Bot"},
       "bot.nav_ai_settings": {th: "ตั้งค่า AI", en: "AI Settings"},
@@ -5497,7 +5569,16 @@ INDEX_HTML = r"""<!doctype html>
     function contentLabel(m) {
       if (m.text) return m.text;
       if (m.contentType === 18 || m.contentType === "18") return chatEventLabel(m);
-      const map = {1: "content.image", 2: "content.video", 3: "content.audio", 7: "content.sticker", 13: "content.contact", 14: "content.file", 15: "content.location", 16: "content.notification"};
+      const map = {
+        1: "content.image", 2: "content.video", 3: "content.audio",
+        4: "content.html", 5: "content.pdf", 6: "content.call",
+        7: "content.sticker", 8: "content.presence", 9: "content.gift",
+        10: "content.groupboard", 11: "content.applink", 12: "content.link",
+        13: "content.contact", 14: "content.file", 15: "content.location",
+        16: "content.postnotification", 17: "content.rich",
+        19: "content.music", 20: "content.payment", 21: "content.extimage",
+        22: "content.flex"
+      };
       const key = map[m.contentType];
       return key ? t(key) : t("content.unsupported");
     }
@@ -5528,11 +5609,11 @@ INDEX_HTML = r"""<!doctype html>
         for (const m of data.messages || []) {
           const div = document.createElement("div");
           const isMe = m.from === myMid;
-          const ctype = m.contentType;
-          const isImage = (ctype === 1 || ctype === "1") && m.id && m.mediaReady;
-          const isSticker = (ctype === 7 || ctype === "7") && m.stickerId;
-          div.className = "bubble" + (isMe ? " me" : "") + (isImage || isSticker ? " has-media" : "");
-          const body = messageBody(m, accountId, isImage, isSticker);
+          const ctype = Number(m.contentType);
+          const hasVisualMedia = [1, 2, 21].includes(ctype) && m.id && m.mediaReady;
+          const isSticker = ctype === 7 && m.stickerId;
+          div.className = "bubble" + (isMe ? " me" : "") + (hasVisualMedia || isSticker ? " has-media" : "");
+          const body = messageBody(m, accountId);
           if (isMe) {
             div.append(body);
           } else {
@@ -5702,7 +5783,122 @@ INDEX_HTML = r"""<!doctype html>
       $("imageViewerImage").removeAttribute("src");
     }
 
-    function messageBody(m, accountId, isImage, isSticker) {
+    function messageMediaSrc(m, accountId, preview) {
+      const params = `${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}&chat_mid=${encodeURIComponent(targetValue())}`;
+      return `/api/message-content?${params}${preview ? "&preview=1" : ""}`;
+    }
+
+    function safeHttpUrl(value) {
+      try {
+        const url = new URL(String(value || ""));
+        return (url.protocol === "http:" || url.protocol === "https:") ? url.href : "";
+      } catch (err) {
+        return "";
+      }
+    }
+
+    function detailIcon(svg) {
+      const icon = document.createElement("span");
+      icon.className = "msg-detail-icon";
+      icon.innerHTML = svg;
+      return icon;
+    }
+
+    function detailCopy(title, lines) {
+      const copy = document.createElement("span");
+      copy.className = "msg-detail-copy";
+      const heading = document.createElement("span");
+      heading.className = "msg-detail-title";
+      heading.textContent = title;
+      copy.appendChild(heading);
+      for (const line of lines.filter(Boolean)) {
+        const meta = document.createElement("span");
+        meta.className = "msg-detail-meta";
+        meta.textContent = line;
+        copy.appendChild(meta);
+      }
+      return copy;
+    }
+
+    function locationBody(m) {
+      const loc = m.location || {};
+      const lat = Number(loc.latitude);
+      const lng = Number(loc.longitude);
+      const hasCoordinates = loc.latitude != null && loc.longitude != null
+        && Number.isFinite(lat) && Number.isFinite(lng);
+      const query = hasCoordinates ? `${lat},${lng}` : (loc.address || loc.title || "");
+      const mapUrl = query
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`
+        : "";
+      const card = document.createElement(mapUrl ? "a" : "div");
+      card.className = "msg-detail-card";
+      if (mapUrl) {
+        card.href = mapUrl;
+        card.target = "_blank";
+        card.rel = "noopener noreferrer";
+        card.setAttribute("aria-label", t("chat.open_map"));
+      }
+      const coordinates = hasCoordinates
+        ? t("chat.coordinates", {lat: lat.toFixed(6), lng: lng.toFixed(6)})
+        : "";
+      card.append(
+        detailIcon('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>'),
+        detailCopy(loc.title || t("content.location"), [loc.address, coordinates, loc.phone])
+      );
+      return card;
+    }
+
+    function contactBody(m) {
+      const canOpen = !!m.contactMid;
+      const card = document.createElement(canOpen ? "button" : "div");
+      if (canOpen) card.type = "button";
+      card.className = "msg-detail-card";
+      const name = m.contactName || t("content.contact");
+      const initial = Array.from(name.trim())[0] || "?";
+      const icon = detailIcon("");
+      icon.textContent = initial.toUpperCase();
+      card.append(icon, detailCopy(name, [m.contactMid || "", canOpen ? t("chat.open_contact") : ""]));
+      if (canOpen) {
+        card.addEventListener("click", () => {
+          setTarget(m.contactMid, name);
+          loadMessages();
+        });
+      }
+      return card;
+    }
+
+    function specialMessageBody(m) {
+      const box = document.createElement("div");
+      box.className = "msg-special";
+      const label = m.altText || contentLabel(m);
+      const type = Number(m.contentType);
+      const link = safeHttpUrl(m.linkUrl || ([11, 12].includes(type) ? m.text : ""));
+      if (link) {
+        const anchor = document.createElement("a");
+        anchor.href = link;
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        anchor.textContent = label;
+        box.appendChild(anchor);
+      } else {
+        const text = document.createElement("div");
+        text.className = "msg-text";
+        text.textContent = label;
+        box.appendChild(text);
+      }
+      return box;
+    }
+
+    function messageBody(m, accountId) {
+      const ct = Number(m.contentType);
+      const isImage = (ct === 1 || ct === 21) && m.id && m.mediaReady;
+      const isVideo = ct === 2 && m.id && m.mediaReady;
+      const isAudio = ct === 3 && m.id && m.mediaReady;
+      const isSticker = ct === 7 && m.stickerId;
+      const isFile = ct === 14;
+      const isPdf = ct === 5;
+      const isMediaType = [1, 2, 3, 5, 14, 21].includes(ct);
+
       if (isImage) {
         const button = document.createElement("button");
         button.type = "button";
@@ -5712,12 +5908,32 @@ INDEX_HTML = r"""<!doctype html>
         img.className = "msg-media";
         img.loading = "lazy";
         img.alt = t("content.image");
-        const mediaSrc = `/api/message-content?${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}&chat_mid=${encodeURIComponent(targetValue())}`;
+        const mediaSrc = messageMediaSrc(m, accountId, false);
         img.src = `${mediaSrc}&preview=1`;
         button.addEventListener("click", () => openImageViewer(mediaSrc, img.alt));
         img.addEventListener("error", () => button.replaceWith(mediaFallback(m)));
         button.appendChild(img);
         return button;
+      }
+      if (isVideo) {
+        const video = document.createElement("video");
+        video.className = "msg-video";
+        video.controls = true;
+        video.preload = "metadata";
+        video.playsInline = true;
+        video.src = messageMediaSrc(m, accountId, false);
+        if (m.hasPreview) video.poster = messageMediaSrc(m, accountId, true);
+        video.addEventListener("error", () => video.replaceWith(mediaFallback(m)));
+        return video;
+      }
+      if (isAudio) {
+        const audio = document.createElement("audio");
+        audio.className = "msg-audio";
+        audio.controls = true;
+        audio.preload = "metadata";
+        audio.src = messageMediaSrc(m, accountId, false);
+        audio.addEventListener("error", () => audio.replaceWith(mediaFallback(m)));
+        return audio;
       }
       if (isSticker) {
         const img = document.createElement("img");
@@ -5728,29 +5944,36 @@ INDEX_HTML = r"""<!doctype html>
         img.addEventListener("error", () => img.replaceWith(mediaFallback(m)));
         return img;
       }
-      const ct = m.contentType;
-      const isImgType = ct === 1 || ct === "1";
-      const isFile = ct === 14 || ct === "14";
-      if ((isImgType || isFile) && m.encrypted && !m.mediaReady) {
+      if (isMediaType && m.encrypted && !m.mediaReady) {
         const d = document.createElement("div");
         d.className = "msg-chip";
         d.textContent = isFile && m.fileName
           ? "🔒 " + m.fileName
-          : t(isFile ? "chat.sealed_file" : "chat.sealed_image");
+          : t("chat.sealed_media", {kind: contentLabel(m)});
         return d;
       }
-      if (isFile && m.id) {
+      if ((isFile || isPdf) && m.id && m.mediaReady) {
         const a = document.createElement("a");
         a.className = "msg-file";
-        a.href = `/api/message-content?${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}&chat_mid=${encodeURIComponent(targetValue())}`;
-        a.setAttribute("download", m.fileName || "file");
+        a.href = messageMediaSrc(m, accountId, false);
+        if (isFile) a.setAttribute("download", m.fileName || "file");
+        else {
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+        }
         a.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg>';
         const span = document.createElement("span");
-        span.textContent = m.fileName || t("content.file");
+        span.textContent = m.fileName || t(isPdf ? "content.pdf" : "content.file");
         a.appendChild(span);
         return a;
       }
+      if (ct === 15 && m.location) return locationBody(m);
+      if (ct === 13) return contactBody(m);
+      if ([4, 6, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 22].includes(ct)) {
+        return specialMessageBody(m);
+      }
       const d = document.createElement("div");
+      d.className = "msg-text";
       d.textContent = contentLabel(m);
       return d;
     }
@@ -14009,6 +14232,9 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         ]
         for message in messages:
             message_mids.extend(_chat_event_mids(message))
+            contact_mid = _message_contact_mid(message)
+            if contact_mid:
+                message_mids.append(contact_mid)
         _resolve_names(
             api,
             message_mids,
@@ -14100,17 +14326,25 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             raise
         except Exception as exc:
             raise WebError(HTTPStatus.NOT_FOUND, "Media not available.") from exc
-        headers = []
+        headers = [("accept-ranges", "bytes")]
         if content_type == 14:
             filename = _safe_message_filename(filename)
             encoded_name = quote(filename, safe="")
             headers.append(
                 ("content-disposition", f"attachment; filename*=UTF-8''{encoded_name}")
             )
+        status = HTTPStatus.OK
+        payload = data
+        requested_range = _parse_byte_range(self.headers.get("range") or "", len(data))
+        if requested_range:
+            start, end = requested_range
+            payload = data[start : end + 1]
+            status = HTTPStatus.PARTIAL_CONTENT
+            headers.append(("content-range", f"bytes {start}-{end}/{len(data)}"))
         self._bytes(
-            data,
-            _message_content_type(data, filename),
-            HTTPStatus.OK,
+            payload,
+            _message_content_type(data, filename, content_type),
+            status,
             headers=headers,
         )
 
@@ -14343,6 +14577,23 @@ def _sniff_content_type(data: bytes) -> str:
         return "image/gif"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return "audio/wav"
+    if data[:4] == b"OggS":
+        return "application/ogg"
+    if data[:4] == b"fLaC":
+        return "audio/flac"
+    if data[:3] == b"ID3" or data[:2] in {b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"}:
+        return "audio/mpeg"
+    if data[:2] in {b"\xff\xf1", b"\xff\xf9"}:
+        return "audio/aac"
+    if data[:4] == b"\x1aE\xdf\xa3":
+        return "application/webm"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand == b"qt  ":
+            return "video/quicktime"
+        return "application/mp4"
     if data[:5] == b"%PDF-":
         return "application/pdf"
     if data[:4] in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
@@ -14350,12 +14601,57 @@ def _sniff_content_type(data: bytes) -> str:
     return "application/octet-stream"
 
 
-def _message_content_type(data: bytes, filename: str = "") -> str:
+def _message_content_type(
+    data: bytes,
+    filename: str = "",
+    line_content_type: int | None = None,
+) -> str:
     detected = _sniff_content_type(data)
+    if detected == "application/mp4":
+        return "audio/mp4" if line_content_type == 3 else "video/mp4"
+    if detected == "application/webm":
+        return "audio/webm" if line_content_type == 3 else "video/webm"
+    if detected == "application/ogg":
+        return "audio/ogg" if line_content_type == 3 else "video/ogg"
     if detected != "application/octet-stream":
         return detected
     guessed, _ = mimetypes.guess_type(filename)
-    return guessed or detected
+    if guessed:
+        return guessed
+    return {
+        1: "image/jpeg",
+        2: "video/mp4",
+        3: "audio/mp4",
+        5: "application/pdf",
+        21: "image/jpeg",
+    }.get(line_content_type, detected)
+
+
+def _parse_byte_range(value: str, size: int) -> tuple[int, int] | None:
+    """Parse one HTTP byte range; malformed/multiple ranges are ignored."""
+    value = str(value or "").strip()
+    if not value or size <= 0 or not value.lower().startswith("bytes="):
+        return None
+    spec = value[6:].strip()
+    if not spec or "," in spec or "-" not in spec:
+        return None
+    start_raw, end_raw = spec.split("-", 1)
+    try:
+        if not start_raw:
+            suffix = int(end_raw)
+            if suffix <= 0:
+                return None
+            start = max(0, size - suffix)
+            return start, size - 1
+        start = int(start_raw)
+        if start < 0 or start >= size:
+            return None
+        end = int(end_raw) if end_raw else size - 1
+        if end < start:
+            return None
+        return start, min(end, size - 1)
+    except ValueError:
+        return None
 
 
 def _query_one(query: dict[str, list[str]], key: str, default: str = "") -> str:
@@ -16326,6 +16622,7 @@ def _resolve_to(api: OkLine, value: str) -> str:
 
 _LINE_MEDIA_HOST_SUFFIXES = ("line-scdn.net", "line-apps.com")
 _MAX_MESSAGE_MEDIA_BYTES = 30 * 1024 * 1024
+_MESSAGE_MEDIA_CONTENT_TYPES = frozenset({1, 2, 3, 5, 14, 21})
 
 
 def _validated_line_media_url(url: str) -> str:
@@ -16350,13 +16647,14 @@ def _validated_line_media_url(url: str) -> str:
     return parsed.geturl()
 
 
-def _download_line_media_url(url: str) -> bytes:
+def _download_line_media_url(url: str, *, session: requests.Session | None = None) -> bytes:
     current = str(url or "")
+    requester = session or requests
     for _ in range(4):
         current = _validated_line_media_url(current)
         response = None
         try:
-            response = requests.get(
+            response = requester.get(
                 current,
                 timeout=25,
                 stream=True,
@@ -16369,10 +16667,17 @@ def _download_line_media_url(url: str) -> bytes:
                 current = urljoin(current, location)
                 continue
             response.raise_for_status()
-            content_type = response.headers.get("content-type", "").lower()
+            content_type = response.headers.get("content-type", "").lower().split(";", 1)[0]
             if content_type and not (
                 content_type.startswith("image/")
+                or content_type.startswith("video/")
+                or content_type.startswith("audio/")
                 or content_type.startswith("application/octet-stream")
+                or content_type in {
+                    "application/mp4",
+                    "application/ogg",
+                    "application/pdf",
+                }
             ):
                 raise RuntimeError(f"LINE media returned {content_type}")
             declared_size = int(response.headers.get("content-length") or 0)
@@ -16433,9 +16738,9 @@ def _download_message_payload(
     if message and not message.get("chunks"):
         raw_meta = message.get("contentMetadata")
         meta = raw_meta if isinstance(raw_meta, dict) else {}
-        if content_type == 14:
+        if content_type in {5, 14}:
             filename = str(meta.get("FILE_NAME") or "")
-        if str(message.get("contentType")) == "1":
+        if content_type in _MESSAGE_MEDIA_CONTENT_TYPES:
             preferred = ("PREVIEW_URL", "DOWNLOAD_URL") if preview else (
                 "DOWNLOAD_URL",
                 "PREVIEW_URL",
@@ -16445,7 +16750,10 @@ def _download_message_payload(
                 if not media_url:
                     continue
                 try:
-                    return _download_line_media_url(media_url), filename, content_type
+                    return _download_line_media_url(
+                        media_url,
+                        session=getattr(getattr(api, "transport", None), "session", None),
+                    ), filename, content_type
                 except RuntimeError:
                     continue
     if not message or not message.get("chunks"):
@@ -16457,7 +16765,7 @@ def _download_message_payload(
     decrypted = api.decrypt_message(message)
     raw_meta = decrypted.get("contentMetadata")
     meta = raw_meta if isinstance(raw_meta, dict) else {}
-    if content_type == 14:
+    if content_type in {5, 14}:
         filename = str(meta.get("FILE_NAME") or "")
     key_material = str(meta.get("ENC_KM") or "")
     if not key_material:
@@ -16499,6 +16807,78 @@ def _chat_event_mids(msg: Any) -> list[str]:
     ]
 
 
+def _metadata_text(meta: dict[str, Any], *keys: str, limit: int = 500) -> str:
+    for key in keys:
+        value = meta.get(key)
+        if value not in (None, ""):
+            return str(value).strip()[:limit]
+    return ""
+
+
+def _message_contact_mid(msg: Any) -> str:
+    if not isinstance(msg, dict) or str(msg.get("contentType")) != "13":
+        return ""
+    raw_meta = msg.get("contentMetadata")
+    meta = raw_meta if isinstance(raw_meta, dict) else {}
+    value = _metadata_text(meta, "mid", "MID", "contactMid", "CONTACT_MID", limit=80)
+    return value if is_mid(value) else ""
+
+
+def _message_location(msg: dict[str, Any]) -> dict[str, Any] | None:
+    raw = msg.get("location")
+    if not isinstance(raw, dict):
+        return None
+
+    def coordinate(*keys: str) -> float | None:
+        for key in keys:
+            value = raw.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    latitude = coordinate("latitude", "lat")
+    longitude = coordinate("longitude", "lng", "lon")
+    if latitude is not None and not -90 <= latitude <= 90:
+        latitude = None
+    if longitude is not None and not -180 <= longitude <= 180:
+        longitude = None
+    title = str(raw.get("title") or "").strip()[:300]
+    address = str(raw.get("address") or "").strip()[:500]
+    phone = str(raw.get("phone") or "").strip()[:80]
+    if latitude is None and longitude is None and not title and not address and not phone:
+        return None
+    return {
+        "title": title,
+        "address": address,
+        "phone": phone,
+        "latitude": latitude,
+        "longitude": longitude,
+    }
+
+
+def _message_link_url(meta: dict[str, Any], text: Any) -> str:
+    candidates = [
+        _metadata_text(meta, "URL", "LINK_URL", "URI", "PERMA_LINK", limit=2048),
+        str(text or "").strip()[:2048],
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        parsed = urlparse(candidate)
+        if (
+            parsed.scheme.lower() in {"http", "https"}
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+        ):
+            return candidate
+    return ""
+
+
 def _message_summary(api: OkLine, msg: Any, names: dict[str, str]) -> dict[str, Any]:
     if not isinstance(msg, dict):
         return {"text": str(msg)}
@@ -16518,21 +16898,61 @@ def _message_summary(api: OkLine, msg: Any, names: dict[str, str]) -> dict[str, 
     raw_meta = resolved.get("contentMetadata")
     meta = raw_meta if isinstance(raw_meta, dict) else {}
     event_mids = _chat_event_mids(resolved)
+    try:
+        content_type = int(str(msg.get("contentType")))
+    except (TypeError, ValueError):
+        content_type = None
+    contact_mid = _message_contact_mid(resolved)
+    contact_name = _metadata_text(
+        meta,
+        "displayName",
+        "DISPLAY_NAME",
+        "contactName",
+        "CONTACT_NAME",
+        limit=300,
+    )
+    if contact_mid:
+        contact_name = names.get(contact_mid) or contact_name or contact_mid
+    duration_raw = _metadata_text(meta, "DURATION", "duration", limit=30)
+    try:
+        duration_ms = max(0, int(float(duration_raw))) if duration_raw else None
+    except (TypeError, ValueError):
+        duration_ms = None
+    file_name = _metadata_text(meta, "FILE_NAME", "fileName", limit=255)
+    file_size = _metadata_text(meta, "FILE_SIZE", "fileSize", limit=30)
+    alt_text = _metadata_text(
+        meta,
+        "ALT_TEXT",
+        "altText",
+        "TITLE",
+        "title",
+        limit=1000,
+    )
+    media_type = content_type in _MESSAGE_MEDIA_CONTENT_TYPES
     return {
         "id": msg.get("id"),
         "from": sender,
         "fromName": names.get(sender) or sender,
         "to": msg.get("to"),
         "text": text,
-        "contentType": msg.get("contentType"),
+        "contentType": content_type if content_type is not None else msg.get("contentType"),
         "stickerId": meta.get("STKID"),
-        "fileName": meta.get("FILE_NAME"),
-        "fileSize": meta.get("FILE_SIZE"),
+        "fileName": file_name or None,
+        "fileSize": file_size or None,
+        "durationMs": duration_ms,
+        "location": _message_location(resolved),
+        "contactMid": contact_mid or None,
+        "contactName": contact_name or None,
+        "altText": alt_text or None,
+        "linkUrl": (_message_link_url(meta, text) or None)
+        if content_type in {4, 11, 12, 17, 22}
+        else None,
         "eventKey": meta.get("LOC_KEY") if event_mids else None,
         "eventNames": [names.get(mid) or mid for mid in event_mids],
         "createdTime": msg.get("createdTime"),
         "encrypted": encrypted,
-        "mediaReady": not encrypted or bool(meta.get("ENC_KM")),
+        "mediaReady": not media_type or not encrypted or bool(meta.get("ENC_KM")),
+        "hasPreview": bool(meta.get("PREVIEW_URL")),
     }
 
 
