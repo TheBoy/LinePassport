@@ -42,6 +42,8 @@ from requests.adapters import HTTPAdapter
 from urllib3 import HTTPConnectionPool, HTTPSConnectionPool
 
 from . import __version__
+from . import e2ee_crypto as e2ee_frame
+from ._util import is_mid
 from .assistant import (
     OllamaClient,
     OllamaError,
@@ -49,13 +51,12 @@ from .assistant import (
     normalize_ollama_base_url,
     rank_chunks,
 )
-from . import e2ee_crypto as e2ee_frame
-from ._util import is_mid
 from .client import OkLine
 from .entities import Group
 from .exceptions import LineLoginRequired
 from .hmac_signer import LtsmBridge
 from .obs import encode_message_talk_meta
+from .transport import LineConfig
 
 INDEX_HTML = r"""<!doctype html>
 <html lang="en">
@@ -957,6 +958,21 @@ INDEX_HTML = r"""<!doctype html>
       gap: 12px;
       justify-items: center;
       width: min(460px, 100%);
+    }
+
+    .login-proxy-box {
+      width: 100%;
+      display: grid;
+      gap: 9px;
+      text-align: left;
+      padding-top: 4px;
+    }
+
+    .login-proxy-box .checkbox-row { width: 100%; }
+
+    .login-proxy-box .muted {
+      font-size: 12px;
+      font-weight: 500;
     }
 
     .wizard-center h3,
@@ -2587,6 +2603,17 @@ INDEX_HTML = r"""<!doctype html>
                 <span class="pill ok" data-i18n="login.step1of4">Step 1 of 4</span>
                 <h3 data-i18n="login.start_title">Start adding a LINE account</h3>
                 <span class="muted" data-i18n="login.start_hint">This opens a clean login flow. LinePassport will use the display name from your LINE account.</span>
+                <div class="login-proxy-box">
+                  <label class="checkbox-row">
+                    <input id="loginProxyEnabled" type="checkbox">
+                    <span data-i18n="proxy.connect">Connect through proxy</span>
+                  </label>
+                  <label id="loginProxyUrlWrap" class="hidden">
+                    <span data-i18n="proxy.url">Proxy URL</span>
+                    <input id="loginProxyUrl" type="password" autocomplete="off" spellcheck="false" placeholder="http://user:password@host:port">
+                    <span class="muted" data-i18n="proxy.hint">Supports HTTP, HTTPS, SOCKS5, and SOCKS5H. This proxy is used only by this LINE account.</span>
+                  </label>
+                </div>
                 <button id="beginAddAccountButton" class="primary wizard-start" data-i18n="login.start">Start</button>
               </div>
             </div>
@@ -3402,6 +3429,12 @@ INDEX_HTML = r"""<!doctype html>
       "accounts.delete_title": {th: "ลบ {name}?", en: "Delete {name}?"},
       "accounts.delete_note": {th: "งานตั้งเวลาส่งของบัญชีนี้จะถูกหยุดชั่วคราว", en: "This account's scheduled jobs will be paused."},
       "accounts.also_line_logout": {th: "ออกจากระบบบน LINE ด้วย", en: "Also log out on LINE"},
+      "proxy.connect": {th: "เชื่อมต่อผ่าน Proxy", en: "Connect through proxy"},
+      "proxy.url": {th: "Proxy URL", en: "Proxy URL"},
+      "proxy.hint": {th: "รองรับ HTTP, HTTPS, SOCKS5 และ SOCKS5H โดยใช้เฉพาะบัญชี LINE นี้", en: "Supports HTTP, HTTPS, SOCKS5, and SOCKS5H. This proxy is used only by this LINE account."},
+      "proxy.configured": {th: "เปิดใช้ Proxy", en: "Proxy enabled"},
+      "proxy.keep_existing": {th: "เว้นว่างเพื่อใช้ Proxy เดิม", en: "Leave blank to keep the current proxy"},
+      "proxy.required": {th: "กรุณากรอก Proxy URL", en: "Enter a proxy URL."},
       "users.title": {th: "ผู้ใช้และสิทธิ์", en: "Users & Access"},
       "users.subtitle": {th: "กำหนดบทบาทและเลือกบัญชี LINE ที่ผู้ใช้แต่ละคนเข้าถึงได้", en: "Assign roles and choose which LINE accounts each user can access."},
       "users.create": {th: "สร้างผู้ใช้", en: "Create User"},
@@ -4367,7 +4400,9 @@ INDEX_HTML = r"""<!doctype html>
         meta.textContent = account.mid || account.id;
         const sub = document.createElement("span");
         sub.className = "muted";
-        sub.textContent = account.tokenFileExists ? t("accounts.session_ready") : t("accounts.session_missing");
+        const accountStates = [account.tokenFileExists ? t("accounts.session_ready") : t("accounts.session_missing")];
+        if (account.proxyConfigured) accountStates.push(t("proxy.configured"));
+        sub.textContent = accountStates.join(" · ");
         info.append(title, meta, sub);
 
         const actions = document.createElement("div");
@@ -4401,13 +4436,39 @@ INDEX_HTML = r"""<!doctype html>
         build: (body) => {
           const li = labeledInput(t("accounts.name"), "text");
           li.input.value = account.label || account.id;
-          body.appendChild(li.label);
-          return () => li.input.value.trim();
+          const proxyRow = document.createElement("label");
+          proxyRow.className = "checkbox-row";
+          const proxyEnabled = document.createElement("input");
+          proxyEnabled.type = "checkbox";
+          proxyEnabled.checked = !!account.proxyConfigured;
+          proxyRow.append(proxyEnabled, textSpan(t("proxy.connect")));
+          const proxy = labeledInput(t("proxy.url"), "password");
+          proxy.input.autocomplete = "off";
+          proxy.input.spellcheck = false;
+          proxy.input.placeholder = account.proxyConfigured
+            ? t("proxy.keep_existing")
+            : "http://user:password@host:port";
+          const syncProxy = () => {
+            proxy.label.classList.toggle("hidden", !proxyEnabled.checked);
+            proxy.input.disabled = !proxyEnabled.checked;
+          };
+          proxyEnabled.addEventListener("change", syncProxy);
+          syncProxy();
+          body.append(li.label, proxyRow, proxy.label);
+          return () => ({
+            label: li.input.value.trim(),
+            proxyEnabled: proxyEnabled.checked,
+            proxyUrl: proxy.input.value.trim()
+          });
         },
         confirmKey: "common.save"
       });
-      if (res == null || res === "") return;
-      await post("/api/accounts/update", {accountId: account.id, label: res});
+      if (!res || !res.label) return;
+      if (res.proxyEnabled && !res.proxyUrl && !account.proxyConfigured) {
+        toast(t("proxy.required"), true);
+        return;
+      }
+      await post("/api/accounts/update", {accountId: account.id, ...res});
       toast(t("toast.account_updated"));
       await refreshStatus(false);
       await loadAccountManagement();
@@ -5727,6 +5788,15 @@ INDEX_HTML = r"""<!doctype html>
       $("loginState").textContent = t("login.idle");
       $("loginPinReview").textContent = "----";
       $("loginDoneText").textContent = t("login.done_text");
+      $("loginProxyEnabled").checked = false;
+      $("loginProxyUrl").value = "";
+      syncLoginProxyInput();
+    }
+
+    function syncLoginProxyInput() {
+      const enabled = $("loginProxyEnabled").checked;
+      $("loginProxyUrlWrap").classList.toggle("hidden", !enabled);
+      $("loginProxyUrl").disabled = !enabled;
     }
 
     function openAddAccount(reset = true) {
@@ -5760,11 +5830,18 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function startLogin() {
+      const proxyEnabled = $("loginProxyEnabled").checked;
+      const proxyUrl = proxyEnabled ? $("loginProxyUrl").value.trim() : "";
+      if (proxyEnabled && !proxyUrl) {
+        toast(t("proxy.required"), true);
+        $("loginProxyUrl").focus();
+        return;
+      }
       $("beginAddAccountButton").disabled = true;
       $("qrBox").replaceChildren(textSpan(t("login.starting"), "muted"));
       setLoginStep(2);
       try {
-        await post("/api/login/start", {waitSeconds: 180});
+        await post("/api/login/start", {waitSeconds: 180, proxyUrl});
         pollLogin();
         clearInterval(state.loginTimer);
         state.loginTimer = setInterval(pollLogin, 1400);
@@ -7248,6 +7325,7 @@ INDEX_HTML = r"""<!doctype html>
     $("secureButton").addEventListener("click", () => secureWithPassword().catch(toastError));
     $("createUserButton").addEventListener("click", () => createUser().catch(toastError));
     $("addAccountButton").addEventListener("click", () => openAddAccount());
+    $("loginProxyEnabled").addEventListener("change", syncLoginProxyInput);
     $("beginAddAccountButton").addEventListener("click", () => startLogin().catch(toastError));
     $("cancelLoginButton").addEventListener("click", () => cancelLogin().catch(toastError));
     $("qrCopyButton").addEventListener("click", () => copyQrLink());
@@ -8573,6 +8651,8 @@ MAX_GLOBAL_KNOWLEDGE_LENGTH = 750_000
 MAX_KNOWLEDGE_API_BYTES = 750_000
 MAX_KNOWLEDGE_API_SOURCES = 50
 MAX_ASSISTANT_QUESTIONS = 5000
+MAX_PROXY_URL_LENGTH = 2048
+PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
     "You are LinePassport Assistant. Answer clearly and concisely in the same "
@@ -8612,6 +8692,39 @@ def _validate_http_url_shape(url: str) -> str:
     except ValueError as exc:
         raise WebError(HTTPStatus.BAD_REQUEST, "URL port is invalid.") from exc
     return value
+
+
+def _validate_proxy_url(url: str) -> str:
+    value = str(url or "").strip()
+    if not value or len(value) > MAX_PROXY_URL_LENGTH:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Proxy URL is missing or too long.")
+    parsed = urlparse(value)
+    if parsed.scheme.lower() not in PROXY_SCHEMES or not parsed.hostname:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Proxy URL must use HTTP, HTTPS, SOCKS5, or SOCKS5H.",
+            "invalid_proxy_url",
+        )
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST, "Proxy port is invalid.", "invalid_proxy_url"
+        ) from exc
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Proxy URL must not contain a path, query, or fragment.",
+            "invalid_proxy_url",
+        )
+    return value
+
+
+def _line_config_for_proxy(proxy_url: str | None) -> LineConfig | None:
+    if not proxy_url:
+        return None
+    value = _validate_proxy_url(proxy_url)
+    return LineConfig(proxies={"http": value, "https": value})
 
 
 def _public_http_target(url: str) -> tuple[str, tuple[str, ...]]:
@@ -9999,6 +10112,7 @@ class AccountStore:
                 item = dict(account)
                 item["tokenFileExists"] = bool(token_file and os.path.exists(token_file))
                 item.pop("tokenFile", None)
+                item["proxyConfigured"] = bool(item.pop("proxyUrl", None))
                 out.append(item)
             return out
 
@@ -10029,6 +10143,7 @@ class AccountStore:
             token_file = str(account.get("tokenFile") or "")
             account.pop("tokenFile", None)
             account["tokenFileExists"] = bool(token_file and os.path.exists(token_file))
+            account["proxyConfigured"] = bool(account.pop("proxyUrl", None))
             return account
 
     def update_profile(self, account_id: str, profile: dict[str, Any]) -> None:
@@ -10057,6 +10172,40 @@ class AccountStore:
                     return dict(account)
         raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
 
+    def update_settings(
+        self,
+        account_id: str,
+        label: str,
+        *,
+        proxy_enabled: bool | None = None,
+        encrypted_proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        label = (label or "").strip()
+        if not label:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Account name is required.")
+        if len(label) > MAX_NAME_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Account name is too long.")
+        with self.lock:
+            for account in self.data.get("accounts", []):
+                if not isinstance(account, dict) or account.get("id") != account_id:
+                    continue
+                account["label"] = label
+                if proxy_enabled is False:
+                    account.pop("proxyUrl", None)
+                elif proxy_enabled is True:
+                    if encrypted_proxy_url:
+                        account["proxyUrl"] = encrypted_proxy_url
+                    elif not account.get("proxyUrl"):
+                        raise WebError(
+                            HTTPStatus.BAD_REQUEST,
+                            "Proxy URL is required when proxy is enabled.",
+                            "proxy_url_required",
+                        )
+                account["updatedAt"] = _now_iso()
+                self.save()
+                return dict(account)
+        raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
+
     def add_from_api(
         self,
         api: OkLine,
@@ -10064,6 +10213,7 @@ class AccountStore:
         requested_label: str | None,
         owner_id: str,
         *,
+        encrypted_proxy_url: str | None = None,
         persist: bool = True,
         token_writer: Callable[[OkLine, str], None] | None = None,
     ) -> dict[str, Any]:
@@ -10109,6 +10259,8 @@ class AccountStore:
                 "createdAt": _now_iso(),
                 "updatedAt": _now_iso(),
             }
+            if encrypted_proxy_url:
+                account["proxyUrl"] = encrypted_proxy_url
             self.data.setdefault("accounts", []).append(account)
             self.data["activeAccountId"] = account_id
             if persist:
@@ -10241,6 +10393,19 @@ class WebState:
         return f"fernet:{token}"
 
     def _migrate_stored_secrets(self) -> None:
+        accounts_root = self.store.get("accounts", {})
+        accounts_changed = False
+        if isinstance(accounts_root, dict):
+            for account in accounts_root.get("accounts", []):
+                if not isinstance(account, dict):
+                    continue
+                proxy_url = str(account.get("proxyUrl") or "")
+                if proxy_url and not proxy_url.startswith("fernet:"):
+                    account["proxyUrl"] = self._encrypt_secret(proxy_url)
+                    accounts_changed = True
+            if accounts_changed:
+                self.store.set("accounts", accounts_root)
+
         root = self.store.get("ai_settings", {})
         changed = False
 
@@ -10450,6 +10615,12 @@ class WebState:
     def _login_owner_key(user: dict[str, Any] | None) -> str:
         return str((user or {}).get("id") or "")
 
+    def _proxy_url_for_account(self, account: dict[str, Any] | None) -> str | None:
+        encrypted = str((account or {}).get("proxyUrl") or "")
+        if not encrypted:
+            return None
+        return _validate_proxy_url(self._decrypt_secret(encrypted))
+
     def _new_api(self, account_id: str | None = None) -> OkLine:
         redact = not self.config.show_secrets
         if self.config.access_token and account_id in (None, "__manual__"):
@@ -10459,12 +10630,22 @@ class WebState:
                 redact=redact,
             )
         account = self.account_store.get(account_id) if account_id else None
+        proxy_url = self._proxy_url_for_account(account)
+        line_config = _line_config_for_proxy(proxy_url)
         token_file = account.get("tokenFile") if account else None
         if token_file and os.path.exists(token_file):
-            return self._api_from_account_tokens(str(token_file), redact=redact)
-        return OkLine(redact=redact)
+            return self._api_from_account_tokens(
+                str(token_file), redact=redact, line_config=line_config
+            )
+        return OkLine(config=line_config, redact=redact)
 
-    def _api_from_account_tokens(self, token_file: str, *, redact: bool) -> OkLine:
+    def _api_from_account_tokens(
+        self,
+        token_file: str,
+        *,
+        redact: bool,
+        line_config: LineConfig | None = None,
+    ) -> OkLine:
         from .session import Session
 
         if os.path.getsize(token_file) > MAX_SESSION_FILE_BYTES:
@@ -10489,6 +10670,7 @@ class WebState:
                 refresh_token=session.refresh_token,
                 certificate=session.certificate,
                 mid=session.mid,
+                config=line_config,
                 redact=redact,
             )
             if session.e2ee:
@@ -10498,7 +10680,7 @@ class WebState:
                     traceback.print_exc()
         else:
             session = Session.from_dict(json.loads(raw.decode("utf-8")))
-            api = OkLine.from_tokens_file(token_file, redact=redact)
+            api = OkLine.from_tokens_file(token_file, config=line_config, redact=redact)
             api._session_path = None
             self._save_account_tokens(api, token_file, fallback_e2ee=session.e2ee)
         api._session_save_hook = lambda: self._save_account_tokens(api, token_file)
@@ -10642,7 +10824,10 @@ class WebState:
         wait_seconds: float = 180.0,
         account_name: str | None = None,
         user: dict[str, Any] | None = None,
+        *,
+        proxy_url: str | None = None,
     ) -> dict[str, Any]:
+        validated_proxy = _validate_proxy_url(proxy_url) if proxy_url else None
         owner_id = self._login_owner_key(user)
         with self.lock:
             login = self.logins.setdefault(owner_id, {"state": "idle"})
@@ -10662,6 +10847,7 @@ class WebState:
                 "profile": None,
                 "account": None,
                 "accountName": account_name,
+                "proxyConfigured": bool(validated_proxy),
                 "ownerId": owner_id,
             }
         thread = threading.Thread(
@@ -10671,6 +10857,7 @@ class WebState:
                 account_name,
                 login_id,
                 owner_id,
+                validated_proxy,
             ),
             daemon=True,
         )
@@ -10700,8 +10887,13 @@ class WebState:
         account_name: str | None,
         login_id: str,
         owner_id: str,
+        proxy_url: str | None,
     ) -> None:
-        client = OkLine(record=False, redact=not self.config.show_secrets)
+        client = OkLine(
+            config=_line_config_for_proxy(proxy_url),
+            record=False,
+            redact=not self.config.show_secrets,
+        )
         keep_client = False
         owner_key = str(owner_id or "")
 
@@ -10734,7 +10926,7 @@ class WebState:
                 # instead of registering an account they no longer expect.
                 return
             account = self._commit_new_account(
-                client, profile, account_name, owner_id
+                client, profile, account_name, owner_id, proxy_url
             )
             self.replace_api(account["id"], client)
             keep_client = True
@@ -10758,7 +10950,9 @@ class WebState:
         except Exception as exc:
             with self.lock:
                 if _current():
-                    self.logins[owner_key].update({"state": "error", "error": str(exc)})
+                    self.logins[owner_key].update(
+                        {"state": "error", "error": _safe_log_detail(exc, 500)}
+                    )
         finally:
             if not keep_client:
                 client.close()
@@ -10769,6 +10963,7 @@ class WebState:
         profile: dict[str, Any],
         account_name: str | None,
         owner_id: str,
+        proxy_url: str | None = None,
     ) -> dict[str, Any]:
         account: dict[str, Any] | None = None
         with self.lock, self.web_auth.lock, self.account_store.lock:
@@ -10780,6 +10975,9 @@ class WebState:
                     profile,
                     account_name,
                     owner_id,
+                    encrypted_proxy_url=(
+                        self._encrypt_secret(proxy_url) if proxy_url else None
+                    ),
                     persist=False,
                     token_writer=self._save_account_tokens,
                 )
@@ -10901,9 +11099,32 @@ class WebState:
         account_id: str,
         label: str,
         user: dict[str, Any] | None = None,
+        *,
+        proxy_enabled: bool | None = None,
+        proxy_url: str | None = None,
     ) -> dict[str, Any]:
-        account = self.account_store.update_label(_required_account_id(account_id), label)
+        account_id = _required_account_id(account_id)
+        if proxy_enabled is not None and not isinstance(proxy_enabled, bool):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "proxyEnabled must be true or false.",
+                "invalid_proxy_setting",
+            )
+        validated_proxy = _validate_proxy_url(proxy_url) if proxy_url else None
+        before = self.account_store.get(account_id) or {}
+        account = self.account_store.update_settings(
+            account_id,
+            label,
+            proxy_enabled=proxy_enabled,
+            encrypted_proxy_url=(
+                self._encrypt_secret(validated_proxy) if validated_proxy else None
+            ),
+        )
+        proxy_changed = str(before.get("proxyUrl") or "") != str(account.get("proxyUrl") or "")
+        if proxy_changed:
+            self.close_api(account_id)
         account.pop("tokenFile", None)
+        account["proxyConfigured"] = bool(account.pop("proxyUrl", None))
         return {
             "ok": True,
             "account": account,
@@ -13476,7 +13697,9 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.update_account(
                 str(body.get("accountId") or ""),
                 str(body.get("label") or ""),
-                self.current_user,
+                proxy_enabled=(body.get("proxyEnabled") if "proxyEnabled" in body else None),
+                proxy_url=str(body.get("proxyUrl") or "").strip() or None,
+                user=self.current_user,
             )
         if method == "POST" and path == "/api/accounts/delete":
             self._require_permission("manage_accounts")
@@ -13508,6 +13731,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.start_login(
                 float(body.get("waitSeconds") or 180.0),
                 account_name=str(body.get("accountName") or "").strip() or None,
+                proxy_url=str(body.get("proxyUrl") or "").strip() or None,
                 user=self.current_user,
             )
         if method == "GET" and path == "/api/login/state":
@@ -14199,7 +14423,7 @@ def _short_text(value: Any, limit: int = 240) -> str:
     return text[: max(0, limit - 3)] + "..."
 
 
-_URL_IN_TEXT_RE = re.compile(r"https?://[^\s)>,]+")
+_URL_IN_TEXT_RE = re.compile(r"(?:https?|socks5h?)://[^\s)>,]+", re.IGNORECASE)
 
 
 def _safe_log_detail(value: Any, limit: int = 220) -> str:
@@ -14906,14 +15130,21 @@ def _safe_url(url: str) -> str:
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.netloc:
         return _short_text(url, 180)
-    if parsed.netloc.endswith("line-apps.com"):
-        return f"{parsed.scheme}://{parsed.netloc}/..."
+    hostname = str(parsed.hostname or "")
+    display_host = f"[{hostname}]" if ":" in hostname else hostname
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    netloc = f"{display_host}:{port}" if port else display_host
+    if hostname.endswith("line-apps.com"):
+        return f"{parsed.scheme}://{netloc}/..."
     path = parsed.path
     if len(path) > 64:
         parts = [part for part in path.split("/") if part]
         path = "/" + "/".join(parts[:2]) + "/..." if parts else ""
     suffix = "?..." if parsed.query else ""
-    return _short_text(f"{parsed.scheme}://{parsed.netloc}{path}{suffix}", 180)
+    return _short_text(f"{parsed.scheme}://{netloc}{path}{suffix}", 180)
 
 
 def _name_from_url(url: str) -> str:

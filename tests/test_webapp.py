@@ -108,6 +108,97 @@ def _seed_account(state: WebState, account_id: str = "acct") -> None:
     state.account_store.save()
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://proxy.example:8080",
+        "https://user:password@proxy.example:8443",
+        "socks5://127.0.0.1:1080",
+        "socks5h://user:password@proxy.example:1080",
+    ],
+)
+def test_proxy_url_validation_accepts_supported_schemes(url):
+    assert webapp_module._validate_proxy_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "",
+        "ftp://proxy.example:21",
+        "http://",
+        "http://proxy.example:bad",
+        "http://proxy.example:8080/path",
+        "http://proxy.example:8080?token=secret",
+    ],
+)
+def test_proxy_url_validation_rejects_unsafe_shapes(url):
+    with pytest.raises(WebError):
+        webapp_module._validate_proxy_url(url)
+
+
+def test_account_proxy_is_encrypted_hidden_and_applied(web_state):
+    _seed_account(web_state)
+    proxy_url = "socks5h://proxy-user:proxy-pass@proxy.example:1080"
+    stored = web_state._encrypt_secret(proxy_url)
+    web_state.account_store.data["accounts"][0]["proxyUrl"] = stored
+    web_state.account_store.save()
+
+    account = web_state.account_store.list_accounts()[0]
+    assert account["proxyConfigured"] is True
+    assert "proxyUrl" not in account
+    assert proxy_url not in json.dumps(web_state.account_store.data)
+
+    api = web_state.get_api("acct", require_auth=False)
+    try:
+        assert api.transport.session.proxies == {"http": proxy_url, "https": proxy_url}
+    finally:
+        web_state.close_api("acct")
+
+
+def test_updating_account_proxy_replaces_cached_client(web_state):
+    _seed_account(web_state)
+    first_api = web_state.get_api("acct", require_auth=False)
+    assert web_state.apis["acct"] is first_api
+
+    result = web_state.update_account(
+        "acct",
+        "Proxy Account",
+        proxy_enabled=True,
+        proxy_url="http://user:secret@proxy.example:8080",
+    )
+
+    assert result["account"]["proxyConfigured"] is True
+    assert "proxyUrl" not in result["account"]
+    assert "acct" not in web_state.apis
+    encrypted = web_state.account_store.data["accounts"][0]["proxyUrl"]
+    assert encrypted.startswith("fernet:")
+
+    web_state.update_account("acct", "Proxy Account", proxy_enabled=True)
+    assert web_state.account_store.data["accounts"][0]["proxyUrl"] == encrypted
+
+    web_state.update_account("acct", "Proxy Account", proxy_enabled=False)
+    assert "proxyUrl" not in web_state.account_store.data["accounts"][0]
+
+
+def test_proxy_credentials_are_redacted_from_log_details():
+    detail = webapp_module._safe_log_detail(
+        "request failed through socks5://proxy-user:proxy-pass@proxy.example:1080"
+    )
+    assert "proxy-user" not in detail
+    assert "proxy-pass" not in detail
+    assert "socks5://proxy.example:1080" in detail
+
+
+def test_web_ui_configures_proxy_per_line_account():
+    assert 'id="loginProxyEnabled"' in INDEX_HTML
+    assert 'id="loginProxyUrl" type="password"' in INDEX_HTML
+    assert 'await post("/api/login/start", {waitSeconds: 180, proxyUrl});' in INDEX_HTML
+    assert 'proxyEnabled: proxyEnabled.checked' in INDEX_HTML
+    assert 'proxyUrl: proxy.input.value.trim()' in INDEX_HTML
+    assert 'account.proxyConfigured' in INDEX_HTML
+
+
 def test_file_state_store_serializes_writes(tmp_path, monkeypatch):
     store = webapp_module.FileStateStore(_make_config(tmp_path))
     original = webapp_module._write_json_file
