@@ -975,6 +975,23 @@ INDEX_HTML = r"""<!doctype html>
       font-weight: 500;
     }
 
+    .proxy-field-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(120px, .55fr);
+      gap: 9px;
+      width: 100%;
+    }
+
+    .proxy-field-grid label { display: grid; gap: 5px; min-width: 0; }
+    .proxy-field-grid .proxy-wide { grid-column: 1 / -1; }
+    .proxy-field-grid .muted { grid-column: 1 / -1; }
+
+    @media (max-width: 560px) {
+      .proxy-field-grid { grid-template-columns: 1fr; }
+      .proxy-field-grid .proxy-wide,
+      .proxy-field-grid .muted { grid-column: 1; }
+    }
+
     .wizard-center h3,
     .login-step h3 {
       margin: 0;
@@ -2660,11 +2677,34 @@ INDEX_HTML = r"""<!doctype html>
                     <input id="loginProxyEnabled" type="checkbox">
                     <span data-i18n="proxy.connect">Connect through proxy</span>
                   </label>
-                  <label id="loginProxyUrlWrap" class="hidden">
-                    <span data-i18n="proxy.url">Proxy URL</span>
-                    <input id="loginProxyUrl" type="password" autocomplete="off" spellcheck="false" placeholder="http://user:password@host:port">
+                  <div id="loginProxyFieldsWrap" class="proxy-field-grid hidden">
+                    <label>
+                      <span data-i18n="proxy.scheme">Proxy type</span>
+                      <select id="loginProxyScheme">
+                        <option value="http">HTTP</option>
+                        <option value="https">HTTPS</option>
+                        <option value="socks5">SOCKS5</option>
+                        <option value="socks5h">SOCKS5H</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span data-i18n="proxy.port">Port</span>
+                      <input id="loginProxyPort" type="number" min="1" max="65535" inputmode="numeric" placeholder="8080">
+                    </label>
+                    <label class="proxy-wide">
+                      <span data-i18n="proxy.host">Host</span>
+                      <input id="loginProxyHost" type="text" autocomplete="off" spellcheck="false" placeholder="proxy.example.com">
+                    </label>
+                    <label>
+                      <span data-i18n="proxy.username">Username</span>
+                      <input id="loginProxyUsername" type="text" autocomplete="off" spellcheck="false">
+                    </label>
+                    <label>
+                      <span data-i18n="proxy.password">Password</span>
+                      <input id="loginProxyPassword" type="password" autocomplete="new-password">
+                    </label>
                     <span class="muted" data-i18n="proxy.hint">Supports HTTP, HTTPS, SOCKS5, and SOCKS5H. This proxy is used only by this LINE account.</span>
-                  </label>
+                  </div>
                 </div>
                 <button id="beginAddAccountButton" class="primary wizard-start" data-i18n="login.start">Start</button>
               </div>
@@ -3328,6 +3368,12 @@ INDEX_HTML = r"""<!doctype html>
     // Each key holds { th, en }.  t(key) resolves for the current language;
     // missing keys fall back to English, then to the key itself.
     const I18N = {
+      "proxy.scheme": {th: "\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17 Proxy", en: "Proxy type"},
+      "proxy.host": {th: "Host", en: "Host"},
+      "proxy.port": {th: "Port", en: "Port"},
+      "proxy.username": {th: "Username", en: "Username"},
+      "proxy.password": {th: "Password", en: "Password"},
+      "proxy.host_port_required": {th: "\u0e01\u0e23\u0e38\u0e13\u0e32\u0e01\u0e23\u0e2d\u0e01 Host \u0e41\u0e25\u0e30 Port", en: "Enter the proxy host and port."},
       "chat.media_load_error": {th: "\u0e42\u0e2b\u0e25\u0e14\u0e2a\u0e37\u0e48\u0e2d\u0e44\u0e21\u0e48\u0e2a\u0e33\u0e40\u0e23\u0e47\u0e08", en: "Could not load media"},
       "chat.sealed_media": {th: "\ud83d\udd12 {kind} (\u0e40\u0e02\u0e49\u0e32\u0e23\u0e2b\u0e31\u0e2a - \u0e40\u0e1b\u0e34\u0e14\u0e43\u0e19\u0e41\u0e2d\u0e1b LINE)", en: "\ud83d\udd12 {kind} (encrypted - open in LINE)"},
       "chat.open_map": {th: "\u0e40\u0e1b\u0e34\u0e14\u0e41\u0e1c\u0e19\u0e17\u0e35\u0e48", en: "Open map"},
@@ -4514,30 +4560,71 @@ INDEX_HTML = r"""<!doctype html>
           proxyEnabled.type = "checkbox";
           proxyEnabled.checked = !!account.proxyConfigured;
           proxyRow.append(proxyEnabled, textSpan(t("proxy.connect")));
-          const proxy = labeledInput(t("proxy.url"), "password");
-          proxy.input.autocomplete = "off";
-          proxy.input.spellcheck = false;
-          proxy.input.placeholder = account.proxyConfigured
-            ? t("proxy.keep_existing")
-            : "http://user:password@host:port";
+          const proxyFields = document.createElement("div");
+          proxyFields.className = "proxy-field-grid";
+          const schemeLabel = document.createElement("label");
+          schemeLabel.appendChild(textSpan(t("proxy.scheme")));
+          const scheme = document.createElement("select");
+          for (const value of ["http", "https", "socks5", "socks5h"]) {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = value.toUpperCase();
+            scheme.appendChild(option);
+          }
+          schemeLabel.appendChild(scheme);
+          const port = labeledInput(t("proxy.port"), "number");
+          port.input.min = "1";
+          port.input.max = "65535";
+          port.input.inputMode = "numeric";
+          port.input.placeholder = "8080";
+          const host = labeledInput(t("proxy.host"), "text");
+          host.label.classList.add("proxy-wide");
+          host.input.autocomplete = "off";
+          host.input.spellcheck = false;
+          host.input.placeholder = "proxy.example.com";
+          const username = labeledInput(t("proxy.username"), "text");
+          username.input.autocomplete = "off";
+          username.input.spellcheck = false;
+          const password = labeledInput(t("proxy.password"), "password");
+          password.input.autocomplete = "new-password";
+          proxyFields.append(
+            schemeLabel,
+            port.label,
+            host.label,
+            username.label,
+            password.label
+          );
+          if (account.proxyConfigured) {
+            proxyFields.appendChild(textSpan(t("proxy.keep_existing"), "muted"));
+          }
           const syncProxy = () => {
-            proxy.label.classList.toggle("hidden", !proxyEnabled.checked);
-            proxy.input.disabled = !proxyEnabled.checked;
+            proxyFields.classList.toggle("hidden", !proxyEnabled.checked);
+            proxyFields.querySelectorAll("input, select").forEach((field) => {
+              field.disabled = !proxyEnabled.checked;
+            });
           };
           proxyEnabled.addEventListener("change", syncProxy);
           syncProxy();
-          body.append(li.label, proxyRow, proxy.label);
+          body.append(li.label, proxyRow, proxyFields);
           return () => ({
             label: li.input.value.trim(),
             proxyEnabled: proxyEnabled.checked,
-            proxyUrl: proxy.input.value.trim()
+            proxyScheme: scheme.value,
+            proxyHost: host.input.value.trim(),
+            proxyPort: port.input.value.trim(),
+            proxyUsername: username.input.value.trim(),
+            proxyPassword: password.input.value
           });
         },
         confirmKey: "common.save"
       });
       if (!res || !res.label) return;
-      if (res.proxyEnabled && !res.proxyUrl && !account.proxyConfigured) {
-        toast(t("proxy.required"), true);
+      const hasNewProxy = !!(
+        res.proxyHost || res.proxyPort || res.proxyUsername || res.proxyPassword
+      );
+      if (res.proxyEnabled && (!account.proxyConfigured || hasNewProxy)
+          && (!res.proxyHost || !res.proxyPort)) {
+        toast(t("proxy.host_port_required"), true);
         return;
       }
       await post("/api/accounts/update", {accountId: account.id, ...res});
@@ -6012,14 +6099,20 @@ INDEX_HTML = r"""<!doctype html>
       $("loginPinReview").textContent = "----";
       $("loginDoneText").textContent = t("login.done_text");
       $("loginProxyEnabled").checked = false;
-      $("loginProxyUrl").value = "";
+      $("loginProxyScheme").value = "http";
+      $("loginProxyHost").value = "";
+      $("loginProxyPort").value = "";
+      $("loginProxyUsername").value = "";
+      $("loginProxyPassword").value = "";
       syncLoginProxyInput();
     }
 
     function syncLoginProxyInput() {
       const enabled = $("loginProxyEnabled").checked;
-      $("loginProxyUrlWrap").classList.toggle("hidden", !enabled);
-      $("loginProxyUrl").disabled = !enabled;
+      $("loginProxyFieldsWrap").classList.toggle("hidden", !enabled);
+      $("loginProxyFieldsWrap").querySelectorAll("input, select").forEach((field) => {
+        field.disabled = !enabled;
+      });
     }
 
     function openAddAccount(reset = true) {
@@ -6054,17 +6147,24 @@ INDEX_HTML = r"""<!doctype html>
 
     async function startLogin() {
       const proxyEnabled = $("loginProxyEnabled").checked;
-      const proxyUrl = proxyEnabled ? $("loginProxyUrl").value.trim() : "";
-      if (proxyEnabled && !proxyUrl) {
-        toast(t("proxy.required"), true);
-        $("loginProxyUrl").focus();
+      const proxySettings = {
+        proxyEnabled,
+        proxyScheme: $("loginProxyScheme").value,
+        proxyHost: proxyEnabled ? $("loginProxyHost").value.trim() : "",
+        proxyPort: proxyEnabled ? $("loginProxyPort").value.trim() : "",
+        proxyUsername: proxyEnabled ? $("loginProxyUsername").value.trim() : "",
+        proxyPassword: proxyEnabled ? $("loginProxyPassword").value : ""
+      };
+      if (proxyEnabled && (!proxySettings.proxyHost || !proxySettings.proxyPort)) {
+        toast(t("proxy.host_port_required"), true);
+        $(proxySettings.proxyHost ? "loginProxyPort" : "loginProxyHost").focus();
         return;
       }
       $("beginAddAccountButton").disabled = true;
       $("qrBox").replaceChildren(textSpan(t("login.starting"), "muted"));
       setLoginStep(2);
       try {
-        await post("/api/login/start", {waitSeconds: 180, proxyUrl});
+        await post("/api/login/start", {waitSeconds: 180, ...proxySettings});
         pollLogin();
         clearInterval(state.loginTimer);
         state.loginTimer = setInterval(pollLogin, 1400);
@@ -8875,6 +8975,9 @@ MAX_KNOWLEDGE_API_BYTES = 750_000
 MAX_KNOWLEDGE_API_SOURCES = 50
 MAX_ASSISTANT_QUESTIONS = 5000
 MAX_PROXY_URL_LENGTH = 2048
+MAX_PROXY_HOST_LENGTH = 253
+MAX_PROXY_USERNAME_LENGTH = 255
+MAX_PROXY_PASSWORD_LENGTH = 1024
 PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
@@ -8941,6 +9044,105 @@ def _validate_proxy_url(url: str) -> str:
             "invalid_proxy_url",
         )
     return value
+
+
+def _proxy_url_from_fields(body: Mapping[str, Any]) -> str | None:
+    """Build a validated proxy URL from separate form fields.
+
+    ``proxyUrl`` remains accepted for older clients. New clients send the
+    structured fields so credentials never need to be manually URL-encoded.
+    """
+    if body.get("proxyEnabled") is False:
+        return None
+    legacy_url = str(body.get("proxyUrl") or "").strip()
+    field_keys = {
+        "proxyScheme",
+        "proxyHost",
+        "proxyPort",
+        "proxyUsername",
+        "proxyPassword",
+    }
+    if not any(key in body for key in field_keys):
+        return legacy_url or None
+
+    scheme = str(body.get("proxyScheme") or "http").strip().lower()
+    host = str(body.get("proxyHost") or "").strip()
+    port_raw = str(body.get("proxyPort") or "").strip()
+    username = str(body.get("proxyUsername") or "").strip()
+    password = str(body.get("proxyPassword") or "")
+    if not any((host, port_raw, username, password)):
+        return legacy_url or None
+    if scheme not in PROXY_SCHEMES:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Proxy type must be HTTP, HTTPS, SOCKS5, or SOCKS5H.",
+            "invalid_proxy_setting",
+        )
+    if not host or len(host) > MAX_PROXY_HOST_LENGTH:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Proxy host is required or too long.",
+            "invalid_proxy_setting",
+        )
+    if any(char.isspace() for char in host) or any(
+        marker in host for marker in ("://", "/", "?", "#", "@")
+    ):
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Enter only the proxy host, without protocol, path, or credentials.",
+            "invalid_proxy_setting",
+        )
+    try:
+        port = int(port_raw)
+    except ValueError as exc:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Proxy port must be a number from 1 to 65535.",
+            "invalid_proxy_setting",
+        ) from exc
+    if not 1 <= port <= 65535:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Proxy port must be a number from 1 to 65535.",
+            "invalid_proxy_setting",
+        )
+    if len(username) > MAX_PROXY_USERNAME_LENGTH:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Proxy username is too long.",
+            "invalid_proxy_setting",
+        )
+    if len(password) > MAX_PROXY_PASSWORD_LENGTH or "\x00" in password:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Proxy password is invalid or too long.",
+            "invalid_proxy_setting",
+        )
+
+    host_value = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        address = ipaddress.ip_address(host_value)
+        encoded_host = f"[{address.compressed}]" if address.version == 6 else str(address)
+    except ValueError:
+        try:
+            encoded_host = host_value.encode("idna").decode("ascii").lower()
+        except UnicodeError as exc:
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "Proxy host is invalid.",
+                "invalid_proxy_setting",
+            ) from exc
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9._-]{0,251}[a-z0-9])?", encoded_host):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "Proxy host is invalid.",
+                "invalid_proxy_setting",
+            )
+
+    credentials = ""
+    if username or password:
+        credentials = f"{quote(username, safe='')}:{quote(password, safe='')}@"
+    return _validate_proxy_url(f"{scheme}://{credentials}{encoded_host}:{port}")
 
 
 def _line_config_for_proxy(proxy_url: str | None) -> LineConfig | None:
@@ -13921,7 +14123,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 str(body.get("accountId") or ""),
                 str(body.get("label") or ""),
                 proxy_enabled=(body.get("proxyEnabled") if "proxyEnabled" in body else None),
-                proxy_url=str(body.get("proxyUrl") or "").strip() or None,
+                proxy_url=_proxy_url_from_fields(body),
                 user=self.current_user,
             )
         if method == "POST" and path == "/api/accounts/delete":
@@ -13954,7 +14156,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.start_login(
                 float(body.get("waitSeconds") or 180.0),
                 account_name=str(body.get("accountName") or "").strip() or None,
-                proxy_url=str(body.get("proxyUrl") or "").strip() or None,
+                proxy_url=_proxy_url_from_fields(body),
                 user=self.current_user,
             )
         if method == "GET" and path == "/api/login/state":

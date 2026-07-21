@@ -137,6 +137,68 @@ def test_proxy_url_validation_rejects_unsafe_shapes(url):
         webapp_module._validate_proxy_url(url)
 
 
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        (
+            {
+                "proxyScheme": "http",
+                "proxyHost": "proxy.example.com",
+                "proxyPort": "8080",
+                "proxyUsername": "user@example.com",
+                "proxyPassword": "p:a/ss",
+            },
+            "http://user%40example.com:p%3Aa%2Fss@proxy.example.com:8080",
+        ),
+        (
+            {
+                "proxyScheme": "socks5h",
+                "proxyHost": "2001:db8::1",
+                "proxyPort": 1080,
+                "proxyUsername": "",
+                "proxyPassword": "",
+            },
+            "socks5h://[2001:db8::1]:1080",
+        ),
+    ],
+)
+def test_proxy_fields_build_valid_encoded_url(fields, expected):
+    assert webapp_module._proxy_url_from_fields(fields) == expected
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"proxyScheme": "ftp", "proxyHost": "proxy.example", "proxyPort": "21"},
+        {"proxyScheme": "http", "proxyHost": "", "proxyPort": "8080"},
+        {"proxyScheme": "http", "proxyHost": "http://proxy.example", "proxyPort": "8080"},
+        {"proxyScheme": "http", "proxyHost": "proxy.example:8080", "proxyPort": "8080"},
+        {"proxyScheme": "http", "proxyHost": "proxy.example", "proxyPort": "0"},
+        {"proxyScheme": "http", "proxyHost": "proxy.example", "proxyPort": "65536"},
+    ],
+)
+def test_proxy_fields_reject_invalid_values(fields):
+    with pytest.raises(WebError):
+        webapp_module._proxy_url_from_fields(fields)
+
+
+def test_proxy_fields_keep_legacy_api_and_ignore_disabled_values():
+    legacy = "socks5://proxy.example:1080"
+    assert webapp_module._proxy_url_from_fields({"proxyUrl": legacy}) == legacy
+    assert (
+        webapp_module._proxy_url_from_fields(
+            {
+                "proxyEnabled": False,
+                "proxyScheme": "http",
+                "proxyHost": "bad host",
+                "proxyPort": "bad",
+            }
+        )
+        is None
+    )
+    assert webapp_module._proxy_url_from_fields({"proxyHost": "", "proxyPort": ""}) is None
+
+
 def test_account_proxy_is_encrypted_hidden_and_applied(web_state):
     _seed_account(web_state)
     proxy_url = "socks5h://proxy-user:proxy-pass@proxy.example:1080"
@@ -192,10 +254,19 @@ def test_proxy_credentials_are_redacted_from_log_details():
 
 def test_web_ui_configures_proxy_per_line_account():
     assert 'id="loginProxyEnabled"' in INDEX_HTML
-    assert 'id="loginProxyUrl" type="password"' in INDEX_HTML
-    assert 'await post("/api/login/start", {waitSeconds: 180, proxyUrl});' in INDEX_HTML
+    assert 'id="loginProxyScheme"' in INDEX_HTML
+    assert 'id="loginProxyHost" type="text"' in INDEX_HTML
+    assert 'id="loginProxyPort" type="number"' in INDEX_HTML
+    assert 'id="loginProxyUsername" type="text"' in INDEX_HTML
+    assert 'id="loginProxyPassword" type="password"' in INDEX_HTML
+    assert 'id="loginProxyUrl"' not in INDEX_HTML
+    assert 'await post("/api/login/start", {waitSeconds: 180, ...proxySettings});' in INDEX_HTML
     assert 'proxyEnabled: proxyEnabled.checked' in INDEX_HTML
-    assert 'proxyUrl: proxy.input.value.trim()' in INDEX_HTML
+    assert "proxyScheme: scheme.value" in INDEX_HTML
+    assert "proxyHost: host.input.value.trim()" in INDEX_HTML
+    assert "proxyPort: port.input.value.trim()" in INDEX_HTML
+    assert "proxyUsername: username.input.value.trim()" in INDEX_HTML
+    assert "proxyPassword: password.input.value" in INDEX_HTML
     assert 'account.proxyConfigured' in INDEX_HTML
 
 
