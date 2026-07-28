@@ -10856,7 +10856,7 @@ def _proxy_url_from_fields(body: Mapping[str, Any]) -> str | None:
                 HTTPStatus.BAD_REQUEST,
                 "Proxy host is invalid.",
                 "invalid_proxy_setting",
-            )
+            ) from None
 
     credentials = ""
     if username or password:
@@ -15453,7 +15453,7 @@ class WebState:
                 chunks.append(
                     {
                         "id": hashlib.sha256(
-                            f"{scope}:{source_id}:{index}:{chunk}".encode("utf-8")
+                            f"{scope}:{source_id}:{index}:{chunk}".encode()
                         ).hexdigest()[:24],
                         "sourceId": source_id,
                         "sourceName": source_name,
@@ -17138,6 +17138,8 @@ def _message_content_type(
     guessed, _ = mimetypes.guess_type(filename)
     if guessed:
         return guessed
+    if line_content_type is None:
+        return detected
     return {
         1: "image/jpeg",
         2: "video/mp4",
@@ -19440,7 +19442,7 @@ def _message_location(msg: dict[str, Any]) -> dict[str, Any] | None:
     def coordinate(*keys: str) -> float | None:
         for key in keys:
             value = raw.get(key)
-            if value in (None, ""):
+            if value is None:
                 continue
             try:
                 return float(value)

@@ -10,7 +10,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
-
 MAX_OLLAMA_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
@@ -100,7 +99,10 @@ class OllamaClient:
             name = str(item.get("model") or item.get("name") or "").strip()
             if not name:
                 continue
-            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            raw_details = item.get("details")
+            details: dict[str, Any] = (
+                raw_details if isinstance(raw_details, dict) else {}
+            )
             result.append(
                 {
                     "name": name,
