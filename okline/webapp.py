@@ -15,6 +15,7 @@ import hmac
 import io
 import ipaddress
 import json
+import math
 import mimetypes
 import os
 import random
@@ -1095,6 +1096,7 @@ INDEX_HTML = r"""<!doctype html>
     .tab-panel[data-tab-panel="tools"].active,
     .tab-panel[data-tab-panel="bot"].active,
     .tab-panel[data-tab-panel="assistant"].active,
+    .tab-panel[data-tab-panel="incoming-api"].active,
     .tab-panel[data-tab-panel="ai"].active {
       overflow: auto;
       padding: 16px;
@@ -1159,9 +1161,347 @@ INDEX_HTML = r"""<!doctype html>
     .assistant-source-row { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); background: #f7f9f8; }
     .assistant-source-row-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
     .assistant-source-row .mono { overflow-wrap: anywhere; }
+    .usage-guide-intro { max-width: 68ch; }
+    .usage-guide-steps { margin: 0; padding: 0; list-style: none; }
+    .usage-guide-step {
+      display: grid;
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: 14px;
+      padding: 18px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .usage-guide-step:first-child { padding-top: 0; }
+    .usage-guide-step:last-child { padding-bottom: 0; border-bottom: 0; }
+    .usage-guide-number {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border: 1px solid #9ed9b5;
+      border-radius: 50%;
+      background: #effaf3;
+      color: #176b38;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+    .usage-guide-step strong { display: block; margin-bottom: 4px; font-size: 15px; }
+    .usage-guide-step p { max-width: 70ch; margin: 0; color: var(--muted); }
+    .usage-guide-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+    .usage-guide-notes { display: grid; gap: 0; }
+    .usage-guide-note { padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .usage-guide-note:last-child { border-bottom: 0; }
+    .usage-guide-note strong { display: block; margin-bottom: 3px; }
+    .usage-guide-example {
+      margin: 0;
+      padding: 16px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      background: #f5f8f7;
+      color: var(--ink);
+      font: 13px/1.6 Consolas, "Courier New", monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
     @media (max-width: 720px) {
       .assistant-knowledge-grid { grid-template-columns: 1fr; }
       .assistant-knowledge-grid .wide { grid-column: auto; }
+      .usage-guide-actions { display: grid; }
+      .usage-guide-actions button { width: 100%; }
+    }
+
+    .incoming-api-inner { width: min(980px, 100%); }
+    .incoming-api-head,
+    .incoming-api-row-head,
+    .incoming-api-wizard-head,
+    .incoming-api-wizard-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .incoming-api-list { display: grid; }
+    .incoming-api-row {
+      display: grid;
+      gap: 12px;
+      padding: 18px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .incoming-api-row:first-child { padding-top: 0; }
+    .incoming-api-row:last-child { padding-bottom: 0; border-bottom: 0; }
+    .incoming-api-row h3 { margin: 0; font-size: 16px; }
+    .incoming-api-meta,
+    .incoming-api-actions,
+    .incoming-api-target-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .incoming-api-endpoint {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .incoming-api-endpoint code,
+    .incoming-api-code {
+      display: block;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      border: 1px solid var(--line);
+      background: #f4f7f6;
+      padding: 10px 12px;
+      font: 13px/1.55 Consolas, "Courier New", monospace;
+    }
+    .incoming-api-steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .incoming-api-step {
+      min-height: 58px;
+      border: 1px solid var(--line);
+      background: #f7f9f8;
+      padding: 9px 11px;
+      color: var(--muted);
+      text-align: left;
+    }
+    .incoming-api-step strong { display: block; color: inherit; }
+    .incoming-api-step.active {
+      border-color: rgba(6, 199, 85, .45);
+      background: rgba(6, 199, 85, .09);
+      color: #075f2c;
+    }
+    .incoming-api-wizard-body { display: grid; gap: 16px; }
+    .incoming-api-wizard-page { display: grid; gap: 14px; }
+    .incoming-api-wizard-page.hidden { display: none; }
+    .incoming-api-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .incoming-api-form-grid .wide { grid-column: 1 / -1; }
+    .incoming-api-fieldset {
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+    .incoming-api-fieldset legend {
+      margin-bottom: 7px;
+      padding: 0;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .incoming-api-status-control {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .incoming-api-status-control button {
+      min-height: 44px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+    }
+    .incoming-api-status-control button[aria-pressed="true"] {
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 1px 4px rgba(15, 35, 26, .12);
+    }
+    .incoming-api-status-control button:first-child[aria-pressed="true"] {
+      background: rgba(6, 199, 85, .12);
+      color: #075f2c;
+    }
+    .incoming-api-switch-card {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      background: #f7f9f8;
+      cursor: pointer;
+    }
+    .incoming-api-switch-copy { min-width: 0; display: grid; gap: 3px; }
+    .incoming-api-switch-copy strong { color: var(--ink); }
+    .incoming-api-switch-control {
+      position: relative;
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .incoming-api-switch-control input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .incoming-api-switch-track {
+      position: relative;
+      width: 48px;
+      height: 28px;
+      border: 1px solid #aab6b2;
+      border-radius: 999px;
+      background: #dfe5e2;
+      transition: background-color .18s ease, border-color .18s ease;
+    }
+    .incoming-api-switch-track::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(15, 35, 26, .25);
+      transition: transform .18s ease;
+    }
+    .incoming-api-switch-control input:checked + .incoming-api-switch-track {
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+    .incoming-api-switch-control input:checked + .incoming-api-switch-track::after {
+      transform: translateX(20px);
+    }
+    .incoming-api-switch-control input:focus-visible + .incoming-api-switch-track {
+      outline: 3px solid rgba(6, 199, 85, .24);
+      outline-offset: 2px;
+    }
+    .incoming-api-switch-state {
+      min-width: 28px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .incoming-api-request-examples { display: grid; gap: 12px; }
+    .incoming-api-request-example { display: grid; gap: 6px; }
+    .incoming-api-request-example strong { font-size: 14px; }
+    .incoming-api-head-actions,
+    .incoming-api-guide-picker,
+    .incoming-api-guide-copy-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .incoming-api-guide-body { display: grid; gap: 24px; }
+    .incoming-api-guide-picker {
+      align-items: flex-end;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .incoming-api-guide-picker label { flex: 1; min-width: 0; }
+    .incoming-api-guide-block { display: grid; gap: 10px; }
+    .incoming-api-guide-block h3 { margin: 0; font-size: 17px; }
+    .incoming-api-guide-block p { margin: 0; }
+    .incoming-api-guide-copy-row { align-items: stretch; }
+    .incoming-api-guide-copy-row .incoming-api-code { flex: 1; white-space: pre-wrap; }
+    .incoming-api-guide-copy-row button { flex: 0 0 auto; }
+    .incoming-api-guide-steps,
+    .incoming-api-guide-statuses {
+      display: grid;
+      gap: 0;
+      border-top: 1px solid var(--line);
+    }
+    .incoming-api-guide-step,
+    .incoming-api-guide-status {
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .incoming-api-guide-step strong,
+    .incoming-api-guide-status code { color: var(--ink); }
+    .incoming-api-guide-warning {
+      padding: 12px 14px;
+      border-left: 3px solid #c98920;
+      background: #fff8e9;
+      color: #67430d;
+    }
+    .incoming-api-target-toolbar {
+      display: grid;
+      grid-template-columns: auto minmax(180px, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+    }
+    .incoming-api-target-tabs {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .incoming-api-target-tabs button { border: 0; background: transparent; }
+    .incoming-api-target-tabs button.active {
+      background: #fff;
+      color: #075f2c;
+      box-shadow: 0 1px 3px rgba(18, 29, 26, .1);
+    }
+    .incoming-api-target-list {
+      max-height: 390px;
+      overflow-y: auto;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .incoming-api-target-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-height: 58px;
+      padding: 9px 4px;
+      border-bottom: 1px solid var(--line);
+      cursor: pointer;
+    }
+    .incoming-api-target-row:last-child { border-bottom: 0; }
+    .incoming-api-target-row input { width: 18px; height: 18px; }
+    .incoming-api-target-row strong,
+    .incoming-api-target-row span { min-width: 0; overflow-wrap: anywhere; }
+    .incoming-api-review { display: grid; gap: 10px; }
+    .incoming-api-review-row {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .incoming-api-result { display: grid; gap: 12px; }
+    .incoming-api-empty { padding: 44px 16px; text-align: center; color: var(--muted); }
+
+    @media (max-width: 720px) {
+      .incoming-api-head,
+      .incoming-api-row-head,
+      .incoming-api-wizard-head,
+      .incoming-api-wizard-actions { align-items: stretch; flex-direction: column; }
+      .incoming-api-head-actions,
+      .incoming-api-guide-picker,
+      .incoming-api-guide-copy-row { align-items: stretch; flex-direction: column; }
+      .incoming-api-head-actions button,
+      .incoming-api-guide-copy-row button { width: 100%; }
+      .incoming-api-steps {
+        display: flex;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .incoming-api-step { min-width: 138px; width: auto; }
+      .incoming-api-form-grid { grid-template-columns: 1fr; }
+      .incoming-api-form-grid .wide { grid-column: auto; }
+      .incoming-api-target-toolbar { grid-template-columns: 1fr; }
+      .incoming-api-target-tabs { display: flex; }
+      .incoming-api-target-tabs button { width: auto; flex: 1; }
+      .incoming-api-endpoint { grid-template-columns: 1fr; }
+      .incoming-api-review-row { grid-template-columns: 1fr; gap: 4px; }
+      .incoming-api-switch-card { align-items: flex-start; }
     }
 
     /* Date fields: a dd/mm/yyyy text display sits over the native date input so
@@ -1405,7 +1745,7 @@ INDEX_HTML = r"""<!doctype html>
         max-height: 46vh;
       }
       .line-convo { min-height: 620px; }
-      .line-messages { min-height: 320px; }
+      .line-messages-shell { min-height: 320px; }
       .chat-shell { min-height: 640px; }
       .chat-header { grid-template-columns: 1fr; }
       .login-steps { grid-template-columns: 1fr 1fr; }
@@ -1624,24 +1964,86 @@ INDEX_HTML = r"""<!doctype html>
 
     .line-me {
       display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 10px;
-      padding: 12px 14px;
+      grid-template-columns: 46px minmax(0, 1fr);
+      grid-template-areas:
+        "avatar info"
+        "avatar pills";
+      align-items: start;
+      column-gap: 12px;
+      row-gap: 6px;
+      padding: 14px;
       border-bottom: 1px solid var(--line);
     }
 
-    .line-me-info { min-width: 0; }
+    .line-me > .avatar {
+      grid-area: avatar;
+      align-self: start;
+      margin-top: 3px;
+    }
+
+    .line-me-info {
+      grid-area: info;
+      width: 100%;
+      min-width: 0;
+      min-height: 48px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--ink);
+      padding: 6px 7px 6px 10px;
+      text-align: left;
+      cursor: pointer;
+      transition: background-color .18s ease, border-color .18s ease;
+    }
+
+    .line-me-info:hover {
+      border-color: var(--line);
+      background: var(--surface-2);
+    }
+    .line-me-info:active { background: #e5eeeb; }
+    .line-me-info[aria-expanded="true"] {
+      border-color: rgba(6, 199, 85, .32);
+      background: rgba(6, 199, 85, .08);
+    }
+    .line-me-info:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+    .line-me-info-copy {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+    .line-me-info-chevron {
+      width: 30px;
+      height: 30px;
+      padding: 7px;
+      border-radius: 50%;
+      background: var(--surface-2);
+      color: var(--muted);
+      transition: transform .2s ease, background-color .18s ease, color .18s ease;
+    }
+    .line-me-info:hover .line-me-info-chevron,
+    .line-me-info[aria-expanded="true"] .line-me-info-chevron {
+      background: #fff;
+      color: var(--accent-2);
+    }
+    .line-me-info[aria-expanded="true"] .line-me-info-chevron { transform: rotate(180deg); }
     .line-me .profile-name {
-      font-size: 15px;
+      display: block;
+      font-size: 16px;
       font-weight: 800;
+      line-height: 1.35;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
 
     .line-me-sub {
+      display: block;
       font-size: 12px;
+      line-height: 1.4;
       color: var(--muted);
       white-space: nowrap;
       overflow: hidden;
@@ -1649,23 +2051,61 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     .line-me-pills {
+      grid-area: pills;
+      min-width: 0;
       display: flex;
-      flex-direction: column;
-      gap: 4px;
-      align-items: flex-end;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      justify-content: flex-start;
     }
 
-    .line-me-pills .pill { font-size: 10px; min-height: 20px; padding: 0 7px; }
+    .line-me-pills .pill {
+      min-height: 22px;
+      padding: 0 8px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .line-me-detail-panel {
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      visibility: hidden;
+      transition: max-height .22s ease, opacity .16s ease, visibility 0s linear .22s;
+    }
+
+    .line-me-detail-panel.expanded {
+      max-height: 220px;
+      opacity: 1;
+      visibility: visible;
+      transition-delay: 0s;
+    }
 
     .line-me-detail {
+      display: grid;
       grid-template-columns: 92px minmax(0, 1fr);
       gap: 6px 10px;
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--line);
+      margin: 0 14px 12px 72px;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-2);
       font-size: 12px;
     }
 
     .line-me-detail div:nth-child(odd) { color: var(--muted); }
+    .line-me-detail div:nth-child(even) {
+      min-width: 0;
+      color: var(--ink);
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .line-me-detail-panel,
+      .line-me-info-chevron { transition: none; }
+    }
 
     .line-list-tabbar {
       display: flex;
@@ -1830,6 +2270,13 @@ INDEX_HTML = r"""<!doctype html>
       user-select: none;
     }
 
+    .avatar-image {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
     .avatar-sm { width: 30px; height: 30px; font-size: 13px; }
     .avatar-lg { width: 46px; height: 46px; font-size: 19px; }
 
@@ -1904,7 +2351,17 @@ INDEX_HTML = r"""<!doctype html>
     .convo-advanced input { flex: 1; }
     .convo-advanced select { width: auto; }
 
+    .line-messages-shell {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--line-msg-bg);
+    }
+
     .line-messages {
+      width: 100%;
+      height: 100%;
       min-height: 0;
       display: flex;
       flex-direction: column;
@@ -1914,6 +2371,39 @@ INDEX_HTML = r"""<!doctype html>
       background: var(--line-msg-bg);
       border: 0;
       border-radius: 0;
+    }
+
+    .line-messages-loading {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: grid;
+      place-items: center;
+      background: rgba(32, 43, 54, .82);
+      color: #fff;
+      opacity: 1;
+      transition: opacity .16s ease;
+    }
+
+    .line-messages-loading.hidden {
+      display: grid !important;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .line-messages-loading-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 44px;
+      padding: 9px 14px;
+      border-radius: 8px;
+      background: rgba(15, 23, 42, .72);
+      font-weight: 700;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .line-messages-loading { transition: none; }
     }
 
     .date-chip {
@@ -2755,6 +3245,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="tabbar" role="tablist" aria-label="LinePassport sections">
           <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line" data-i18n="tabs.line">LINE</button>
           <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai" data-i18n="tabs.assistant">AI Chat Bot</button>
+          <button class="tab" id="tabIncomingApi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelIncomingApi" data-tab="incoming-api" data-requires-permission="manage_api" data-i18n="tabs.incoming_api">API</button>
           <button class="tab" id="tabTools" type="button" role="tab" aria-selected="false" aria-controls="tabPanelTools" data-tab="tools" data-i18n="tabs.tools">Tools</button>
           <button class="tab" id="tabBot" type="button" role="tab" aria-selected="false" aria-controls="tabPanelBot" data-tab="bot" data-i18n="tabs.bot">Bot</button>
         </div>
@@ -2763,19 +3254,24 @@ INDEX_HTML = r"""<!doctype html>
         <aside class="line-list">
           <div class="line-me">
             <div class="avatar avatar-lg" id="profileAvatar" aria-hidden="true"></div>
-            <div class="line-me-info">
-              <div class="profile-name" id="profileName" data-i18n="profile.no_account">No account selected</div>
-              <div class="line-me-sub" id="profileStatus">-</div>
-            </div>
+            <button class="line-me-info" id="profileDetailsToggle" type="button" aria-expanded="false" aria-controls="profileDetailsPanel" data-i18n-title="profile.show_details" title="Show account details">
+              <span class="line-me-info-copy">
+                <span class="profile-name" id="profileName" data-i18n="profile.no_account">No account selected</span>
+                <span class="line-me-sub" id="profileStatus">-</span>
+              </span>
+              <svg class="line-me-info-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
             <div class="line-me-pills">
               <span class="pill" id="authPill" data-i18n="pills.account">Account</span>
               <span class="pill" id="nodePill" data-i18n="pills.node">Node</span>
             </div>
           </div>
-          <div class="line-me-detail kv advanced-only">
-            <div data-i18n="profile.userid">User ID</div><div id="profileUserId">-</div>
-            <div data-i18n="profile.e2ee">Encryption</div><div id="profileE2ee">-</div>
-            <div data-i18n="profile.mid">Internal ID</div><div class="mono" id="profileMid">-</div>
+          <div class="line-me-detail-panel" id="profileDetailsPanel" aria-hidden="true">
+            <div class="line-me-detail kv advanced-only">
+              <div data-i18n="profile.userid">User ID</div><div id="profileUserId">-</div>
+              <div data-i18n="profile.e2ee">Encryption</div><div id="profileE2ee">-</div>
+              <div data-i18n="profile.mid">Internal ID</div><div class="mono" id="profileMid">-</div>
+            </div>
           </div>
           <div class="line-list-tabbar">
             <div class="line-list-tabs subtabs" role="tablist" aria-label="Contacts and groups">
@@ -2814,7 +3310,12 @@ INDEX_HTML = r"""<!doctype html>
             </select>
             <button id="loadMessagesButton" data-requires-account data-requires-permission="read" data-i18n="chat.open">Open</button>
           </div>
-          <div class="message-list line-messages" id="messagesList"></div>
+          <div class="line-messages-shell" id="messagesShell" aria-busy="false">
+            <div class="message-list line-messages" id="messagesList"></div>
+            <div class="line-messages-loading hidden" id="messagesLoading" role="status" aria-live="polite" aria-hidden="true">
+              <span class="line-messages-loading-state"><span class="spinner" aria-hidden="true"></span><span data-i18n="common.loading">Loading…</span></span>
+            </div>
+          </div>
           <div class="line-composer">
             <input type="file" id="imageFileInput" accept="image/*" hidden>
             <input type="file" id="fileFileInput" hidden>
@@ -2834,13 +3335,14 @@ INDEX_HTML = r"""<!doctype html>
               <div class="subtabs assistant-view-nav" role="tablist" aria-label="AI Chat Bot">
                 <button id="assistantChatViewButton" class="subtab active" type="button" role="tab" aria-selected="true" data-assistant-view-target="chat" data-i18n="assistant.nav_chat">Chat</button>
                 <button id="assistantKnowledgeViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="knowledge" data-i18n="assistant.nav_knowledge">Knowledge / RAG</button>
+                <button id="assistantGuideViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="guide" data-i18n="assistant.nav_guide">Usage guide</button>
               </div>
               <div id="assistantChatView" data-assistant-view="chat">
               <section class="section">
                 <div class="section-head">
                   <div>
                     <h2 data-i18n="assistant.title">Ask LinePassport AI</h2>
-                    <span class="muted" data-i18n="assistant.subtitle">Answers use the shared knowledge managed by your administrator.</span>
+                    <span class="muted" data-i18n="assistant.subtitle">Answers use global knowledge and your private Knowledge / RAG.</span>
                   </div>
                   <div class="row compact">
                     <span class="pill" id="assistantStatusPill" data-i18n="assistant.checking">Checking</span>
@@ -2868,7 +3370,7 @@ INDEX_HTML = r"""<!doctype html>
                 <div class="section-head">
                   <div>
                     <h2 data-i18n="assistant.unanswered_title">Questions AI could not answer</h2>
-                    <span class="muted" data-i18n="assistant.unanswered_hint">Approved answers become part of shared knowledge.</span>
+                    <span class="muted" data-i18n="assistant.unanswered_hint">Approved answers are added to the question owner's knowledge.</span>
                   </div>
                   <span class="pill" id="assistantUnansweredCount">0</span>
                 </div>
@@ -2926,6 +3428,275 @@ INDEX_HTML = r"""<!doctype html>
                   <div class="section-body assistant-source-list" id="assistantSourceList"></div>
                 </section>
               </div>
+
+              <div id="assistantGuideView" class="hidden" data-assistant-view="guide">
+                <section class="section">
+                  <div class="section-head">
+                    <div class="usage-guide-intro">
+                      <h2 data-i18n="assistant.guide_title">เริ่มใช้งาน AI Chat Bot</h2>
+                      <span class="muted" data-i18n="assistant.guide_subtitle">เตรียม Knowledge แล้วถาม AI จากข้อมูลของคุณตาม 4 ขั้นตอน</span>
+                    </div>
+                  </div>
+                  <div class="section-body">
+                    <ol class="usage-guide-steps">
+                      <li class="usage-guide-step">
+                        <span class="usage-guide-number" aria-hidden="true">1</span>
+                        <div><strong data-i18n="assistant.guide_step_1_title">ตรวจสอบว่า AI พร้อมใช้งาน</strong><p data-i18n="assistant.guide_step_1_body">สถานะในหน้าแชทต้องเป็น “พร้อมใช้งาน” หากยังไม่ได้ตั้งค่า ให้ God เปิด Ollama และเลือกโมเดลที่หน้า /god</p></div>
+                      </li>
+                      <li class="usage-guide-step">
+                        <span class="usage-guide-number" aria-hidden="true">2</span>
+                        <div><strong data-i18n="assistant.guide_step_2_title">เพิ่ม Knowledge / RAG ของคุณ</strong><p data-i18n="assistant.guide_step_2_body">ใส่ข้อมูลใน knowledge.md แล้วกด “บันทึกและสร้างดัชนี” ข้อมูลส่วนนี้แยกตามผู้ใช้และไม่แชร์กับสมาชิกคนอื่น</p></div>
+                      </li>
+                      <li class="usage-guide-step">
+                        <span class="usage-guide-number" aria-hidden="true">3</span>
+                        <div><strong data-i18n="assistant.guide_step_3_title">เชื่อม Knowledge API เมื่อต้องการ</strong><p data-i18n="assistant.guide_step_3_body">เพิ่ม URL แบบ GET ระบุ JSON path และ Bearer token ได้ จากนั้นกด “ดึงข้อมูล” เพื่ออัปเดตและสร้างดัชนี</p></div>
+                      </li>
+                      <li class="usage-guide-step">
+                        <span class="usage-guide-number" aria-hidden="true">4</span>
+                        <div><strong data-i18n="assistant.guide_step_4_title">ถามให้ชัดเจนแล้วตรวจแหล่งข้อมูล</strong><p data-i18n="assistant.guide_step_4_body">ถามคำถามที่เกี่ยวข้องกับ Knowledge ระบบจะแสดงคำตอบพร้อมแหล่งข้อมูล หากตอบไม่ได้ คำถามจะถูกส่งให้ Admin ตรวจสอบ</p></div>
+                      </li>
+                    </ol>
+                    <div class="usage-guide-actions">
+                      <button class="primary" id="assistantGuideKnowledgeButton" type="button" data-i18n="assistant.guide_open_knowledge">ไปที่ Knowledge / RAG</button>
+                      <button id="assistantGuideChatButton" type="button" data-i18n="assistant.guide_open_chat">เริ่มถาม AI</button>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="section">
+                  <div class="section-head"><div><h2 data-i18n="assistant.guide_example_title">ตัวอย่าง knowledge.md</h2><span class="muted" data-i18n="assistant.guide_example_hint">เขียนหัวข้อและข้อมูลให้ตรงไปตรงมา เพื่อให้ค้นหาได้แม่นยำ</span></div></div>
+                  <div class="section-body"><pre class="usage-guide-example"><code data-i18n="assistant.guide_example"># ข้อมูลร้าน
+
+- เปิดทุกวัน 09:00-20:00 น.
+- ส่งฟรีเมื่อยอดสั่งซื้อครบ 500 บาท
+- เปลี่ยนสินค้าได้ภายใน 7 วัน พร้อมใบเสร็จ</code></pre></div>
+                </section>
+
+                <section class="section">
+                  <div class="section-head"><h2 data-i18n="assistant.guide_notes_title">ข้อควรรู้</h2></div>
+                  <div class="section-body usage-guide-notes">
+                    <div class="usage-guide-note"><strong data-i18n="assistant.guide_private_title">Knowledge เป็นส่วนตัว</strong><span class="muted" data-i18n="assistant.guide_private_body">Knowledge และประวัติคำถามของคุณแยกจากผู้ใช้อื่นในระบบ</span></div>
+                    <div class="usage-guide-note"><strong data-i18n="assistant.guide_unanswered_title">เมื่อ AI ตอบไม่ได้</strong><span class="muted" data-i18n="assistant.guide_unanswered_body">Admin สามารถตอบคำถามค้างได้ และคำตอบที่อนุมัติจะถูกเพิ่มกลับเข้า Knowledge ของเจ้าของคำถาม</span></div>
+                    <div class="usage-guide-note"><strong data-i18n="assistant.guide_refresh_title">เมื่อข้อมูลเปลี่ยน</strong><span class="muted" data-i18n="assistant.guide_refresh_body">บันทึก knowledge.md ใหม่ หรือกด “ดึงข้อมูล” ที่ Knowledge API เพื่อสร้างดัชนีล่าสุดก่อนถามอีกครั้ง</span></div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-panel" data-tab-panel="incoming-api" id="tabPanelIncomingApi" role="tabpanel" aria-labelledby="tabIncomingApi">
+            <div class="tab-panel-inner incoming-api-inner">
+              <div id="incomingApiListPage">
+                <section class="section">
+                  <div class="section-head incoming-api-head">
+                    <div>
+                      <h2 data-i18n="incoming_api.title">Incoming API</h2>
+                      <span class="muted" data-i18n="incoming_api.subtitle">Create secure links for external systems to send LINE messages.</span>
+                    </div>
+                    <div class="incoming-api-head-actions">
+                      <button id="incomingApiGuideButton" type="button" data-i18n="incoming_api.guide">Usage guide</button>
+                      <button id="incomingApiCreateButton" class="primary" type="button" data-requires-account data-requires-permission="manage_api" data-i18n="incoming_api.create">+ Create API link</button>
+                    </div>
+                  </div>
+                  <div class="section-body">
+                    <div class="incoming-api-row-head" style="margin-bottom:14px">
+                      <div class="incoming-api-meta">
+                        <span class="pill" id="incomingApiAccountPill">LINE</span>
+                        <span class="pill" id="incomingApiCount">0</span>
+                      </div>
+                      <button id="incomingApiRefreshButton" type="button" data-requires-account data-requires-permission="manage_api" data-i18n="common.refresh">Refresh</button>
+                    </div>
+                    <div class="incoming-api-list" id="incomingApiList"></div>
+                  </div>
+                </section>
+              </div>
+
+              <div id="incomingApiGuidePage" class="hidden">
+                <section class="section">
+                  <div class="section-head incoming-api-wizard-head">
+                    <div>
+                      <h2 data-i18n="incoming_api.guide_title">Incoming API usage guide</h2>
+                      <span class="muted" data-i18n="incoming_api.guide_subtitle">Choose a link to get ready-to-use request examples.</span>
+                    </div>
+                    <button id="incomingApiGuideCloseButton" type="button" data-i18n="common.back">Back</button>
+                  </div>
+                  <div class="section-body incoming-api-guide-body">
+                    <div class="incoming-api-guide-picker">
+                      <label>
+                        <span data-i18n="incoming_api.guide_choose_link">API link used in the examples</span>
+                        <select id="incomingApiGuideLinkSelect"></select>
+                      </label>
+                      <button id="incomingApiGuideCopyUrlButton" type="button" data-i18n="incoming_api.copy_url">Copy URL</button>
+                    </div>
+
+                    <div class="incoming-api-guide-block">
+                      <h3 data-i18n="incoming_api.guide_start_title">Before calling the API</h3>
+                      <div class="incoming-api-guide-steps">
+                        <div class="incoming-api-guide-step"><strong>1</strong><span data-i18n="incoming_api.guide_start_1">Create a link, choose the LINE account and one or more contacts or groups.</span></div>
+                        <div class="incoming-api-guide-step"><strong>2</strong><span data-i18n="incoming_api.guide_start_2">Keep the link status on. Turn on LINE encryption when encrypted text is required.</span></div>
+                        <div class="incoming-api-guide-step"><strong>3</strong><span data-i18n="incoming_api.guide_start_3">Send a GET or POST request to the generated Endpoint URL. No login cookie or extra header is required.</span></div>
+                      </div>
+                      <div class="incoming-api-guide-warning" data-i18n="incoming_api.guide_secret">Treat the Endpoint URL like a password. Anyone who has it can send to the configured targets.</div>
+                    </div>
+
+                    <div class="incoming-api-guide-block">
+                      <h3 data-i18n="incoming_api.request_get">GET — send text</h3>
+                      <p class="muted" data-i18n="incoming_api.guide_get_hint">Use query parameter text or message. URL encoding is recommended.</p>
+                      <div class="incoming-api-guide-copy-row">
+                        <code class="incoming-api-code" id="incomingApiGuideGetCode"></code>
+                        <button type="button" data-copy-incoming-api-guide="incomingApiGuideGetCode" data-i18n="incoming_api.copy_curl">Copy cURL</button>
+                      </div>
+                    </div>
+
+                    <div class="incoming-api-guide-block">
+                      <h3 data-i18n="incoming_api.request_post_text">POST — send text</h3>
+                      <p class="muted" data-i18n="incoming_api.guide_post_text_hint">Send JSON with text or message.</p>
+                      <div class="incoming-api-guide-copy-row">
+                        <code class="incoming-api-code" id="incomingApiGuidePostTextCode"></code>
+                        <button type="button" data-copy-incoming-api-guide="incomingApiGuidePostTextCode" data-i18n="incoming_api.copy_curl">Copy cURL</button>
+                      </div>
+                    </div>
+
+                    <div class="incoming-api-guide-block">
+                      <h3 data-i18n="incoming_api.guide_image_url_title">POST — send an image from a URL</h3>
+                      <p class="muted" data-i18n="incoming_api.guide_image_url_hint">Use a direct HTTPS image URL. text is an optional caption sent before the image.</p>
+                      <div class="incoming-api-guide-copy-row">
+                        <code class="incoming-api-code" id="incomingApiGuideImageUrlCode"></code>
+                        <button type="button" data-copy-incoming-api-guide="incomingApiGuideImageUrlCode" data-i18n="incoming_api.copy_curl">Copy cURL</button>
+                      </div>
+                    </div>
+
+                    <div class="incoming-api-guide-block">
+                      <h3 data-i18n="incoming_api.guide_image_base64_title">POST — send a Base64 image</h3>
+                      <p class="muted" data-i18n="incoming_api.guide_image_base64_hint">Use imageBase64 as raw Base64 or a data URL. filename is optional.</p>
+                      <div class="incoming-api-guide-copy-row">
+                        <code class="incoming-api-code" id="incomingApiGuideImageBase64Code"></code>
+                        <button type="button" data-copy-incoming-api-guide="incomingApiGuideImageBase64Code" data-i18n="incoming_api.copy_curl">Copy cURL</button>
+                      </div>
+                    </div>
+
+                    <div class="incoming-api-guide-block">
+                      <h3 data-i18n="incoming_api.guide_response_title">Responses and limits</h3>
+                      <div class="incoming-api-guide-statuses">
+                        <div class="incoming-api-guide-status"><code>200</code><span data-i18n="incoming_api.guide_response_200">All selected targets were sent successfully.</span></div>
+                        <div class="incoming-api-guide-status"><code>207</code><span data-i18n="incoming_api.guide_response_207">Some targets succeeded and some failed. Check results in the JSON response.</span></div>
+                        <div class="incoming-api-guide-status"><code>400</code><span data-i18n="incoming_api.guide_response_400">The request is invalid or has no text or image.</span></div>
+                        <div class="incoming-api-guide-status"><code>404</code><span data-i18n="incoming_api.guide_response_404">The URL is invalid, rotated, deleted, or disabled.</span></div>
+                        <div class="incoming-api-guide-status"><code>429</code><span data-i18n="incoming_api.guide_response_429">The rate limit of 60 requests per minute was exceeded.</span></div>
+                        <div class="incoming-api-guide-status"><code>502</code><span data-i18n="incoming_api.guide_response_502">Sending failed for every target.</span></div>
+                      </div>
+                      <p class="muted" data-i18n="incoming_api.guide_limits">Maximum text length is 20,000 characters and maximum image size is 30 MB. GET supports text only; images require POST.</p>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div id="incomingApiWizardPage" class="hidden">
+                <section class="section">
+                  <div class="section-head incoming-api-wizard-head">
+                    <div>
+                      <h2 data-i18n="incoming_api.wizard_title">Create API link</h2>
+                      <span class="muted" data-i18n="incoming_api.wizard_subtitle">The link is limited to the selected LINE account and targets.</span>
+                    </div>
+                    <button id="incomingApiWizardCloseButton" type="button" data-i18n="common.back">Back</button>
+                  </div>
+                  <div class="section-body incoming-api-wizard-body">
+                    <div class="incoming-api-steps" aria-label="API link creation steps">
+                      <button class="incoming-api-step active" type="button" data-incoming-api-step="1"><strong data-i18n="incoming_api.step_1">Step 1</strong><span data-i18n="incoming_api.step_details">Details</span></button>
+                      <button class="incoming-api-step" type="button" data-incoming-api-step="2"><strong data-i18n="incoming_api.step_2">Step 2</strong><span data-i18n="incoming_api.step_targets">Targets</span></button>
+                      <button class="incoming-api-step" type="button" data-incoming-api-step="3"><strong data-i18n="incoming_api.step_3">Step 3</strong><span data-i18n="incoming_api.step_request">Request</span></button>
+                      <button class="incoming-api-step" type="button" data-incoming-api-step="4"><strong data-i18n="incoming_api.step_4">Step 4</strong><span data-i18n="incoming_api.step_review">Review</span></button>
+                    </div>
+
+                    <div class="incoming-api-wizard-page" data-incoming-api-page="1">
+                      <div class="incoming-api-form-grid">
+                        <label class="wide"><span data-i18n="incoming_api.name">Link name</span><input id="incomingApiName" maxlength="120" data-i18n-ph="incoming_api.name_ph" placeholder="e.g. Website order notification"></label>
+                        <label><span data-i18n="incoming_api.line_account">LINE account</span><input id="incomingApiAccountName" readonly></label>
+                        <fieldset class="incoming-api-fieldset">
+                          <legend data-i18n="incoming_api.status">Status</legend>
+                          <div class="incoming-api-status-control" role="group" aria-label="API status">
+                            <button id="incomingApiStatusOnButton" type="button" aria-pressed="true" data-i18n="incoming_api.on">On</button>
+                            <button id="incomingApiStatusOffButton" type="button" aria-pressed="false" data-i18n="incoming_api.off">Off</button>
+                          </div>
+                        </fieldset>
+                      </div>
+                    </div>
+
+                    <div class="incoming-api-wizard-page hidden" data-incoming-api-page="2">
+                      <div class="incoming-api-target-toolbar">
+                        <div class="incoming-api-target-tabs" role="tablist" aria-label="API target type">
+                          <button id="incomingApiContactsTab" class="active" type="button" role="tab" aria-selected="true" data-i18n="contacts.tab_people">Contacts</button>
+                          <button id="incomingApiGroupsTab" type="button" role="tab" aria-selected="false" data-i18n="contacts.tab_groups">Groups</button>
+                        </div>
+                        <input id="incomingApiTargetSearch" data-i18n-ph="contacts.search_ph" placeholder="Search...">
+                        <span class="pill" id="incomingApiSelectedCount">0 / 20</span>
+                      </div>
+                      <div class="incoming-api-target-list" id="incomingApiTargetList"></div>
+                    </div>
+
+                    <div class="incoming-api-wizard-page hidden" data-incoming-api-page="3">
+                      <div class="incoming-api-form-grid">
+                        <label class="wide incoming-api-switch-card" for="incomingApiEncrypt">
+                          <span class="incoming-api-switch-copy">
+                            <strong data-i18n="incoming_api.encrypt">Send with LINE end-to-end encryption</strong>
+                            <span class="muted" data-i18n="incoming_api.encrypt_hint">Applies to text sent through this API link.</span>
+                          </span>
+                          <span class="incoming-api-switch-control">
+                            <input id="incomingApiEncrypt" type="checkbox">
+                            <span class="incoming-api-switch-track" aria-hidden="true"></span>
+                            <span class="incoming-api-switch-state" id="incomingApiEncryptState" aria-live="polite">Off</span>
+                          </span>
+                        </label>
+                        <div class="wide incoming-api-request-examples">
+                          <strong data-i18n="incoming_api.request_format">Request formats</strong>
+                          <div class="incoming-api-request-example">
+                            <strong data-i18n="incoming_api.request_get">GET — send text</strong>
+                            <code class="incoming-api-code">GET {API_URL}?text=Hello%20from%20your%20system</code>
+                          </div>
+                          <div class="incoming-api-request-example">
+                            <strong data-i18n="incoming_api.request_post_text">POST — send text</strong>
+                            <code class="incoming-api-code">POST application/json<br>{ "text": "Your message" }</code>
+                          </div>
+                          <div class="incoming-api-request-example">
+                            <strong data-i18n="incoming_api.request_post_image">POST — send an image, with optional text</strong>
+                            <code class="incoming-api-code">POST application/json<br>{ "text": "Optional caption", "imageUrl": "https://example.com/photo.jpg" }<br><br>or<br><br>{ "imageBase64": "data:image/png;base64,...", "filename": "photo.png" }</code>
+                          </div>
+                          <p class="muted" data-i18n="incoming_api.request_hint">GET sends text. POST sends text, an image, or both to every selected target.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="incoming-api-wizard-page hidden" data-incoming-api-page="4">
+                      <div id="incomingApiReview" class="incoming-api-review"></div>
+                      <div id="incomingApiResult" class="incoming-api-result hidden">
+                        <div class="pill ok" data-i18n="incoming_api.created">API link created</div>
+                        <div>
+                          <strong>Endpoint URL</strong>
+                          <div class="incoming-api-endpoint" style="margin-top:7px">
+                            <code id="incomingApiResultUrl"></code>
+                            <button id="incomingApiCopyResultUrl" type="button" data-i18n="incoming_api.copy_url">Copy URL</button>
+                          </div>
+                        </div>
+                        <div>
+                          <strong>cURL</strong>
+                          <code class="incoming-api-code" id="incomingApiResultCurl"></code>
+                          <button id="incomingApiCopyResultCurl" type="button" style="margin-top:8px" data-i18n="incoming_api.copy_curl">Copy cURL</button>
+                        </div>
+                        <p class="muted" data-i18n="incoming_api.secret_hint">Keep this URL private. Anyone with the URL can send messages to the configured targets.</p>
+                      </div>
+                    </div>
+
+                    <div class="incoming-api-wizard-actions">
+                      <button id="incomingApiWizardBackButton" type="button" disabled data-i18n="common.back">Back</button>
+                      <div class="row compact">
+                        <button id="incomingApiWizardNextButton" class="primary" type="button" data-i18n="common.next">Next</button>
+                        <button id="incomingApiWizardCreateButton" class="primary hidden" type="button" data-requires-account data-requires-permission="manage_api" data-i18n="incoming_api.create_action">Create link</button>
+                        <button id="incomingApiWizardDoneButton" class="primary hidden" type="button" data-i18n="incoming_api.done">View links</button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
             </div>
           </div>
 
@@ -2938,6 +3709,7 @@ INDEX_HTML = r"""<!doctype html>
             <button type="button" id="botNavPatterns" data-bot-page-target="patterns" role="tab" aria-selected="false" data-requires-account data-requires-permission="schedule" data-i18n="bot.nav_patterns">Patterns</button>
             <button type="button" id="botNavLogs" data-bot-page-target="logs" role="tab" aria-selected="false" data-requires-account data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
             <button type="button" id="botNavAiSettings" data-bot-page-target="ai-settings" role="tab" aria-selected="false" data-requires-permission="manage_accounts" data-i18n="bot.nav_ai_settings">AI Settings</button>
+            <button type="button" id="botNavGuide" data-bot-page-target="guide" role="tab" aria-selected="false" data-i18n="bot.nav_guide">Usage guide</button>
           </div>
           <div id="botScheduler" class="bot-page" data-bot-page="schedules">
           <section class="section scheduler-list-panel">
@@ -3235,6 +4007,76 @@ INDEX_HTML = r"""<!doctype html>
               </div>
             </section>
           </div>
+          <div id="botGuide" class="bot-page hidden" data-bot-page="guide" role="tabpanel" aria-labelledby="botNavGuide">
+            <section class="section">
+              <div class="section-head">
+                <div class="usage-guide-intro">
+                  <h2 data-i18n="bot.guide_title">เริ่มใช้งานบอท</h2>
+                  <span class="muted" data-i18n="bot.guide_subtitle">เลือกบัญชี LINE แล้วสร้างงานส่งข้อความอัตโนมัติตาม 5 ขั้นตอน</span>
+                </div>
+              </div>
+              <div class="section-body">
+                <ol class="usage-guide-steps">
+                  <li class="usage-guide-step">
+                    <span class="usage-guide-number" aria-hidden="true">1</span>
+                    <div><strong data-i18n="bot.guide_step_1_title">เลือกบัญชี LINE</strong><p data-i18n="bot.guide_step_1_body">เลือกบัญชีจากเมนูด้านบนก่อน งาน แพทเทิร์น และ Log ทั้งหมดจะใช้งานเฉพาะบัญชีที่เลือก</p></div>
+                  </li>
+                  <li class="usage-guide-step">
+                    <span class="usage-guide-number" aria-hidden="true">2</span>
+                    <div><strong data-i18n="bot.guide_step_2_title">เตรียมแพทเทิร์นเมื่อจำเป็น</strong><p data-i18n="bot.guide_step_2_body">สร้างหมวดหมู่และข้อความที่ใช้ซ้ำได้ หากเลือกตั้งแต่ 2 แพทเทิร์นขึ้นไป ระบบจะสุ่มใหม่ทุกครั้งที่ส่ง</p></div>
+                  </li>
+                  <li class="usage-guide-step">
+                    <span class="usage-guide-number" aria-hidden="true">3</span>
+                    <div><strong data-i18n="bot.guide_step_3_title">เลือกปลายทางและเนื้อหา</strong><p data-i18n="bot.guide_step_3_body">ตั้งชื่องาน เลือกรายชื่อหรือกลุ่ม แล้วเลือกส่งข้อความ รูปภาพ รูปจาก AI หรือข้อมูลที่ดึงจาก API</p></div>
+                  </li>
+                  <li class="usage-guide-step">
+                    <span class="usage-guide-number" aria-hidden="true">4</span>
+                    <div><strong data-i18n="bot.guide_step_4_title">กำหนดเวลาและขอบเขต</strong><p data-i18n="bot.guide_step_4_body">เลือกส่งครั้งเดียวหรือส่งซ้ำ ระบุช่วงวันที่ ช่วงเวลารายวัน ระยะห่างเป็นนาที และจำนวนครั้งสูงสุดได้</p></div>
+                  </li>
+                  <li class="usage-guide-step">
+                    <span class="usage-guide-number" aria-hidden="true">5</span>
+                    <div><strong data-i18n="bot.guide_step_5_title">ทดสอบแล้วติดตามผล</strong><p data-i18n="bot.guide_step_5_body">ใช้ “ส่งเดี๋ยวนี้” ทดสอบก่อนเปิดงานซ้ำ จากนั้นตรวจสถานะและรายละเอียดทุก action ในหน้า Log</p></div>
+                  </li>
+                </ol>
+                <div class="usage-guide-actions">
+                  <button class="primary" id="botGuideScheduleButton" type="button" data-requires-account data-requires-permission="schedule" data-i18n="bot.guide_open_schedule">สร้างตารางส่ง</button>
+                  <button id="botGuidePatternsButton" type="button" data-requires-account data-requires-permission="schedule" data-i18n="bot.guide_open_patterns">จัดการแพทเทิร์น</button>
+                  <button id="botGuideLogsButton" type="button" data-requires-account data-requires-permission="read" data-i18n="bot.guide_open_logs">เปิด Log</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-head"><div><h2 data-i18n="bot.guide_content_title">เนื้อหาที่บอทส่งได้</h2><span class="muted" data-i18n="bot.guide_content_hint">เลือกแหล่งเนื้อหาให้เหมาะกับงานแต่ละแบบ</span></div></div>
+              <div class="section-body usage-guide-notes">
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_text_title">ข้อความและแพทเทิร์น</strong><span class="muted" data-i18n="bot.guide_text_body">พิมพ์ข้อความโดยตรงหรือใช้แพทเทิร์น พร้อมตัวแปรสุ่ม {1D}, {2D}, {3D}, {date}, {time} และ {rand:1-100}</span></div>
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_image_title">รูปภาพ</strong><span class="muted" data-i18n="bot.guide_image_body">อัปโหลดไฟล์จากเครื่องหรือระบุ URL รูปภาพที่ระบบเข้าถึงได้</span></div>
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_ai_title">รูปภาพจาก AI</strong><span class="muted" data-i18n="bot.guide_ai_body">ตั้งค่า Provider, Model และ API Key ก่อนใช้งาน Prompt แบบเต็มจะถูกส่งไปยังผู้ให้บริการและบันทึกใน Log</span></div>
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_api_title">ข้อความหรือรูปจาก API</strong><span class="muted" data-i18n="bot.guide_api_body">รองรับ GET และ POST JSON บอทจะเรียก API ใหม่ในแต่ละรอบแล้วนำข้อความหรือรูปที่ได้รับไปส่ง</span></div>
+                <div class="usage-guide-actions">
+                  <button id="botGuideAiButton" type="button" data-requires-permission="manage_accounts" data-i18n="bot.guide_open_ai">ตั้งค่า AI สร้างรูป</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-head"><div><h2 data-i18n="bot.guide_repeat_title">ตัวอย่างงานส่งซ้ำ</h2><span class="muted" data-i18n="bot.guide_repeat_hint">ระบบจะส่งเฉพาะวันที่และช่วงเวลาที่กำหนด</span></div></div>
+              <div class="section-body"><pre class="usage-guide-example"><code data-i18n="bot.guide_repeat_example">โหมด: ส่งซ้ำ
+ช่วงวันที่: 01/08/2026 - 31/08/2026
+ช่วงเวลารายวัน: 09:00 - 18:00
+เว้นระยะ: 30 นาที
+จำนวนสูงสุด: 20 ครั้ง</code></pre></div>
+            </section>
+
+            <section class="section">
+              <div class="section-head"><h2 data-i18n="bot.guide_notes_title">ข้อควรรู้ก่อนเปิดใช้งาน</h2></div>
+              <div class="section-body usage-guide-notes">
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_account_title">แยกตามบัญชี LINE</strong><span class="muted" data-i18n="bot.guide_account_body">การเลือกบัญชีใหม่จะเปลี่ยนชุดงาน แพทเทิร์น และ Log โดยไม่ไปรบกวนบัญชีอื่น</span></div>
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_test_title">ทดสอบก่อนส่งซ้ำ</strong><span class="muted" data-i18n="bot.guide_test_body">ตรวจปลายทาง ข้อความ รูปภาพ และการเข้ารหัสด้วย “ส่งเดี๋ยวนี้” ก่อนตั้งช่วงเวลายาว</span></div>
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_error_title">เมื่อเกิดข้อผิดพลาด</strong><span class="muted" data-i18n="bot.guide_error_body">หยุดงาน ตรวจรายละเอียดใน Log แล้วใช้ “เคลียร์งานค้าง” เฉพาะกรณีสถานะค้างหรือเกิด error</span></div>
+              </div>
+            </section>
+          </div>
             </div>
           </div>
           </div>
@@ -3398,14 +4240,14 @@ INDEX_HTML = r"""<!doctype html>
       "tabs.assistant": {th: "AI Chat Bot", en: "AI Chat Bot"},
       "bot.nav_ai_settings": {th: "ตั้งค่า AI", en: "AI Settings"},
       "assistant.title": {th: "ถาม LinePassport AI", en: "Ask LinePassport AI"},
-      "assistant.subtitle": {th: "คำตอบอ้างอิงจาก Knowledge ที่ผู้ดูแลระบบกำหนด", en: "Answers use the shared knowledge managed by your administrator."},
+      "assistant.subtitle": {th: "คำตอบอ้างอิงจาก Knowledge ส่วนกลางและ Knowledge / RAG ของคุณ", en: "Answers use global knowledge and your private Knowledge / RAG."},
       "assistant.checking": {th: "กำลังตรวจสอบ", en: "Checking"},
       "assistant.loading": {th: "กำลังโหลดคำถาม...", en: "Loading questions..."},
       "assistant.question_label": {th: "คำถาม", en: "Question"},
       "assistant.question_ph": {th: "ถามจากข้อมูล Knowledge ที่มีอยู่", en: "Ask about the available knowledge"},
       "assistant.ask": {th: "ถาม AI", en: "Ask AI"},
       "assistant.unanswered_title": {th: "คำถามที่ AI ตอบไม่ได้", en: "Questions AI could not answer"},
-      "assistant.unanswered_hint": {th: "คำตอบที่อนุมัติจะถูกเพิ่มเข้า Knowledge ส่วนกลาง", en: "Approved answers become part of shared knowledge."},
+      "assistant.unanswered_hint": {th: "คำตอบที่อนุมัติจะถูกเพิ่มเข้า Knowledge ของเจ้าของคำถาม", en: "Approved answers are added to the question owner's knowledge."},
       "assistant.empty": {th: "ยังไม่มีคำถาม", en: "No questions yet."},
       "assistant.pending": {th: "AI ตอบไม่ได้ และส่งให้ผู้ดูแลตรวจสอบแล้ว", en: "AI could not answer; sent for review."},
       "assistant.no_unanswered": {th: "ไม่มีคำถามค้างตอบ", en: "No unanswered questions."},
@@ -3418,6 +4260,29 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.asking": {th: "กำลังถาม Ollama...", en: "Asking Ollama..."},
       "assistant.nav_chat": {th: "แชท", en: "Chat"},
       "assistant.nav_knowledge": {th: "Knowledge / RAG", en: "Knowledge / RAG"},
+      "assistant.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
+      "assistant.guide_title": {th: "เริ่มใช้งาน AI Chat Bot", en: "Get started with AI Chat Bot"},
+      "assistant.guide_subtitle": {th: "เตรียม Knowledge แล้วถาม AI จากข้อมูลของคุณตาม 4 ขั้นตอน", en: "Prepare your knowledge and start asking questions in four steps."},
+      "assistant.guide_step_1_title": {th: "ตรวจสอบว่า AI พร้อมใช้งาน", en: "Check that AI is ready"},
+      "assistant.guide_step_1_body": {th: "สถานะในหน้าแชทต้องเป็น “พร้อมใช้งาน” หากยังไม่ได้ตั้งค่า ให้ God เปิด Ollama และเลือกโมเดลที่หน้า /god", en: "The Chat page must show Ready. If it is not configured, ask God to enable Ollama and select a model at /god."},
+      "assistant.guide_step_2_title": {th: "เพิ่ม Knowledge / RAG ของคุณ", en: "Add your Knowledge / RAG"},
+      "assistant.guide_step_2_body": {th: "ใส่ข้อมูลใน knowledge.md แล้วกด “บันทึกและสร้างดัชนี” ข้อมูลส่วนนี้แยกตามผู้ใช้และไม่แชร์กับสมาชิกคนอื่น", en: "Add information to knowledge.md, then select Save and index. This data is isolated per user and is not shared with other members."},
+      "assistant.guide_step_3_title": {th: "เชื่อม Knowledge API เมื่อต้องการ", en: "Connect a Knowledge API when needed"},
+      "assistant.guide_step_3_body": {th: "เพิ่ม URL แบบ GET ระบุ JSON path และ Bearer token ได้ จากนั้นกด “ดึงข้อมูล” เพื่ออัปเดตและสร้างดัชนี", en: "Add a GET URL with an optional JSON path and Bearer token, then select Sync to update and index the data."},
+      "assistant.guide_step_4_title": {th: "ถามให้ชัดเจนแล้วตรวจแหล่งข้อมูล", en: "Ask clearly and review the sources"},
+      "assistant.guide_step_4_body": {th: "ถามคำถามที่เกี่ยวข้องกับ Knowledge ระบบจะแสดงคำตอบพร้อมแหล่งข้อมูล หากตอบไม่ได้ คำถามจะถูกส่งให้ Admin ตรวจสอบ", en: "Ask a question related to the knowledge. The answer includes its sources; unanswered questions are sent to an admin for review."},
+      "assistant.guide_open_knowledge": {th: "ไปที่ Knowledge / RAG", en: "Open Knowledge / RAG"},
+      "assistant.guide_open_chat": {th: "เริ่มถาม AI", en: "Start asking AI"},
+      "assistant.guide_example_title": {th: "ตัวอย่าง knowledge.md", en: "knowledge.md example"},
+      "assistant.guide_example_hint": {th: "เขียนหัวข้อและข้อมูลให้ตรงไปตรงมา เพื่อให้ค้นหาได้แม่นยำ", en: "Use direct headings and facts so retrieval stays accurate."},
+      "assistant.guide_example": {th: "# ข้อมูลร้าน\n\n- เปิดทุกวัน 09:00-20:00 น.\n- ส่งฟรีเมื่อยอดสั่งซื้อครบ 500 บาท\n- เปลี่ยนสินค้าได้ภายใน 7 วัน พร้อมใบเสร็จ", en: "# Store information\n\n- Open daily from 09:00 to 20:00\n- Free delivery for orders of 500 THB or more\n- Returns accepted within 7 days with a receipt"},
+      "assistant.guide_notes_title": {th: "ข้อควรรู้", en: "Good to know"},
+      "assistant.guide_private_title": {th: "Knowledge เป็นส่วนตัว", en: "Knowledge is private"},
+      "assistant.guide_private_body": {th: "Knowledge และประวัติคำถามของคุณแยกจากผู้ใช้อื่นในระบบ", en: "Your knowledge and question history are isolated from other users."},
+      "assistant.guide_unanswered_title": {th: "เมื่อ AI ตอบไม่ได้", en: "When AI cannot answer"},
+      "assistant.guide_unanswered_body": {th: "Admin สามารถตอบคำถามค้างได้ และคำตอบที่อนุมัติจะถูกเพิ่มกลับเข้า Knowledge ของเจ้าของคำถาม", en: "An admin can resolve the question, and the approved answer is added to the question owner's knowledge."},
+      "assistant.guide_refresh_title": {th: "เมื่อข้อมูลเปลี่ยน", en: "When information changes"},
+      "assistant.guide_refresh_body": {th: "บันทึก knowledge.md ใหม่ หรือกด “ดึงข้อมูล” ที่ Knowledge API เพื่อสร้างดัชนีล่าสุดก่อนถามอีกครั้ง", en: "Save knowledge.md again or sync the Knowledge API to rebuild the latest index before asking again."},
       "assistant.knowledge_title": {th: "Knowledge / RAG ของฉัน", en: "My Knowledge / RAG"},
       "assistant.knowledge_hint": {th: "ข้อมูลนี้เป็นของบัญชีผู้ใช้คุณและไม่แชร์กับสมาชิกคนอื่น", en: "This knowledge belongs to your user account and is not shared with other members."},
       "assistant.knowledge_ph": {th: "# Knowledge\n\nใส่ข้อมูลที่ต้องการให้ AI ใช้ตอบคำถาม", en: "# Knowledge\n\nAdd information for the AI to use when answering."},
@@ -3472,6 +4337,7 @@ INDEX_HTML = r"""<!doctype html>
       "topbar.user_management": {th: "จัดการผู้ใช้", en: "Users"},
       "topbar.logout": {th: "ออกจากระบบ", en: "Log out"},
       "tabs.line": {th: "LINE", en: "LINE"},
+      "tabs.incoming_api": {th: "API", en: "API"},
       "tabs.tools": {th: "เครื่องมือ", en: "Tools"},
       "tabs.bot": {th: "บอท", en: "Bot"},
       "tabs.ai": {th: "AI", en: "AI Settings"},
@@ -3624,6 +4490,8 @@ INDEX_HTML = r"""<!doctype html>
       "profile.e2ee": {th: "การเข้ารหัส", en: "Encryption"},
       "profile.e2ee_ready": {th: "พร้อม", en: "ready"},
       "profile.e2ee_off": {th: "ปิด", en: "off"},
+      "profile.show_details": {th: "แสดงรายละเอียดบัญชี", en: "Show account details"},
+      "profile.hide_details": {th: "ซ่อนรายละเอียดบัญชี", en: "Hide account details"},
       "pills.account": {th: "บัญชี", en: "Account"},
       "pills.select_account": {th: "เลือกบัญชี", en: "Select account"},
       "pills.node": {th: "Node", en: "Node"},
@@ -3691,6 +4559,43 @@ INDEX_HTML = r"""<!doctype html>
       "bot.nav_new": {th: "ตั้งเวลาส่งใหม่", en: "New schedule"},
       "bot.nav_patterns": {th: "แพทเทิร์น", en: "Patterns"},
       "bot.nav_logs": {th: "Log", en: "Logs"},
+      "bot.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
+      "bot.guide_title": {th: "เริ่มใช้งานบอท", en: "Get started with Bot"},
+      "bot.guide_subtitle": {th: "เลือกบัญชี LINE แล้วสร้างงานส่งข้อความอัตโนมัติตาม 5 ขั้นตอน", en: "Select a LINE account and create an automated message job in five steps."},
+      "bot.guide_step_1_title": {th: "เลือกบัญชี LINE", en: "Select a LINE account"},
+      "bot.guide_step_1_body": {th: "เลือกบัญชีจากเมนูด้านบนก่อน งาน แพทเทิร์น และ Log ทั้งหมดจะใช้งานเฉพาะบัญชีที่เลือก", en: "Select an account from the top menu first. Jobs, patterns, and logs apply only to that account."},
+      "bot.guide_step_2_title": {th: "เตรียมแพทเทิร์นเมื่อจำเป็น", en: "Prepare patterns when needed"},
+      "bot.guide_step_2_body": {th: "สร้างหมวดหมู่และข้อความที่ใช้ซ้ำได้ หากเลือกตั้งแต่ 2 แพทเทิร์นขึ้นไป ระบบจะสุ่มใหม่ทุกครั้งที่ส่ง", en: "Create reusable categories and messages. When two or more patterns are selected, a new one is chosen randomly for every send."},
+      "bot.guide_step_3_title": {th: "เลือกปลายทางและเนื้อหา", en: "Choose targets and content"},
+      "bot.guide_step_3_body": {th: "ตั้งชื่องาน เลือกรายชื่อหรือกลุ่ม แล้วเลือกส่งข้อความ รูปภาพ รูปจาก AI หรือข้อมูลที่ดึงจาก API", en: "Name the job, select contacts or groups, then choose text, an image, an AI image, or API content."},
+      "bot.guide_step_4_title": {th: "กำหนดเวลาและขอบเขต", en: "Set the schedule and scope"},
+      "bot.guide_step_4_body": {th: "เลือกส่งครั้งเดียวหรือส่งซ้ำ ระบุช่วงวันที่ ช่วงเวลารายวัน ระยะห่างเป็นนาที และจำนวนครั้งสูงสุดได้", en: "Choose one-time or repeated delivery, with a date range, daily time window, interval, and optional maximum sends."},
+      "bot.guide_step_5_title": {th: "ทดสอบแล้วติดตามผล", en: "Test and monitor"},
+      "bot.guide_step_5_body": {th: "ใช้ “ส่งเดี๋ยวนี้” ทดสอบก่อนเปิดงานซ้ำ จากนั้นตรวจสถานะและรายละเอียดทุก action ในหน้า Log", en: "Use Send now before enabling a repeated job, then review its status and every action in Logs."},
+      "bot.guide_open_schedule": {th: "สร้างตารางส่ง", en: "Create schedule"},
+      "bot.guide_open_patterns": {th: "จัดการแพทเทิร์น", en: "Manage patterns"},
+      "bot.guide_open_logs": {th: "เปิด Log", en: "Open logs"},
+      "bot.guide_content_title": {th: "เนื้อหาที่บอทส่งได้", en: "Content the bot can send"},
+      "bot.guide_content_hint": {th: "เลือกแหล่งเนื้อหาให้เหมาะกับงานแต่ละแบบ", en: "Choose the content source that fits each job."},
+      "bot.guide_text_title": {th: "ข้อความและแพทเทิร์น", en: "Text and patterns"},
+      "bot.guide_text_body": {th: "พิมพ์ข้อความโดยตรงหรือใช้แพทเทิร์น พร้อมตัวแปรสุ่ม {1D}, {2D}, {3D}, {date}, {time} และ {rand:1-100}", en: "Write text directly or use patterns with {1D}, {2D}, {3D}, {date}, {time}, and {rand:1-100} variables."},
+      "bot.guide_image_title": {th: "รูปภาพ", en: "Images"},
+      "bot.guide_image_body": {th: "อัปโหลดไฟล์จากเครื่องหรือระบุ URL รูปภาพที่ระบบเข้าถึงได้", en: "Upload an image from the device or provide an image URL the server can access."},
+      "bot.guide_ai_title": {th: "รูปภาพจาก AI", en: "AI images"},
+      "bot.guide_ai_body": {th: "ตั้งค่า Provider, Model และ API Key ก่อนใช้งาน Prompt แบบเต็มจะถูกส่งไปยังผู้ให้บริการและบันทึกใน Log", en: "Configure the provider, model, and API key first. The full prompt is sent to the provider and recorded in Logs."},
+      "bot.guide_api_title": {th: "ข้อความหรือรูปจาก API", en: "Text or images from an API"},
+      "bot.guide_api_body": {th: "รองรับ GET และ POST JSON บอทจะเรียก API ใหม่ในแต่ละรอบแล้วนำข้อความหรือรูปที่ได้รับไปส่ง", en: "GET and POST JSON are supported. The bot calls the API on each run and sends the returned text or image."},
+      "bot.guide_open_ai": {th: "ตั้งค่า AI สร้างรูป", en: "Configure AI images"},
+      "bot.guide_repeat_title": {th: "ตัวอย่างงานส่งซ้ำ", en: "Repeated job example"},
+      "bot.guide_repeat_hint": {th: "ระบบจะส่งเฉพาะวันที่และช่วงเวลาที่กำหนด", en: "Messages are sent only inside the configured dates and daily window."},
+      "bot.guide_repeat_example": {th: "โหมด: ส่งซ้ำ\nช่วงวันที่: 01/08/2026 - 31/08/2026\nช่วงเวลารายวัน: 09:00 - 18:00\nเว้นระยะ: 30 นาที\nจำนวนสูงสุด: 20 ครั้ง", en: "Mode: Repeat\nDate range: 01/08/2026 - 31/08/2026\nDaily window: 09:00 - 18:00\nInterval: 30 minutes\nMaximum: 20 sends"},
+      "bot.guide_notes_title": {th: "ข้อควรรู้ก่อนเปิดใช้งาน", en: "Before enabling a job"},
+      "bot.guide_account_title": {th: "แยกตามบัญชี LINE", en: "Isolated by LINE account"},
+      "bot.guide_account_body": {th: "การเลือกบัญชีใหม่จะเปลี่ยนชุดงาน แพทเทิร์น และ Log โดยไม่ไปรบกวนบัญชีอื่น", en: "Switching accounts changes the jobs, patterns, and logs without affecting another LINE account."},
+      "bot.guide_test_title": {th: "ทดสอบก่อนส่งซ้ำ", en: "Test before repeating"},
+      "bot.guide_test_body": {th: "ตรวจปลายทาง ข้อความ รูปภาพ และการเข้ารหัสด้วย “ส่งเดี๋ยวนี้” ก่อนตั้งช่วงเวลายาว", en: "Verify targets, text, images, and encryption with Send now before scheduling a long period."},
+      "bot.guide_error_title": {th: "เมื่อเกิดข้อผิดพลาด", en: "When an error occurs"},
+      "bot.guide_error_body": {th: "หยุดงาน ตรวจรายละเอียดใน Log แล้วใช้ “เคลียร์งานค้าง” เฉพาะกรณีสถานะค้างหรือเกิด error", en: "Pause the job, review Logs, and use Clear stuck jobs only when a job remains stuck or errors."},
       "scheduler.jobs": {th: "{n} งาน", en: "{n} jobs"},
       "scheduler.new": {th: "+ ตั้งเวลาส่งใหม่", en: "+ New scheduled message"},
       "scheduler.name_ph": {th: "ชื่องาน", en: "Job name"},
@@ -3785,6 +4690,93 @@ INDEX_HTML = r"""<!doctype html>
       "tools.args_ph": {th: "อาร์กิวเมนต์แบบ JSON array", en: "JSON args array"},
       "tools.call": {th: "เรียก Endpoint", en: "Call Endpoint"},
       "common.confirm": {th: "ยืนยัน", en: "Confirm"},
+      "common.back": {th: "กลับ", en: "Back"},
+      "common.next": {th: "ถัดไป", en: "Next"},
+      "common.refresh": {th: "รีเฟรช", en: "Refresh"},
+      "incoming_api.title": {th: "Incoming API", en: "Incoming API"},
+      "incoming_api.subtitle": {th: "สร้างลิงก์ที่ปลอดภัยให้ระบบภายนอกส่งข้อความเข้า LINE", en: "Create secure links for external systems to send LINE messages."},
+      "incoming_api.guide": {th: "วิธีใช้", en: "Usage guide"},
+      "incoming_api.guide_title": {th: "วิธีใช้ Incoming API", en: "Incoming API usage guide"},
+      "incoming_api.guide_subtitle": {th: "เลือกลิงก์เพื่อรับตัวอย่างคำขอที่นำไปใช้ได้ทันที", en: "Choose a link to get ready-to-use request examples."},
+      "incoming_api.guide_choose_link": {th: "ลิงก์ API ที่ใช้ในตัวอย่าง", en: "API link used in the examples"},
+      "incoming_api.guide_example_link": {th: "ตัวอย่าง — ยังไม่ได้เลือกลิงก์", en: "Example — no link selected"},
+      "incoming_api.guide_start_title": {th: "ก่อนเรียก API", en: "Before calling the API"},
+      "incoming_api.guide_start_1": {th: "สร้างลิงก์ เลือกบัญชี LINE และเลือกรายชื่อหรือกลุ่มอย่างน้อยหนึ่งปลายทาง", en: "Create a link, choose the LINE account and one or more contacts or groups."},
+      "incoming_api.guide_start_2": {th: "เปิดสถานะลิงก์ไว้ และเปิดการเข้ารหัส LINE เมื่อต้องการส่งข้อความแบบเข้ารหัส", en: "Keep the link status on. Turn on LINE encryption when encrypted text is required."},
+      "incoming_api.guide_start_3": {th: "ส่งคำขอ GET หรือ POST ไปยัง Endpoint URL ที่สร้าง ระบบไม่ต้องใช้ cookie เข้าสู่ระบบหรือ header เพิ่มเติม", en: "Send a GET or POST request to the generated Endpoint URL. No login cookie or extra header is required."},
+      "incoming_api.guide_secret": {th: "เก็บ Endpoint URL เหมือนรหัสผ่าน ผู้ที่มี URL สามารถส่งข้อความไปยังปลายทางที่ตั้งค่าไว้ได้", en: "Treat the Endpoint URL like a password. Anyone who has it can send to the configured targets."},
+      "incoming_api.guide_get_hint": {th: "ส่งข้อความผ่าน query parameter ชื่อ text หรือ message และควรทำ URL encoding", en: "Use query parameter text or message. URL encoding is recommended."},
+      "incoming_api.guide_post_text_hint": {th: "ส่ง JSON โดยใช้ฟิลด์ text หรือ message", en: "Send JSON with text or message."},
+      "incoming_api.guide_image_url_title": {th: "POST — ส่งรูปจาก URL", en: "POST — send an image from a URL"},
+      "incoming_api.guide_image_url_hint": {th: "ใช้ HTTPS URL ที่เปิดรูปได้โดยตรง ฟิลด์ text เป็นคำบรรยายที่เลือกส่งก่อนรูปได้", en: "Use a direct HTTPS image URL. text is an optional caption sent before the image."},
+      "incoming_api.guide_image_base64_title": {th: "POST — ส่งรูป Base64", en: "POST — send a Base64 image"},
+      "incoming_api.guide_image_base64_hint": {th: "ฟิลด์ imageBase64 รับ Base64 โดยตรงหรือ data URL และใส่ filename เพิ่มได้", en: "Use imageBase64 as raw Base64 or a data URL. filename is optional."},
+      "incoming_api.guide_response_title": {th: "ผลตอบกลับและข้อจำกัด", en: "Responses and limits"},
+      "incoming_api.guide_response_200": {th: "ส่งสำเร็จครบทุกปลายทาง", en: "All selected targets were sent successfully."},
+      "incoming_api.guide_response_207": {th: "สำเร็จบางปลายทางและผิดพลาดบางปลายทาง ตรวจสอบผลแต่ละรายการใน JSON response", en: "Some targets succeeded and some failed. Check results in the JSON response."},
+      "incoming_api.guide_response_400": {th: "คำขอไม่ถูกต้อง หรือไม่มีข้อความและรูปภาพ", en: "The request is invalid or has no text or image."},
+      "incoming_api.guide_response_404": {th: "URL ไม่ถูกต้อง ถูกสร้างใหม่ ถูกลบ หรือปิดใช้งาน", en: "The URL is invalid, rotated, deleted, or disabled."},
+      "incoming_api.guide_response_429": {th: "เรียกเกินขีดจำกัด 60 ครั้งต่อนาที", en: "The rate limit of 60 requests per minute was exceeded."},
+      "incoming_api.guide_response_502": {th: "ส่งไม่สำเร็จทุกปลายทาง", en: "Sending failed for every target."},
+      "incoming_api.guide_limits": {th: "ข้อความยาวได้สูงสุด 20,000 ตัวอักษร รูปมีขนาดได้สูงสุด 30 MB โดย GET รองรับเฉพาะข้อความ ส่วนรูปต้องใช้ POST", en: "Maximum text length is 20,000 characters and maximum image size is 30 MB. GET supports text only; images require POST."},
+      "incoming_api.create": {th: "+ สร้างลิงก์ API", en: "+ Create API link"},
+      "incoming_api.wizard_title": {th: "สร้างลิงก์ API", en: "Create API link"},
+      "incoming_api.wizard_subtitle": {th: "ลิงก์จะใช้งานได้เฉพาะบัญชี LINE และปลายทางที่กำหนด", en: "The link is limited to the selected LINE account and targets."},
+      "incoming_api.step_1": {th: "ขั้นตอน 1", en: "Step 1"},
+      "incoming_api.step_2": {th: "ขั้นตอน 2", en: "Step 2"},
+      "incoming_api.step_3": {th: "ขั้นตอน 3", en: "Step 3"},
+      "incoming_api.step_4": {th: "ขั้นตอน 4", en: "Step 4"},
+      "incoming_api.step_details": {th: "รายละเอียด", en: "Details"},
+      "incoming_api.step_targets": {th: "ปลายทาง", en: "Targets"},
+      "incoming_api.step_request": {th: "รูปแบบคำขอ", en: "Request"},
+      "incoming_api.step_review": {th: "ตรวจสอบ", en: "Review"},
+      "incoming_api.name": {th: "ชื่อลิงก์", en: "Link name"},
+      "incoming_api.name_ph": {th: "เช่น แจ้งเตือนคำสั่งซื้อจากเว็บไซต์", en: "e.g. Website order notification"},
+      "incoming_api.line_account": {th: "บัญชี LINE", en: "LINE account"},
+      "incoming_api.status": {th: "สถานะ", en: "Status"},
+      "incoming_api.active": {th: "เปิดใช้งาน", en: "Active"},
+      "incoming_api.inactive": {th: "ปิดใช้งาน", en: "Inactive"},
+      "incoming_api.encrypt": {th: "ส่งด้วยการเข้ารหัสจากต้นทางถึงปลายทางของ LINE", en: "Send with LINE end-to-end encryption"},
+      "incoming_api.encrypt_hint": {th: "ใช้กับข้อความที่ส่งผ่านลิงก์ API นี้", en: "Applies to text sent through this API link."},
+      "incoming_api.request_format": {th: "รูปแบบการเรียก API", en: "Request formats"},
+      "incoming_api.request_get": {th: "GET — ส่งข้อความ", en: "GET — send text"},
+      "incoming_api.request_post_text": {th: "POST — ส่งข้อความ", en: "POST — send text"},
+      "incoming_api.request_post_image": {th: "POST — ส่งรูป พร้อมข้อความได้", en: "POST — send an image, with optional text"},
+      "incoming_api.request_hint": {th: "GET ใช้ส่งข้อความ ส่วน POST ส่งข้อความ รูปภาพ หรือส่งพร้อมกันไปยังทุกปลายทางที่เลือกได้", en: "GET sends text. POST sends text, an image, or both to every selected target."},
+      "incoming_api.create_action": {th: "สร้างลิงก์", en: "Create link"},
+      "incoming_api.done": {th: "ดูรายการลิงก์", en: "View links"},
+      "incoming_api.created": {th: "สร้างลิงก์ API แล้ว", en: "API link created"},
+      "incoming_api.copy_url": {th: "คัดลอก URL", en: "Copy URL"},
+      "incoming_api.copy_curl": {th: "คัดลอก cURL", en: "Copy cURL"},
+      "incoming_api.secret_hint": {th: "เก็บ URL นี้เป็นความลับ ผู้ที่มี URL สามารถส่งข้อความไปยังปลายทางที่กำหนดได้", en: "Keep this URL private. Anyone with the URL can send messages to the configured targets."},
+      "incoming_api.empty": {th: "ยังไม่มีลิงก์ API สำหรับบัญชี LINE นี้", en: "No API links for this LINE account yet."},
+      "incoming_api.loading": {th: "กำลังโหลดลิงก์ API...", en: "Loading API links..."},
+      "incoming_api.targets_selected": {th: "เลือก {n} ปลายทาง", en: "{n} targets selected"},
+      "incoming_api.requests": {th: "เรียก {n} ครั้ง", en: "{n} requests"},
+      "incoming_api.last_used": {th: "ใช้ล่าสุด {value}", en: "Last used {value}"},
+      "incoming_api.never_used": {th: "ยังไม่เคยเรียก", en: "Never used"},
+      "incoming_api.copy": {th: "คัดลอก", en: "Copy"},
+      "incoming_api.disable": {th: "ปิดใช้", en: "Disable"},
+      "incoming_api.enable": {th: "เปิดใช้", en: "Enable"},
+      "incoming_api.rotate": {th: "สร้าง URL ใหม่", en: "Rotate URL"},
+      "incoming_api.delete": {th: "ลบ", en: "Delete"},
+      "incoming_api.rotate_confirm": {th: "สร้าง URL ใหม่? URL เดิมจะใช้งานไม่ได้ทันที", en: "Create a new URL? The previous URL will stop working immediately."},
+      "incoming_api.delete_confirm": {th: "ลบลิงก์ API นี้?", en: "Delete this API link?"},
+      "incoming_api.copied": {th: "คัดลอกแล้ว", en: "Copied"},
+      "incoming_api.name_required": {th: "กรุณากรอกชื่อลิงก์", en: "Enter a link name."},
+      "incoming_api.target_required": {th: "กรุณาเลือกอย่างน้อย 1 ปลายทาง", en: "Select at least one target."},
+      "incoming_api.target_limit": {th: "เลือกได้สูงสุด 20 ปลายทาง", en: "You can select up to 20 targets."},
+      "incoming_api.review_name": {th: "ชื่อลิงก์", en: "Link name"},
+      "incoming_api.review_account": {th: "บัญชี LINE", en: "LINE account"},
+      "incoming_api.review_targets": {th: "ปลายทาง", en: "Targets"},
+      "incoming_api.review_status": {th: "สถานะ", en: "Status"},
+      "incoming_api.review_encryption": {th: "การเข้ารหัส", en: "Encryption"},
+      "incoming_api.on": {th: "เปิด", en: "On"},
+      "incoming_api.off": {th: "ปิด", en: "Off"},
+      "incoming_api.no_matches": {th: "ไม่พบปลายทาง", en: "No matching targets"},
+      "incoming_api.updated": {th: "อัปเดตลิงก์ API แล้ว", en: "API link updated"},
+      "incoming_api.rotated": {th: "สร้าง URL ใหม่แล้ว", en: "New API URL created"},
+      "incoming_api.deleted": {th: "ลบลิงก์ API แล้ว", en: "API link deleted"},
       "common.cancel": {th: "ยกเลิก", en: "Cancel"},
       "common.add": {th: "เพิ่ม", en: "Add"},
       "common.save": {th: "บันทึก", en: "Save"},
@@ -3805,6 +4797,8 @@ INDEX_HTML = r"""<!doctype html>
       "errors.login_running": {th: "กำลังเพิ่มบัญชีอยู่แล้ว", en: "A QR login is already running."},
       "errors.bad_request": {th: "ข้อมูลไม่ถูกต้อง โปรดตรวจสอบอีกครั้ง", en: "Please check your input."},
       "errors.upstream_error": {th: "บริการ LINE ขัดข้องชั่วคราว ลองใหม่อีกครั้ง", en: "LINE service error. Please try again."},
+      "errors.api_rate_limited": {th: "ส่งคำขอถี่เกินไป กรุณารอสักครู่แล้วลองใหม่", en: "Too many requests. Please wait a moment and try again."},
+      "errors.too_many_requests": {th: "ส่งคำขอถี่เกินไป กรุณารอสักครู่แล้วลองใหม่", en: "Too many requests. Please wait a moment and try again."},
       "errors.ai_quota": {th: "โควต้า Google Gemini หมด — รุ่นฟรีมักสร้างรูปไม่ได้ (โควต้า = 0) ต้องเปิดการเรียกเก็บเงิน (billing) บนคีย์ Google หรือรอสักครู่แล้วลองใหม่", en: "Google Gemini quota exceeded — the free tier often can't generate images (quota 0). Enable billing on your Google API key, or try again later."},
       "errors.fal_quota": {th: "เครดิตหรือโควต้า fal.ai ไม่เพียงพอ โปรดตรวจสอบ Billing และยอดคงเหลือของบัญชี fal.ai", en: "fal.ai credit or quota is insufficient. Check billing and the available balance on your fal.ai account."},
       "errors.ai_key_rejected": {th: "API Key ถูกปฏิเสธหรือไม่มีสิทธิ์ใช้งาน — ตรวจสอบคีย์และสิทธิ์การใช้งานของผู้ให้บริการ", en: "The API key was rejected or lacks access — check the key and your provider access."},
@@ -3886,11 +4880,19 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.pattern.create": {th: "เพิ่มแพทเทิร์น", en: "Pattern created"},
       "botlog.action.pattern.delete": {th: "ลบแพทเทิร์น", en: "Pattern deleted"},
       "botlog.action.logs.clear": {th: "ล้าง log", en: "Logs cleared"},
+      "botlog.action.incoming_api.create": {th: "สร้างลิงก์ API", en: "API link created"},
+      "botlog.action.incoming_api.update": {th: "แก้ไขลิงก์ API", en: "API link updated"},
+      "botlog.action.incoming_api.rotate": {th: "สร้าง URL API ใหม่", en: "API URL rotated"},
+      "botlog.action.incoming_api.delete": {th: "ลบลิงก์ API", en: "API link deleted"},
+      "botlog.action.incoming_api.request": {th: "รับคำขอจาก API", en: "Incoming API request"},
+      "botlog.action.incoming_api.send.success": {th: "API ส่งเนื้อหาสำเร็จ", en: "API content sent"},
+      "botlog.action.incoming_api.send.error": {th: "API ส่งเนื้อหาผิดพลาด", en: "API content failed"},
       "toast.bot_logs_cleared": {th: "ล้าง log บอทแล้ว", en: "Bot logs cleared"}
     };
 
     const state = {
       profile: null,
+      profileAvatarKey: "",
       target: "",
       loginTimer: null,
       loginStep: 1,
@@ -3909,6 +4911,11 @@ INDEX_HTML = r"""<!doctype html>
       notificationAudioContext: null,
       playedNotificationSoundKeys: new Set(),
       openConversationMessageKeys: new Map(),
+      messageRenderSignatures: new Map(),
+      messageRequestSeq: 0,
+      messageRequestKey: "",
+      messageLoading: false,
+      renderedConversationKey: "",
       notificationWorker: null,
       notificationWorkerListening: false,
       webAuthConfigured: false,
@@ -3924,6 +4931,13 @@ INDEX_HTML = r"""<!doctype html>
       patternCategoryFilter: "all",
       editingPatternId: null,
       assistantKnowledge: null,
+      incomingApiLinks: [],
+      incomingApiContacts: [],
+      incomingApiGroups: [],
+      incomingApiWizardStep: 1,
+      incomingApiTargetType: "contact",
+      incomingApiSelectedTargets: new Map(),
+      incomingApiCreatedLink: null,
       lang: "th",
       advanced: true,
       tab: "line",
@@ -4002,8 +5016,13 @@ INDEX_HTML = r"""<!doctype html>
       syncNotificationButton();
       $("openPatternCategoriesButton").setAttribute("aria-label", t("patterns.settings"));
       updateMenuToggleLabels();
+      syncProfileDetailsDisclosure();
       renderSchedules();
       renderBotLogs();
+      renderIncomingApiLinks();
+      renderIncomingApiReview();
+      syncIncomingApiStatus();
+      syncIncomingApiEncrypt();
       syncPatternFormMode();
       updateScheduleSummary();
       renderAuthMode();
@@ -4032,10 +5051,11 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     // ---- top-level tabs (LINE / Tools / Bot / AI) ----------------------
-    const TABS = ["line", "assistant", "tools", "bot"];
-    const BOT_PAGES = ["schedules", "schedule", "patterns", "pattern-categories", "logs", "ai-settings"];
+    const TABS = ["line", "assistant", "incoming-api", "tools", "bot"];
+    const BOT_PAGES = ["schedules", "schedule", "patterns", "pattern-categories", "logs", "ai-settings", "guide"];
     function setTab(tab) {
       if (!TABS.includes(tab)) tab = "line";
+      if (tab === "incoming-api" && !hasPermission("manage_api")) tab = "line";
       state.tab = tab;
       localStorage.setItem("okline.tab", tab);
       document.querySelectorAll(".tabbar .tab").forEach((btn) => {
@@ -4054,6 +5074,7 @@ INDEX_HTML = r"""<!doctype html>
       }
       if (tab === "line") refreshConversationsInBackground();
       if (tab === "assistant") loadAssistant().catch(toastError);
+      if (tab === "incoming-api") loadIncomingApiLinks().catch(toastError);
     }
 
     function setBotPage(page) {
@@ -4263,6 +5284,7 @@ INDEX_HTML = r"""<!doctype html>
     function applyPermissions() {
       const canManageAccounts = hasPermission("manage_accounts");
       const canManageUsers = hasPermission("manage_users");
+      const canManageApi = hasPermission("manage_api");
       const showUsers = canManageUsers && (!state.simpleMode || state.advanced);
       $("addAccountButton").disabled = !canManageAccounts;
       $("addAccountButton").classList.toggle("hidden", !canManageAccounts);
@@ -4279,6 +5301,7 @@ INDEX_HTML = r"""<!doctype html>
       $("changePasswordMenuButton").classList.toggle("hidden", state.simpleMode);
       $("passwordTabButton").classList.toggle("hidden", state.simpleMode);
       $("webLogoutButton").classList.toggle("hidden", state.simpleMode);
+      $("tabIncomingApi").classList.toggle("hidden", !canManageApi);
       document.querySelectorAll("[data-requires-permission]").forEach((el) => {
         if (!hasPermission(el.dataset.requiresPermission)) {
           el.disabled = true;
@@ -4346,15 +5369,98 @@ INDEX_HTML = r"""<!doctype html>
       state.notificationAccountId = "";
       state.playedNotificationSoundKeys = new Set();
       state.openConversationMessageKeys = new Map();
+      state.messageRenderSignatures = new Map();
+      state.messageRequestSeq += 1;
+      state.messageRequestKey = "";
+      state.messageLoading = false;
+      state.renderedConversationKey = "";
+      if ($("messagesShell")) $("messagesShell").setAttribute("aria-busy", "false");
+      if ($("messagesLoading")) {
+        $("messagesLoading").classList.add("hidden");
+        $("messagesLoading").setAttribute("aria-hidden", "true");
+      }
+      state.incomingApiLinks = [];
+      state.incomingApiContacts = [];
+      state.incomingApiGroups = [];
+      state.incomingApiSelectedTargets = new Map();
+      state.incomingApiCreatedLink = null;
+      if ($("incomingApiList")) $("incomingApiList").replaceChildren();
       updateUnreadTitle([]);
       state.schedules = [];
       renderSchedules();
     }
 
+    function syncProfileDetailsDisclosure() {
+      const button = $("profileDetailsToggle");
+      if (!button) return;
+      const expanded = button.getAttribute("aria-expanded") === "true";
+      button.setAttribute("title", t(expanded ? "profile.hide_details" : "profile.show_details"));
+    }
+
+    function setProfileDetailsExpanded(expanded) {
+      const button = $("profileDetailsToggle");
+      const panel = $("profileDetailsPanel");
+      if (!button || !panel) return;
+      const on = Boolean(expanded);
+      button.setAttribute("aria-expanded", String(on));
+      panel.classList.toggle("expanded", on);
+      panel.setAttribute("aria-hidden", String(!on));
+      syncProfileDetailsDisclosure();
+    }
+
+    function toggleProfileDetails() {
+      const button = $("profileDetailsToggle");
+      setProfileDetailsExpanded(button && button.getAttribute("aria-expanded") !== "true");
+    }
+
+    function setProfileAvatarFallback(displayName = "") {
+      const avatar = $("profileAvatar");
+      avatar.classList.remove("has-image");
+      avatar.replaceChildren();
+      avatar.textContent = String(displayName || "").trim().charAt(0).toUpperCase() || "?";
+    }
+
+    function clearProfileAvatar(displayName = "") {
+      state.profileAvatarKey = "";
+      setProfileAvatarFallback(displayName);
+    }
+
+    function renderProfileAvatar(profile, displayName) {
+      const picturePath = String((profile || {}).picturePath || "").trim();
+      const accountId = state.activeAccountId || "";
+      if (!picturePath || !accountId) {
+        clearProfileAvatar(displayName);
+        return;
+      }
+      const pictureVersion = String(profile.pictureStatus || "current");
+      const pictureKey = `${accountId}:${pictureVersion}:${picturePath}`;
+      if (state.profileAvatarKey === pictureKey) return;
+      state.profileAvatarKey = pictureKey;
+      setProfileAvatarFallback(displayName);
+
+      const image = document.createElement("img");
+      image.className = "avatar-image";
+      image.alt = "";
+      image.decoding = "async";
+      image.referrerPolicy = "no-referrer";
+      image.addEventListener("load", () => {
+        if (state.profileAvatarKey !== pictureKey) return;
+        const avatar = $("profileAvatar");
+        avatar.replaceChildren(image);
+        avatar.classList.add("has-image");
+      });
+      image.addEventListener("error", () => {
+        if (state.profileAvatarKey === pictureKey) state.profileAvatarKey = "";
+      });
+      image.src = `/api/profile-avatar?${accountQuery(accountId)}&v=${encodeURIComponent(pictureVersion)}`;
+    }
+
     function clearProfile() {
       state.profile = null;
       state.e2eeReady = false;
+      setProfileDetailsExpanded(false);
       $("profileName").textContent = t("profile.no_account");
+      clearProfileAvatar();
       $("profileMid").textContent = "-";
       $("profileUserId").textContent = "-";
       $("profileStatus").textContent = "-";
@@ -4377,7 +5483,9 @@ INDEX_HTML = r"""<!doctype html>
 
       const p = status.profile || {};
       state.profile = p;
-      $("profileName").textContent = p.displayName || accountLabel(state.activeAccountId) || t("profile.selected");
+      const displayName = p.displayName || accountLabel(state.activeAccountId) || t("profile.selected");
+      $("profileName").textContent = displayName;
+      renderProfileAvatar(p, displayName);
       $("profileMid").textContent = p.mid || "-";
       $("profileUserId").textContent = p.userid || "-";
       $("profileStatus").textContent = p.statusMessage || "-";
@@ -5063,6 +6171,12 @@ INDEX_HTML = r"""<!doctype html>
 
       btn.append(avatar, main, side);
       btn.addEventListener("click", () => {
+        const accountId = selectedAccountId();
+        const conversationKey = accountId ? `${accountId}:${mid}` : "";
+        if (state.target === mid
+            && (state.messageLoading || state.renderedConversationKey === conversationKey)) {
+          return;
+        }
         setTarget(mid, title);
         loadMessages().catch(toastError);
       });
@@ -5670,8 +6784,57 @@ INDEX_HTML = r"""<!doctype html>
       return key ? t(key) : t("content.unsupported");
     }
 
-    async function loadMessages(opts) {
-      const silent = !!(opts && opts.silent);
+    function setMessagesLoading(loading) {
+      const on = Boolean(loading);
+      state.messageLoading = on;
+      $("messagesShell").setAttribute("aria-busy", String(on));
+      $("messagesLoading").classList.toggle("hidden", !on);
+      $("messagesLoading").setAttribute("aria-hidden", String(!on));
+    }
+
+    function messageRenderSignature(messages) {
+      return JSON.stringify(messages || []);
+    }
+
+    function renderMessageRows(messages, accountId, {forceBottom = false} = {}) {
+      const list = $("messagesList");
+      const previousTop = list.scrollTop;
+      const previousBottomDistance = Math.max(0, list.scrollHeight - list.clientHeight - list.scrollTop);
+      const stayAtBottom = forceBottom || !list.children.length || previousBottomDistance < 80;
+      const fragment = document.createDocumentFragment();
+      const myMid = state.profile && state.profile.mid;
+      for (const m of messages || []) {
+        const div = document.createElement("div");
+        const isMe = m.from === myMid;
+        const ctype = Number(m.contentType);
+        const hasVisualMedia = [1, 2, 21].includes(ctype) && m.id && m.mediaReady;
+        const isSticker = ctype === 7 && m.stickerId;
+        div.className = "bubble" + (isMe ? " me" : "") + (hasVisualMedia || isSticker ? " has-media" : "");
+        const body = messageBody(m, accountId);
+        if (isMe) {
+          div.append(body);
+        } else {
+          const by = document.createElement("div");
+          by.className = "by";
+          by.textContent = m.fromName || t("chat.unknown");
+          div.append(by, body);
+        }
+        const at = fmtTime(m.createdTime);
+        if (at) {
+          const atEl = document.createElement("div");
+          atEl.className = "at";
+          atEl.textContent = at;
+          div.appendChild(atEl);
+        }
+        fragment.appendChild(div);
+      }
+      if (!fragment.childNodes.length) fragment.appendChild(textSpan(t("chat.empty"), "state-row"));
+      list.replaceChildren(fragment);
+      list.scrollTop = stayAtBottom ? list.scrollHeight : previousTop;
+    }
+
+    async function loadMessages(opts = {}) {
+      const silent = Boolean(opts.silent);
       const accountId = requireAccount();
       if (!accountId) return;
       const target = targetValue();
@@ -5679,48 +6842,38 @@ INDEX_HTML = r"""<!doctype html>
         if (!silent) toast(t("toast.select_target_first"), true);
         return;
       }
-      setTarget(target, $("chatTitle").textContent === t("chat.title") ? "" : $("chatTitle").textContent);
+      const conversationKey = `${accountId}:${target}`;
+      const count = $("messageCount").value;
+      const requestKey = `${conversationKey}:${count}`;
+      if (state.messageLoading && state.messageRequestKey === requestKey) return;
+      const switchingConversation = state.renderedConversationKey !== conversationKey;
+      const requestSeq = ++state.messageRequestSeq;
+      state.messageRequestKey = requestKey;
+      if (!silent) {
+        setTarget(target, $("chatTitle").textContent === t("chat.title") ? "" : $("chatTitle").textContent);
+      }
       const btn = $("loadMessagesButton");
       const label = btn.textContent;
       if (!silent) {
         btn.disabled = true;
         btn.textContent = t("common.working");
-        listLoading("messagesList");
+        setMessagesLoading(true);
+      } else {
+        state.messageLoading = true;
       }
-      const count = $("messageCount").value;
       try {
         const data = await api(`/api/messages?${accountQuery(accountId)}&chat_mid=${encodeURIComponent(target)}&count=${encodeURIComponent(count)}`);
-        const list = $("messagesList");
-        list.replaceChildren();
-        const myMid = state.profile && state.profile.mid;
-        for (const m of data.messages || []) {
-          const div = document.createElement("div");
-          const isMe = m.from === myMid;
-          const ctype = Number(m.contentType);
-          const hasVisualMedia = [1, 2, 21].includes(ctype) && m.id && m.mediaReady;
-          const isSticker = ctype === 7 && m.stickerId;
-          div.className = "bubble" + (isMe ? " me" : "") + (hasVisualMedia || isSticker ? " has-media" : "");
-          const body = messageBody(m, accountId);
-          if (isMe) {
-            div.append(body);
-          } else {
-            const by = document.createElement("div");
-            by.className = "by";
-            by.textContent = m.fromName || t("chat.unknown");
-            div.append(by, body);
-          }
-          const at = fmtTime(m.createdTime);
-          if (at) {
-            const atEl = document.createElement("div");
-            atEl.className = "at";
-            atEl.textContent = at;
-            div.appendChild(atEl);
-          }
-          list.appendChild(div);
-        }
-        if (!list.children.length) listEmpty("messagesList", "chat.empty");
-        list.scrollTop = list.scrollHeight;
+        if (requestSeq !== state.messageRequestSeq
+            || accountId !== selectedAccountId() || target !== state.target) return;
         const messages = data.messages || [];
+        const signature = messageRenderSignature(messages);
+        const previousSignature = state.messageRenderSignatures.get(conversationKey) || "";
+        if (switchingConversation || signature !== previousSignature) {
+          renderMessageRows(messages, accountId, {forceBottom: switchingConversation});
+          state.messageRenderSignatures.set(conversationKey, signature);
+        }
+        state.renderedConversationKey = conversationKey;
+        const myMid = state.profile && state.profile.mid;
         const lastMessage = messages.length ? messages[messages.length - 1] : null;
         const openConversationKey = `${accountId}:${target}`;
         const lastMessageKey = messageNotificationKey(accountId, target, lastMessage);
@@ -5736,10 +6889,18 @@ INDEX_HTML = r"""<!doctype html>
           } catch (err) { /* keep unread state when LINE cannot confirm the read receipt */ }
         }
       } catch (err) {
-        if (!silent) listError("messagesList", () => loadMessages());
-        toastError(err);
-      } finally {
+        if (requestSeq !== state.messageRequestSeq) return;
         if (!silent) {
+          if (switchingConversation) listError("messagesList", () => loadMessages());
+          toastError(err);
+        }
+      } finally {
+        if (requestSeq === state.messageRequestSeq) {
+          state.messageRequestKey = "";
+          if (!silent) setMessagesLoading(false);
+          else state.messageLoading = false;
+        }
+        if (!silent && requestSeq === state.messageRequestSeq) {
           btn.textContent = label;
           btn.disabled = false;
           applyPermissions();
@@ -7464,7 +8625,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function setAssistantView(view) {
-      const selected = view === "knowledge" ? "knowledge" : "chat";
+      const selected = ["chat", "knowledge", "guide"].includes(view) ? view : "chat";
       document.querySelectorAll("[data-assistant-view]").forEach((panel) => {
         panel.classList.toggle("hidden", panel.dataset.assistantView !== selected);
       });
@@ -7609,6 +8770,481 @@ INDEX_HTML = r"""<!doctype html>
       toast(t("assistant.api_deleted"));
     }
 
+    // ---- Incoming API links -------------------------------------------
+    function incomingApiUrl(link) {
+      const path = String((link && link.endpointPath) || "");
+      return path ? `${window.location.origin}${path}` : "";
+    }
+
+    function incomingApiDate(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString(state.lang === "th" ? "th-TH" : "en-US", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    }
+
+    async function copyIncomingApiText(value) {
+      if (!value) return;
+      try {
+        await navigator.clipboard.writeText(value);
+      } catch (_) {
+        const input = document.createElement("textarea");
+        input.value = value;
+        input.setAttribute("readonly", "");
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand("copy");
+        input.remove();
+      }
+      toast(t("incoming_api.copied"));
+    }
+
+    function selectedIncomingApiGuideLink() {
+      const linkId = $("incomingApiGuideLinkSelect")?.value || "";
+      return state.incomingApiLinks.find((link) => link.id === linkId) || null;
+    }
+
+    function updateIncomingApiGuideExamples() {
+      const link = selectedIncomingApiGuideLink();
+      const url = link ? incomingApiUrl(link) : "{API_URL}";
+      const examples = {
+        incomingApiGuideGetCode: `curl -G "${url}" --data-urlencode "text=Hello from your system"`,
+        incomingApiGuidePostTextCode: `curl -X POST "${url}" -H "Content-Type: application/json" -d '{"text":"Hello from your system"}'`,
+        incomingApiGuideImageUrlCode: `curl -X POST "${url}" -H "Content-Type: application/json" -d '{"text":"Optional caption","imageUrl":"https://example.com/photo.jpg"}'`,
+        incomingApiGuideImageBase64Code: `curl -X POST "${url}" -H "Content-Type: application/json" -d '{"imageBase64":"data:image/png;base64,...","filename":"photo.png"}'`
+      };
+      for (const [id, value] of Object.entries(examples)) {
+        const element = $(id);
+        if (element) element.textContent = value;
+      }
+      $("incomingApiGuideCopyUrlButton").disabled = !link;
+    }
+
+    function renderIncomingApiGuideOptions() {
+      const select = $("incomingApiGuideLinkSelect");
+      if (!select) return;
+      const previous = select.value;
+      select.replaceChildren();
+      const example = document.createElement("option");
+      example.value = "";
+      example.textContent = t("incoming_api.guide_example_link");
+      select.appendChild(example);
+      for (const link of state.incomingApiLinks) {
+        const option = document.createElement("option");
+        option.value = link.id;
+        option.textContent = link.name || "API";
+        select.appendChild(option);
+      }
+      select.value = state.incomingApiLinks.some((link) => link.id === previous)
+        ? previous
+        : (state.incomingApiLinks[0]?.id || "");
+      updateIncomingApiGuideExamples();
+    }
+
+    function openIncomingApiGuide() {
+      $("incomingApiListPage").classList.add("hidden");
+      $("incomingApiWizardPage").classList.add("hidden");
+      $("incomingApiGuidePage").classList.remove("hidden");
+      renderIncomingApiGuideOptions();
+      $("incomingApiGuideLinkSelect").focus({preventScroll: true});
+    }
+
+    function closeIncomingApiGuide() {
+      $("incomingApiGuidePage").classList.add("hidden");
+      $("incomingApiListPage").classList.remove("hidden");
+    }
+
+    function incomingApiButton(labelKey, handler, className = "") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = t(labelKey);
+      if (className) button.className = className;
+      button.addEventListener("click", () => handler(button));
+      return button;
+    }
+
+    function replaceIncomingApiLink(link) {
+      const index = state.incomingApiLinks.findIndex((item) => item.id === link.id);
+      if (index >= 0) state.incomingApiLinks[index] = link;
+      else state.incomingApiLinks.unshift(link);
+      renderIncomingApiLinks();
+    }
+
+    function renderIncomingApiLinks() {
+      const root = $("incomingApiList");
+      if (!root) return;
+      root.replaceChildren();
+      const accountId = selectedAccountId();
+      $("incomingApiAccountPill").textContent = accountLabel(accountId) || t("incoming_api.line_account");
+      $("incomingApiCount").textContent = String(state.incomingApiLinks.length);
+      renderIncomingApiGuideOptions();
+      if (!state.incomingApiLinks.length) {
+        root.appendChild(textSpan(t("incoming_api.empty"), "incoming-api-empty"));
+        return;
+      }
+      for (const link of state.incomingApiLinks) {
+        const row = document.createElement("article");
+        row.className = "incoming-api-row";
+
+        const head = document.createElement("div");
+        head.className = "incoming-api-row-head";
+        const identity = document.createElement("div");
+        const title = document.createElement("h3");
+        title.textContent = link.name || "API";
+        const targetNames = (link.targets || []).map((target) => target.name || target.mid).join(", ");
+        const targetSummary = textSpan(
+          `${t("incoming_api.targets_selected", {n: (link.targets || []).length})}${targetNames ? `: ${targetNames}` : ""}`,
+          "muted"
+        );
+        identity.append(title, targetSummary);
+        const status = textSpan(
+          t(link.active ? "incoming_api.active" : "incoming_api.inactive"),
+          `pill ${link.active ? "ok" : "warn"}`
+        );
+        head.append(identity, status);
+
+        const endpoint = document.createElement("div");
+        endpoint.className = "incoming-api-endpoint";
+        const code = document.createElement("code");
+        code.textContent = incomingApiUrl(link);
+        endpoint.append(
+          code,
+          incomingApiButton("incoming_api.copy", () => copyIncomingApiText(incomingApiUrl(link)))
+        );
+
+        const meta = document.createElement("div");
+        meta.className = "incoming-api-meta";
+        meta.append(
+          textSpan(t("incoming_api.requests", {n: link.requestCount || 0}), "muted"),
+          textSpan(
+            link.lastUsedAt
+              ? t("incoming_api.last_used", {value: incomingApiDate(link.lastUsedAt)})
+              : t("incoming_api.never_used"),
+            "muted"
+          ),
+          textSpan(link.encrypt ? t("incoming_api.review_encryption") + ": " + t("incoming_api.on") : "", "muted")
+        );
+
+        const actions = document.createElement("div");
+        actions.className = "incoming-api-actions";
+        actions.append(
+          incomingApiButton(link.active ? "incoming_api.disable" : "incoming_api.enable", (button) => {
+            updateIncomingApiLink(link, {active: !link.active}, button).catch(toastError);
+          }),
+          incomingApiButton("incoming_api.rotate", (button) => {
+            rotateIncomingApiLink(link, button).catch(toastError);
+          }),
+          incomingApiButton("incoming_api.delete", (button) => {
+            deleteIncomingApiLink(link, button).catch(toastError);
+          }, "danger")
+        );
+        row.append(head, endpoint, meta, actions);
+        root.appendChild(row);
+      }
+    }
+
+    async function loadIncomingApiLinks(options = {}) {
+      if (!hasPermission("manage_api")) return;
+      const accountId = requireAccount();
+      if (!accountId) {
+        state.incomingApiLinks = [];
+        renderIncomingApiLinks();
+        return;
+      }
+      const button = $("incomingApiRefreshButton");
+      if (!options.background) {
+        button.disabled = true;
+        $("incomingApiList").replaceChildren(textSpan(t("incoming_api.loading"), "incoming-api-empty"));
+      }
+      try {
+        const data = await api(`/api/incoming-links?${accountQuery(accountId)}`);
+        state.incomingApiLinks = data.links || [];
+        renderIncomingApiLinks();
+      } finally {
+        if (!options.background) {
+          button.disabled = false;
+          applyPermissions();
+        }
+      }
+    }
+
+    async function updateIncomingApiLink(link, changes, button) {
+      button.disabled = true;
+      try {
+        const data = await post("/api/incoming-links/update", {id: link.id, ...changes});
+        replaceIncomingApiLink(data.link);
+        toast(t("incoming_api.updated"));
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function rotateIncomingApiLink(link, button) {
+      if (!confirm(t("incoming_api.rotate_confirm"))) return;
+      button.disabled = true;
+      try {
+        const data = await post("/api/incoming-links/rotate", {id: link.id});
+        replaceIncomingApiLink(data.link);
+        await copyIncomingApiText(incomingApiUrl(data.link));
+        toast(t("incoming_api.rotated"));
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function deleteIncomingApiLink(link, button) {
+      if (!confirm(t("incoming_api.delete_confirm"))) return;
+      button.disabled = true;
+      try {
+        await post("/api/incoming-links/delete", {id: link.id});
+        state.incomingApiLinks = state.incomingApiLinks.filter((item) => item.id !== link.id);
+        renderIncomingApiLinks();
+        toast(t("incoming_api.deleted"));
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function resetIncomingApiWizard() {
+      state.incomingApiWizardStep = 1;
+      state.incomingApiTargetType = "contact";
+      state.incomingApiSelectedTargets = new Map();
+      state.incomingApiCreatedLink = null;
+      $("incomingApiName").value = "";
+      $("incomingApiAccountName").value = accountLabel(selectedAccountId()) || selectedAccountId();
+      setIncomingApiActive(true);
+      $("incomingApiEncrypt").checked = false;
+      syncIncomingApiEncrypt();
+      $("incomingApiTargetSearch").value = "";
+      $("incomingApiResult").classList.add("hidden");
+      $("incomingApiResultUrl").textContent = "";
+      $("incomingApiResultCurl").textContent = "";
+      setIncomingApiTargetType("contact");
+      setIncomingApiWizardStep(1);
+    }
+
+    async function openIncomingApiWizard() {
+      const accountId = requireAccount();
+      if (!accountId) return;
+      resetIncomingApiWizard();
+      $("incomingApiListPage").classList.add("hidden");
+      $("incomingApiGuidePage").classList.add("hidden");
+      $("incomingApiWizardPage").classList.remove("hidden");
+      $("incomingApiName").focus({preventScroll: true});
+      await loadIncomingApiTargets();
+    }
+
+    function closeIncomingApiWizard() {
+      $("incomingApiWizardPage").classList.add("hidden");
+      $("incomingApiListPage").classList.remove("hidden");
+      state.incomingApiCreatedLink = null;
+      loadIncomingApiLinks().catch(toastError);
+    }
+
+    function incomingApiIsActive() {
+      return $("incomingApiStatusOnButton")?.getAttribute("aria-pressed") !== "false";
+    }
+
+    function setIncomingApiActive(active) {
+      const enabled = Boolean(active);
+      const onButton = $("incomingApiStatusOnButton");
+      const offButton = $("incomingApiStatusOffButton");
+      if (!onButton || !offButton) return;
+      onButton.setAttribute("aria-pressed", String(enabled));
+      offButton.setAttribute("aria-pressed", String(!enabled));
+    }
+
+    function syncIncomingApiStatus() {
+      if (!$("incomingApiStatusOnButton")) return;
+      setIncomingApiActive(incomingApiIsActive());
+    }
+
+    function syncIncomingApiEncrypt() {
+      const checkbox = $("incomingApiEncrypt");
+      const output = $("incomingApiEncryptState");
+      if (!checkbox || !output) return;
+      output.textContent = t(checkbox.checked ? "incoming_api.on" : "incoming_api.off");
+    }
+
+    async function loadIncomingApiTargets() {
+      const accountId = requireAccount();
+      if (!accountId) return;
+      const root = $("incomingApiTargetList");
+      root.replaceChildren(textSpan(t("common.loading"), "state-row"));
+      try {
+        const [contacts, groups] = await Promise.all([
+          api(`/api/contacts?${accountQuery(accountId)}&limit=1000&search=`),
+          api(`/api/groups?${accountQuery(accountId)}&limit=500`)
+        ]);
+        state.incomingApiContacts = contacts.contacts || [];
+        state.incomingApiGroups = groups.groups || [];
+        renderIncomingApiTargets();
+      } catch (err) {
+        root.replaceChildren(textSpan(t("common.load_failed"), "state-row error"));
+        throw err;
+      }
+    }
+
+    function setIncomingApiTargetType(type) {
+      state.incomingApiTargetType = type === "group" ? "group" : "contact";
+      const contactsOn = state.incomingApiTargetType === "contact";
+      $("incomingApiContactsTab").classList.toggle("active", contactsOn);
+      $("incomingApiContactsTab").setAttribute("aria-selected", String(contactsOn));
+      $("incomingApiGroupsTab").classList.toggle("active", !contactsOn);
+      $("incomingApiGroupsTab").setAttribute("aria-selected", String(!contactsOn));
+      renderIncomingApiTargets();
+    }
+
+    function incomingApiTargetKey(target) {
+      return `${target.type}:${target.mid}`;
+    }
+
+    function toggleIncomingApiTarget(target, checked) {
+      const key = incomingApiTargetKey(target);
+      if (checked && !state.incomingApiSelectedTargets.has(key)
+          && state.incomingApiSelectedTargets.size >= 20) {
+        toast(t("incoming_api.target_limit"), true);
+        renderIncomingApiTargets();
+        return;
+      }
+      if (checked) state.incomingApiSelectedTargets.set(key, target);
+      else state.incomingApiSelectedTargets.delete(key);
+      renderIncomingApiTargets();
+    }
+
+    function renderIncomingApiTargets() {
+      const root = $("incomingApiTargetList");
+      if (!root) return;
+      root.replaceChildren();
+      const type = state.incomingApiTargetType;
+      const query = $("incomingApiTargetSearch").value.trim().toLocaleLowerCase();
+      const source = type === "group" ? state.incomingApiGroups : state.incomingApiContacts;
+      const rows = source
+        .map((item) => ({
+          type,
+          mid: String(item.mid || ""),
+          name: String(item.name || item.mid || ""),
+          meta: type === "group"
+            ? t("groups.members", {n: item.memberCount || 0})
+            : String(item.statusMessage || item.mid || "")
+        }))
+        .filter((item) => item.mid && (!query
+          || item.name.toLocaleLowerCase().includes(query)
+          || item.mid.toLocaleLowerCase().includes(query)));
+      $("incomingApiSelectedCount").textContent = `${state.incomingApiSelectedTargets.size} / 20`;
+      for (const target of rows) {
+        const label = document.createElement("label");
+        label.className = "incoming-api-target-row";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = state.incomingApiSelectedTargets.has(incomingApiTargetKey(target));
+        checkbox.addEventListener("change", () => toggleIncomingApiTarget(target, checkbox.checked));
+        const identity = document.createElement("span");
+        identity.append(textSpan(target.name, "strong"), textSpan(target.meta, "muted"));
+        label.append(checkbox, identity);
+        root.appendChild(label);
+      }
+      if (!rows.length) root.appendChild(textSpan(t("incoming_api.no_matches"), "state-row"));
+    }
+
+    function validateIncomingApiStep(step) {
+      if (step === 1 && !$("incomingApiName").value.trim()) {
+        toast(t("incoming_api.name_required"), true);
+        $("incomingApiName").focus();
+        return false;
+      }
+      if (step === 2 && !state.incomingApiSelectedTargets.size) {
+        toast(t("incoming_api.target_required"), true);
+        return false;
+      }
+      return true;
+    }
+
+    function setIncomingApiWizardStep(step) {
+      const selected = Math.max(1, Math.min(4, Number(step) || 1));
+      state.incomingApiWizardStep = selected;
+      document.querySelectorAll("[data-incoming-api-page]").forEach((page) => {
+        page.classList.toggle("hidden", Number(page.dataset.incomingApiPage) !== selected);
+      });
+      document.querySelectorAll("[data-incoming-api-step]").forEach((button) => {
+        const value = Number(button.dataset.incomingApiStep);
+        button.classList.toggle("active", value === selected);
+        button.setAttribute("aria-current", value === selected ? "step" : "false");
+      });
+      $("incomingApiWizardBackButton").disabled = selected === 1 || Boolean(state.incomingApiCreatedLink);
+      $("incomingApiWizardNextButton").classList.toggle("hidden", selected === 4);
+      $("incomingApiWizardCreateButton").classList.toggle("hidden", selected !== 4 || Boolean(state.incomingApiCreatedLink));
+      $("incomingApiWizardDoneButton").classList.toggle("hidden", !state.incomingApiCreatedLink);
+      if (selected === 4) renderIncomingApiReview();
+    }
+
+    function moveIncomingApiWizard(direction) {
+      const current = state.incomingApiWizardStep;
+      if (direction > 0 && !validateIncomingApiStep(current)) return;
+      setIncomingApiWizardStep(current + direction);
+    }
+
+    function incomingApiReviewRow(labelKey, value) {
+      const row = document.createElement("div");
+      row.className = "incoming-api-review-row";
+      row.append(textSpan(t(labelKey), "muted"), textSpan(value, "strong"));
+      return row;
+    }
+
+    function renderIncomingApiReview() {
+      const root = $("incomingApiReview");
+      if (!root) return;
+      root.replaceChildren();
+      const targets = [...state.incomingApiSelectedTargets.values()];
+      root.append(
+        incomingApiReviewRow("incoming_api.review_name", $("incomingApiName").value.trim() || "-"),
+        incomingApiReviewRow("incoming_api.review_account", accountLabel(selectedAccountId()) || selectedAccountId() || "-"),
+        incomingApiReviewRow("incoming_api.review_targets", targets.map((item) => item.name).join(", ") || "-"),
+        incomingApiReviewRow("incoming_api.review_status", t(incomingApiIsActive() ? "incoming_api.on" : "incoming_api.off")),
+        incomingApiReviewRow("incoming_api.review_encryption", t($("incomingApiEncrypt").checked ? "incoming_api.on" : "incoming_api.off"))
+      );
+    }
+
+    function incomingApiCurl(url) {
+      return `curl -X POST "${url}" -H "Content-Type: application/json" -d "{\\"text\\":\\"Hello from your system\\"}"`;
+    }
+
+    async function createIncomingApiLink() {
+      if (!validateIncomingApiStep(1) || !validateIncomingApiStep(2)) return;
+      const button = $("incomingApiWizardCreateButton");
+      button.disabled = true;
+      try {
+        const data = await post("/api/incoming-links/create", {
+          accountId: selectedAccountId(),
+          name: $("incomingApiName").value.trim(),
+          targets: [...state.incomingApiSelectedTargets.values()].map((target) => ({
+            type: target.type,
+            mid: target.mid
+          })),
+          active: incomingApiIsActive(),
+          encrypt: $("incomingApiEncrypt").checked
+        });
+        state.incomingApiCreatedLink = data.link;
+        state.incomingApiLinks.unshift(data.link);
+        const url = incomingApiUrl(data.link);
+        $("incomingApiResultUrl").textContent = url;
+        $("incomingApiResultCurl").textContent = incomingApiCurl(url);
+        $("incomingApiResult").classList.remove("hidden");
+        setIncomingApiWizardStep(4);
+        toast(t("incoming_api.created"));
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     // The image-generation settings belong to the Bot workspace. Keep the
     // markup reusable while mounting it alongside the other Bot pages.
     $("botShell").appendChild($("botAiSettings"));
@@ -7631,10 +9267,59 @@ INDEX_HTML = r"""<!doctype html>
     document.querySelectorAll("[data-assistant-view-target]").forEach((button) => {
       button.addEventListener("click", () => setAssistantView(button.dataset.assistantViewTarget));
     });
+    $("assistantGuideKnowledgeButton").addEventListener("click", () => setAssistantView("knowledge"));
+    $("assistantGuideChatButton").addEventListener("click", () => {
+      setAssistantView("chat");
+      $("assistantQuestion").focus();
+    });
     $("assistantKnowledgeSaveButton").addEventListener("click", () => saveAssistantKnowledge().catch(toastError));
     $("assistantKnowledgeReindexButton").addEventListener("click", () => reindexAssistantKnowledge().catch(toastError));
     $("assistantSourceSaveButton").addEventListener("click", () => saveAssistantSource().catch(toastError));
     $("assistantSourceCancelButton").addEventListener("click", clearAssistantSourceForm);
+    $("incomingApiGuideButton").addEventListener("click", openIncomingApiGuide);
+    $("incomingApiGuideCloseButton").addEventListener("click", closeIncomingApiGuide);
+    $("incomingApiGuideLinkSelect").addEventListener("change", updateIncomingApiGuideExamples);
+    $("incomingApiGuideCopyUrlButton").addEventListener("click", () => {
+      const link = selectedIncomingApiGuideLink();
+      if (link) copyIncomingApiText(incomingApiUrl(link)).catch(toastError);
+    });
+    document.querySelectorAll("[data-copy-incoming-api-guide]").forEach((button) => {
+      button.addEventListener("click", () => {
+        copyIncomingApiText($(button.dataset.copyIncomingApiGuide)?.textContent || "").catch(toastError);
+      });
+    });
+    $("incomingApiCreateButton").addEventListener("click", () => openIncomingApiWizard().catch(toastError));
+    $("incomingApiRefreshButton").addEventListener("click", () => loadIncomingApiLinks().catch(toastError));
+    $("incomingApiWizardCloseButton").addEventListener("click", closeIncomingApiWizard);
+    $("incomingApiWizardBackButton").addEventListener("click", () => moveIncomingApiWizard(-1));
+    $("incomingApiWizardNextButton").addEventListener("click", () => moveIncomingApiWizard(1));
+    $("incomingApiWizardCreateButton").addEventListener("click", () => createIncomingApiLink().catch(toastError));
+    $("incomingApiWizardDoneButton").addEventListener("click", closeIncomingApiWizard);
+    $("incomingApiContactsTab").addEventListener("click", () => setIncomingApiTargetType("contact"));
+    $("incomingApiGroupsTab").addEventListener("click", () => setIncomingApiTargetType("group"));
+    $("incomingApiTargetSearch").addEventListener("input", renderIncomingApiTargets);
+    $("incomingApiStatusOnButton").addEventListener("click", () => setIncomingApiActive(true));
+    $("incomingApiStatusOffButton").addEventListener("click", () => setIncomingApiActive(false));
+    $("incomingApiEncrypt").addEventListener("change", syncIncomingApiEncrypt);
+    $("incomingApiCopyResultUrl").addEventListener("click", () => {
+      copyIncomingApiText($("incomingApiResultUrl").textContent).catch(toastError);
+    });
+    $("incomingApiCopyResultCurl").addEventListener("click", () => {
+      copyIncomingApiText($("incomingApiResultCurl").textContent).catch(toastError);
+    });
+    document.querySelectorAll("[data-incoming-api-step]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = Number(button.dataset.incomingApiStep);
+        if (state.incomingApiCreatedLink || target <= state.incomingApiWizardStep) {
+          setIncomingApiWizardStep(target);
+          return;
+        }
+        while (state.incomingApiWizardStep < target) {
+          if (!validateIncomingApiStep(state.incomingApiWizardStep)) return;
+          setIncomingApiWizardStep(state.incomingApiWizardStep + 1);
+        }
+      });
+    });
     $("accountSelect").addEventListener("change", () => selectAccount().catch(toastError));
     $("settingsButton").addEventListener("click", toggleSettingsMenu);
     $("changePasswordMenuButton").addEventListener("click", () => openSettings("password"));
@@ -7672,6 +9357,7 @@ INDEX_HTML = r"""<!doctype html>
     $("loadMessagesButton").addEventListener("click", () => loadMessages().catch(toastError));
     $("reloadMessagesButton").addEventListener("click", () => loadMessages().catch(toastError));
     $("notificationButton").addEventListener("click", () => toggleNotifications().catch(toastError));
+    $("profileDetailsToggle").addEventListener("click", toggleProfileDetails);
     $("imageViewerClose").addEventListener("click", closeImageViewer);
     $("imageViewerOriginal").addEventListener("click", () => {
       const src = $("imageViewer").dataset.src;
@@ -7717,6 +9403,10 @@ INDEX_HTML = r"""<!doctype html>
     });
     $("scheduleFormToggle").addEventListener("click", openScheduleCreatePage);
     $("openBotLogsButton").addEventListener("click", () => setBotPage("logs"));
+    $("botGuideScheduleButton").addEventListener("click", openScheduleCreatePage);
+    $("botGuidePatternsButton").addEventListener("click", () => setBotPage("patterns"));
+    $("botGuideLogsButton").addEventListener("click", () => setBotPage("logs"));
+    $("botGuideAiButton").addEventListener("click", () => setBotPage("ai-settings"));
     $("cancelScheduleFormButton").addEventListener("click", () => {
       state.editingScheduleId = null;
       $("createScheduleButton").textContent = t("scheduler.create");
@@ -7799,7 +9489,7 @@ INDEX_HTML = r"""<!doctype html>
     // Poll the open chat every ~10s while the tab is visible (item 12).
     setInterval(() => {
       if (document.visibilityState !== "visible") return;
-      if (!state.activeAccountId || !state.target || state.sending) return;
+      if (!state.activeAccountId || !state.target || state.sending || state.messageLoading) return;
       if ($("workspace").classList.contains("hidden")) return;
       loadMessages({silent: true}).catch(() => {});
     }, 10000);
@@ -8941,13 +10631,21 @@ def _status_code(status: int) -> str:
 
 
 class WebError(Exception):
-    def __init__(self, status: int, message: str, code: str | None = None) -> None:
+    def __init__(
+        self,
+        status: int,
+        message: str,
+        code: str | None = None,
+        *,
+        headers: list[tuple[str, str]] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
         # A stable, machine-readable code the browser localises independently
         # of the human message.  Falls back to a status-derived default.
         self.code = code or _status_code(status)
+        self.headers = headers
 
 
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
@@ -8966,6 +10664,20 @@ MAX_BOT_LOG_STORAGE_BYTES = 25 * 1024 * 1024
 MAX_SESSION_FILE_BYTES = 5 * 1024 * 1024
 MAX_PATTERNS_PER_USER = 500
 MAX_PATTERN_CATEGORIES_PER_USER = 100
+MAX_AUTHENTICATED_API_REQUESTS_PER_MINUTE = 300
+AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
+    ("GET", "/api/status"): (30, 30.0),
+    ("GET", "/api/contacts"): (12, 10.0),
+    ("GET", "/api/groups"): (12, 10.0),
+    ("GET", "/api/conversations"): (15, 30.0),
+    ("GET", "/api/messages"): (20, 10.0),
+    ("GET", "/api/profile-avatar"): (30, 60.0),
+    ("POST", "/api/messages/read"): (30, 10.0),
+    ("POST", "/api/send"): (20, 10.0),
+    ("POST", "/api/send-media"): (8, 30.0),
+    ("POST", "/api/call"): (20, 10.0),
+    ("POST", "/api/ai/generate"): (8, 60.0),
+}
 MAX_USERS = 1000
 MAX_ACCOUNTS_PER_USER = 20
 MAX_ASSISTANT_QUESTION_LENGTH = 4000
@@ -8974,6 +10686,13 @@ MAX_GLOBAL_KNOWLEDGE_LENGTH = 750_000
 MAX_KNOWLEDGE_API_BYTES = 750_000
 MAX_KNOWLEDGE_API_SOURCES = 50
 MAX_ASSISTANT_QUESTIONS = 5000
+MAX_INCOMING_API_LINKS_PER_USER = 100
+MAX_INCOMING_API_TARGETS = 20
+MAX_INCOMING_API_NAME_LENGTH = 120
+# Base64 expands image payloads by roughly one third. Leave a small allowance
+# for the surrounding JSON while keeping the decoded image cap at 30 MB.
+MAX_INCOMING_API_BODY_BYTES = ((MAX_IMAGE_BYTES + 2) // 3) * 4 + (256 * 1024)
+MAX_INCOMING_API_REQUESTS_PER_MINUTE = 60
 MAX_PROXY_URL_LENGTH = 2048
 MAX_PROXY_HOST_LENGTH = 253
 MAX_PROXY_USERNAME_LENGTH = 255
@@ -9229,7 +10948,9 @@ def _request_public_address(
     for address in addresses:
         session = requests.Session()
         session.trust_env = False
-        session.mount(f"{urlparse(current).scheme}://", _PinnedAddressAdapter(current, address))
+        session.mount(
+            f"{urlparse(current).scheme}://", _PinnedAddressAdapter(current, address)
+        )
         try:
             response = session.request(
                 method,
@@ -9361,6 +11082,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "manage_accounts",
             "manage_users",
             "manage_ai",
+            "manage_api",
             "ask_ai",
             "change_password",
         ],
@@ -9374,6 +11096,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "tools",
             "manage_accounts",
             "manage_ai",
+            "manage_api",
             "ask_ai",
             "change_password",
         ],
@@ -9386,6 +11109,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "schedule",
             "tools",
             "manage_accounts",
+            "manage_api",
             "ask_ai",
             "change_password",
         ],
@@ -9507,6 +11231,7 @@ class FileStateStore(StateStore):
             "ai_settings": str(Path(config.schedules_file).parent / "ai_settings.json"),
             "global_ai": str(Path(config.schedules_file).parent / "global_ai.json"),
             "bot_logs": str(Path(config.schedules_file).parent / "bot_logs.json"),
+            "incoming_api": str(Path(config.schedules_file).parent / "incoming_api.json"),
         }
 
     def get(self, key: str, default: Any) -> Any:
@@ -9609,10 +11334,20 @@ class PostgresStateStore(StateStore):
             "accounts": (config.accounts_file, {"accounts": []}),
             "schedules": (config.schedules_file, {"schedules": []}),
             "auth": (config.auth_file, {}),
-            "patterns": (str(Path(config.schedules_file).parent / "patterns.json"), {"patterns": []}),
+            "patterns": (
+                str(Path(config.schedules_file).parent / "patterns.json"),
+                {"patterns": []},
+            ),
             "ai_settings": (str(Path(config.schedules_file).parent / "ai_settings.json"), {}),
             "global_ai": (str(Path(config.schedules_file).parent / "global_ai.json"), {}),
-            "bot_logs": (str(Path(config.schedules_file).parent / "bot_logs.json"), {"logs": []}),
+            "bot_logs": (
+                str(Path(config.schedules_file).parent / "bot_logs.json"),
+                {"logs": []},
+            ),
+            "incoming_api": (
+                str(Path(config.schedules_file).parent / "incoming_api.json"),
+                {"links": []},
+            ),
         }
         for key, (path, default) in legacy.items():
             if self.get(key, None) is not None or not os.path.exists(path):
@@ -9901,9 +11636,7 @@ class WebAuth:
         }
         return token
 
-    def logout(
-        self, cookie_header: str | None, *, cookie_name: str | None = None
-    ) -> None:
+    def logout(self, cookie_header: str | None, *, cookie_name: str | None = None) -> None:
         token = self._token_from_cookie(cookie_header, cookie_name=cookie_name)
         if token:
             with self.lock:
@@ -10109,7 +11842,9 @@ class WebAuth:
                     HTTPStatus.BAD_REQUEST,
                     "At least one active God or Admin is required.",
                 )
-            if any(item.get("role") == "god" for item in self.data.get("users", [])) and not any(
+            if any(
+                item.get("role") == "god" for item in self.data.get("users", [])
+            ) and not any(
                 item.get("role") == "god" and item.get("active", True)
                 for item in self.data.get("users", [])
             ):
@@ -10161,9 +11896,7 @@ class WebAuth:
                     HTTPStatus.BAD_REQUEST,
                     "At least one active God or Admin is required.",
                 )
-            had_god = any(
-                item.get("role") == "god" for item in self.data.get("users", [])
-            )
+            had_god = any(item.get("role") == "god" for item in self.data.get("users", []))
             has_active_god = any(
                 item.get("role") == "god" and item.get("active", True) for item in users
             )
@@ -10241,9 +11974,7 @@ class WebAuth:
         return morsel.value if morsel else ""
 
     @classmethod
-    def _hash_password(
-        cls, password: str, salt: str, iterations: int | None = None
-    ) -> str:
+    def _hash_password(cls, password: str, salt: str, iterations: int | None = None) -> str:
         digest = hashlib.pbkdf2_hmac(
             "sha256",
             password.encode("utf-8"),
@@ -10329,9 +12060,7 @@ class WebAuth:
         return {
             "id": user.get("id"),
             "username": user.get("username"),
-            "email": user.get("email") or cls._email_or_empty(
-                str(user.get("username") or "")
-            ),
+            "email": user.get("email") or cls._email_or_empty(str(user.get("username") or "")),
             "displayName": user.get("displayName") or user.get("username"),
             "role": user.get("role"),
             "permissions": list(
@@ -10413,8 +12142,7 @@ class WebAuth:
     @staticmethod
     def _has_active_administrator(users: list[dict[str, Any]]) -> bool:
         return any(
-            user.get("role") in {"god", "admin"} and user.get("active", True)
-            for user in users
+            user.get("role") in {"god", "admin"} and user.get("active", True) for user in users
         )
 
     @staticmethod
@@ -10578,6 +12306,16 @@ class AccountStore:
                     account["label"] = profile.get("displayName") or account.get("label")
                     account["mid"] = profile.get("mid") or account.get("mid")
                     account["userid"] = profile.get("userid") or account.get("userid")
+                    if "picturePath" in profile:
+                        if profile.get("picturePath"):
+                            account["picturePath"] = profile.get("picturePath")
+                        else:
+                            account.pop("picturePath", None)
+                    if "pictureStatus" in profile:
+                        if profile.get("pictureStatus"):
+                            account["pictureStatus"] = profile.get("pictureStatus")
+                        else:
+                            account.pop("pictureStatus", None)
                     account["updatedAt"] = _now_iso()
                     self.save()
                     return
@@ -10651,8 +12389,7 @@ class AccountStore:
             owned = sum(
                 1
                 for account in self.data.get("accounts", [])
-                if isinstance(account, dict)
-                and str(account.get("ownerId") or "") == owner_id
+                if isinstance(account, dict) and str(account.get("ownerId") or "") == owner_id
             )
             if owned >= MAX_ACCOUNTS_PER_USER:
                 raise WebError(
@@ -10680,6 +12417,8 @@ class AccountStore:
                 "tokenFile": token_file,
                 "mid": profile.get("mid"),
                 "userid": profile.get("userid"),
+                "picturePath": profile.get("picturePath"),
+                "pictureStatus": profile.get("pictureStatus"),
                 "ownerId": owner_id,
                 "createdAt": _now_iso(),
                 "updatedAt": _now_iso(),
@@ -10760,6 +12499,8 @@ class WebState:
         _ensure_private_directory(config.accounts_dir)
         self.lock = threading.RLock()
         self.api_locks: dict[str, threading.RLock] = {}
+        self.api_rate_lock = threading.RLock()
+        self.api_rate_events: dict[tuple[str, ...], list[float]] = {}
         self.store = _make_state_store(config)
         self.secret_cipher = self._load_secret_cipher()
         self._migrate_stored_secrets()
@@ -10769,12 +12510,67 @@ class WebState:
         self.apis: dict[str, OkLine] = {}
         self.logins: dict[str, dict[str, Any]] = {"": {"state": "idle"}}
         self.schedule_lock = threading.RLock()
+        self.incoming_api_lock = threading.RLock()
+        self.incoming_api_rate: dict[str, list[float]] = {}
         self.schedules: list[dict[str, Any]] = self._load_schedules()
         self.schedule_inflight: set[str] = set()
         self.schedule_executor = ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="linepassport-schedule"
         )
         self.scheduler = ScheduleEngine(self)
+
+    def _consume_api_rate_limit(
+        self,
+        key: tuple[str, ...],
+        *,
+        limit: int,
+        window_seconds: float,
+    ) -> None:
+        now = time.monotonic()
+        cutoff = now - window_seconds
+        with self.api_rate_lock:
+            recent = [stamp for stamp in self.api_rate_events.get(key, []) if stamp > cutoff]
+            if len(recent) >= limit:
+                retry_after = max(1, math.ceil(recent[0] + window_seconds - now))
+                self.api_rate_events[key] = recent
+                raise WebError(
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    "API rate limit exceeded.",
+                    "api_rate_limited",
+                    headers=[("Retry-After", str(retry_after))],
+                )
+            recent.append(now)
+            self.api_rate_events[key] = recent
+            if len(self.api_rate_events) > 4096:
+                stale_before = now - 300.0
+                self.api_rate_events = {
+                    item_key: stamps
+                    for item_key, stamps in self.api_rate_events.items()
+                    if stamps and stamps[-1] > stale_before
+                }
+
+    def enforce_api_rate_limit(
+        self,
+        user: dict[str, Any],
+        method: str,
+        path: str,
+        account_id: str = "",
+    ) -> None:
+        user_id = str(user.get("id") or user.get("username") or "anonymous")
+        self._consume_api_rate_limit(
+            ("user", user_id),
+            limit=MAX_AUTHENTICATED_API_REQUESTS_PER_MINUTE,
+            window_seconds=60.0,
+        )
+        route_limit = AUTHENTICATED_API_RATE_LIMITS.get((method.upper(), path))
+        if route_limit is None:
+            return
+        limit, window_seconds = route_limit
+        self._consume_api_rate_limit(
+            ("route", user_id, account_id or "-", method.upper(), path),
+            limit=limit,
+            window_seconds=window_seconds,
+        )
 
     def setup_token_required(self) -> bool:
         return not _is_loopback_bind(self.config.host)
@@ -10925,7 +12721,9 @@ class WebState:
             self.web_auth.login_failures.pop(rate_key, None)
 
     def _migrate_tenant_data(self) -> None:
-        users = [user for user in self.web_auth.data.get("users", []) if isinstance(user, dict)]
+        users = [
+            user for user in self.web_auth.data.get("users", []) if isinstance(user, dict)
+        ]
         legacy_owner = next(
             (
                 user
@@ -11364,7 +13162,9 @@ class WebState:
                             "account": next(
                                 (
                                     item
-                                    for item in self.account_store.list_accounts({account["id"]})
+                                    for item in self.account_store.list_accounts(
+                                        {account["id"]}
+                                    )
                                     if item.get("id") == account["id"]
                                 ),
                                 {"id": account["id"], "label": account.get("label")},
@@ -11483,7 +13283,13 @@ class WebState:
         }
 
     def _commit_account_removal(self, account_id: str) -> dict[str, Any]:
-        with self.lock, self.web_auth.lock, self.account_store.lock, self.schedule_lock:
+        with (
+            self.lock,
+            self.web_auth.lock,
+            self.account_store.lock,
+            self.schedule_lock,
+            self.incoming_api_lock,
+        ):
             account_data, removed = self.account_store.data_after_remove(account_id)
             auth_data = copy.deepcopy(self.web_auth.data)
             for auth_user in auth_data.get("users", []):
@@ -11501,11 +13307,23 @@ class WebState:
                     schedule["status"] = "account deleted"
                     schedule.pop("runningSince", None)
                     schedule.pop("runToken", None)
+            raw_incoming = self.store.get("incoming_api", {"links": []})
+            incoming_data = (
+                copy.deepcopy(raw_incoming)
+                if isinstance(raw_incoming, dict)
+                else {"links": []}
+            )
+            incoming_data["links"] = [
+                link
+                for link in incoming_data.get("links", [])
+                if not isinstance(link, dict) or link.get("accountId") != account_id
+            ]
             self.store.set_many(
                 {
                     "accounts": account_data,
                     "auth": auth_data,
                     "schedules": {"schedules": schedules},
+                    "incoming_api": incoming_data,
                 }
             )
             self.account_store.data = account_data
@@ -11569,18 +13387,14 @@ class WebState:
 
     def god_users_payload(self) -> dict[str, Any]:
         payload = self.users_payload()
-        payload["users"] = [
-            user for user in payload["users"] if user.get("role") != "god"
-        ]
+        payload["users"] = [user for user in payload["users"] if user.get("role") != "god"]
         payload["roles"] = {
             role: meta for role, meta in payload["roles"].items() if role != "god"
         }
         payload.pop("accounts", None)
         return payload
 
-    def user_detail(
-        self, user_id: str, actor: dict[str, Any] | None
-    ) -> dict[str, Any]:
+    def user_detail(self, user_id: str, actor: dict[str, Any] | None) -> dict[str, Any]:
         if not self.web_auth._is_god(actor):
             raise WebError(HTTPStatus.FORBIDDEN, "Only God can view tenant details.")
         target = self.web_auth._find_user(user_id)
@@ -11813,7 +13627,13 @@ class WebState:
             api_lock.acquire()
         token_files: list[str] = []
         try:
-            with self.lock, self.web_auth.lock, self.account_store.lock, self.schedule_lock:
+            with (
+                self.lock,
+                self.web_auth.lock,
+                self.account_store.lock,
+                self.schedule_lock,
+                self.incoming_api_lock,
+            ):
                 auth_data = self.web_auth.data_after_user_delete(
                     user_id,
                     current_user_id=current_user_id,
@@ -11864,7 +13684,9 @@ class WebState:
                 ]
 
                 raw_ai = self.store.get("ai_settings", {"tenants": {}})
-                ai_root = copy.deepcopy(raw_ai) if isinstance(raw_ai, dict) else {"tenants": {}}
+                ai_root = (
+                    copy.deepcopy(raw_ai) if isinstance(raw_ai, dict) else {"tenants": {}}
+                )
                 tenants = ai_root.get("tenants")
                 if isinstance(tenants, dict):
                     tenants.pop(user_id, None)
@@ -11891,6 +13713,22 @@ class WebState:
                     if not isinstance(log, dict) or log.get("accountId") not in account_ids
                 ]
 
+                raw_incoming = self.store.get("incoming_api", {"links": []})
+                incoming_data = (
+                    copy.deepcopy(raw_incoming)
+                    if isinstance(raw_incoming, dict)
+                    else {"links": []}
+                )
+                incoming_data["links"] = [
+                    link
+                    for link in incoming_data.get("links", [])
+                    if not isinstance(link, dict)
+                    or (
+                        str(link.get("ownerId") or "") != user_id
+                        and link.get("accountId") not in account_ids
+                    )
+                ]
+
                 self.store.set_many(
                     {
                         "auth": auth_data,
@@ -11900,6 +13738,7 @@ class WebState:
                         "ai_settings": ai_root,
                         "global_ai": global_ai,
                         "bot_logs": log_data,
+                        "incoming_api": incoming_data,
                     }
                 )
                 self.web_auth.data = auth_data
@@ -11917,6 +13756,429 @@ class WebState:
             except OSError:
                 traceback.print_exc()
         return {"ok": True, **self.users_payload()}
+
+    # -- incoming API links ----------------------------------------------
+    def _incoming_api_root(self) -> dict[str, Any]:
+        raw = self.store.get("incoming_api", {"links": []})
+        if not isinstance(raw, dict):
+            return {"links": []}
+        links = raw.get("links")
+        return {"links": links if isinstance(links, list) else []}
+
+    def _incoming_api_public_link(self, link: dict[str, Any]) -> dict[str, Any]:
+        token = self._decrypt_secret(str(link.get("tokenSecret") or ""))
+        endpoint_path = f"/api/incoming/{link.get('id')}/{token}" if token else ""
+        return {
+            "id": link.get("id"),
+            "name": link.get("name"),
+            "accountId": link.get("accountId"),
+            "targets": [
+                {
+                    "mid": target.get("mid"),
+                    "name": target.get("name"),
+                    "type": target.get("type"),
+                }
+                for target in link.get("targets", [])
+                if isinstance(target, dict)
+            ],
+            "encrypt": bool(link.get("encrypt")),
+            "active": bool(link.get("active", True)),
+            "endpointPath": endpoint_path,
+            "requestCount": max(0, int(link.get("requestCount") or 0)),
+            "successCount": max(0, int(link.get("successCount") or 0)),
+            "failureCount": max(0, int(link.get("failureCount") or 0)),
+            "lastUsedAt": link.get("lastUsedAt"),
+            "lastStatus": link.get("lastStatus"),
+            "lastError": link.get("lastError"),
+            "createdAt": link.get("createdAt"),
+            "updatedAt": link.get("updatedAt"),
+        }
+
+    def _find_owned_incoming_api_link(
+        self,
+        links: list[Any],
+        link_id: str,
+        user: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        owner_id = str((user or {}).get("id") or "")
+        for link in links:
+            if (
+                isinstance(link, dict)
+                and str(link.get("id") or "") == link_id
+                and str(link.get("ownerId") or "") == owner_id
+            ):
+                account_id = str(link.get("accountId") or "")
+                if not self.web_auth.can_access_account(user, account_id):
+                    break
+                return link
+        raise WebError(HTTPStatus.NOT_FOUND, "API link not found.", "api_link_not_found")
+
+    @staticmethod
+    def _validated_incoming_api_name(value: Any) -> str:
+        name = str(value or "").strip()
+        if not name:
+            raise WebError(HTTPStatus.BAD_REQUEST, "API link name is required.")
+        if len(name) > MAX_INCOMING_API_NAME_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "API link name is too long.")
+        return name
+
+    @staticmethod
+    def _incoming_api_target_catalog(api: OkLine) -> dict[tuple[str, str], str]:
+        catalog: dict[tuple[str, str], str] = {
+            ("contact", mid): str(data.get("name") or mid) for mid, data in _contact_rows(api)
+        }
+        raw_mids = api.get_all_chat_mids() or {}
+        group_mids = list(raw_mids.get("memberChatMids", []) or [])
+        invited = list(raw_mids.get("invitedChatMids", []) or [])
+        group_mids.extend(mid for mid in invited if mid not in group_mids)
+        if group_mids:
+            result = api.get_chats(group_mids) or {}
+            for raw in result.get("chats", []) if isinstance(result, dict) else []:
+                group = Group.from_dict(raw)
+                if group.chat_mid:
+                    catalog[("group", group.chat_mid)] = group.name or group.chat_mid
+        return catalog
+
+    def _validated_incoming_api_targets(
+        self, api: OkLine, raw_targets: Any
+    ) -> list[dict[str, str]]:
+        if not isinstance(raw_targets, list) or not raw_targets:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Select at least one API target.")
+        if len(raw_targets) > MAX_INCOMING_API_TARGETS:
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                f"Select no more than {MAX_INCOMING_API_TARGETS} API targets.",
+            )
+        catalog = self._incoming_api_target_catalog(api)
+        targets: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for raw in raw_targets:
+            if not isinstance(raw, dict):
+                raise WebError(HTTPStatus.BAD_REQUEST, "API target is invalid.")
+            kind = str(raw.get("type") or "contact").strip().lower()
+            mid = str(raw.get("mid") or "").strip()
+            key = (kind, mid)
+            if kind not in {"contact", "group"} or not mid or key not in catalog:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    "One or more API targets are unavailable for this LINE account.",
+                    "invalid_api_target",
+                )
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append({"type": kind, "mid": mid, "name": catalog[key]})
+        if not targets:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Select at least one API target.")
+        return targets
+
+    def list_incoming_api_links(
+        self, account_id: str, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(account_id)
+        if not self.web_auth.can_access_account(user, account_id):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+        owner_id = str((user or {}).get("id") or "")
+        with self.incoming_api_lock:
+            links = [
+                self._incoming_api_public_link(link)
+                for link in self._incoming_api_root()["links"]
+                if isinstance(link, dict)
+                and str(link.get("ownerId") or "") == owner_id
+                and str(link.get("accountId") or "") == account_id
+            ]
+        links.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+        return {"links": links, "count": len(links)}
+
+    def create_incoming_api_link(
+        self,
+        body: dict[str, Any],
+        user: dict[str, Any] | None,
+        api: OkLine,
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(str(body.get("accountId") or ""))
+        if not self.web_auth.can_access_account(user, account_id):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+        owner_id = str((user or {}).get("id") or "")
+        name = self._validated_incoming_api_name(body.get("name"))
+        targets = self._validated_incoming_api_targets(api, body.get("targets"))
+        token = secrets.token_urlsafe(32)
+        now = _now_iso()
+        with self.incoming_api_lock:
+            root = self._incoming_api_root()
+            owner_links = [
+                link
+                for link in root["links"]
+                if isinstance(link, dict) and str(link.get("ownerId") or "") == owner_id
+            ]
+            if len(owner_links) >= MAX_INCOMING_API_LINKS_PER_USER:
+                raise WebError(
+                    HTTPStatus.CONFLICT,
+                    "Incoming API link limit reached.",
+                    "api_link_limit",
+                )
+            link = {
+                "id": uuid.uuid4().hex,
+                "ownerId": owner_id,
+                "accountId": account_id,
+                "name": name,
+                "targets": targets,
+                "encrypt": bool(body.get("encrypt")),
+                "active": bool(body.get("active", True)),
+                "tokenHash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                "tokenSecret": self._encrypt_secret(token),
+                "requestCount": 0,
+                "successCount": 0,
+                "failureCount": 0,
+                "createdAt": now,
+                "updatedAt": now,
+            }
+            root["links"].append(link)
+            self.store.set("incoming_api", root)
+        self.append_bot_log(
+            "incoming_api.create",
+            account_id=account_id,
+            detail=name,
+            data={"linkId": link["id"], "targets": len(targets)},
+        )
+        return {"ok": True, "link": self._incoming_api_public_link(link)}
+
+    def update_incoming_api_link(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        link_id = str(body.get("id") or "").strip()
+        with self.incoming_api_lock:
+            root = self._incoming_api_root()
+            link = self._find_owned_incoming_api_link(root["links"], link_id, user)
+            if "name" in body:
+                link["name"] = self._validated_incoming_api_name(body.get("name"))
+            if "active" in body:
+                link["active"] = bool(body.get("active"))
+            link["updatedAt"] = _now_iso()
+            self.store.set("incoming_api", root)
+            public = self._incoming_api_public_link(link)
+        self.append_bot_log(
+            "incoming_api.update",
+            account_id=str(link.get("accountId") or ""),
+            detail=str(link.get("name") or ""),
+            data={"linkId": link_id, "active": bool(link.get("active"))},
+        )
+        return {"ok": True, "link": public}
+
+    def rotate_incoming_api_link(
+        self, link_id: str, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        token = secrets.token_urlsafe(32)
+        with self.incoming_api_lock:
+            root = self._incoming_api_root()
+            link = self._find_owned_incoming_api_link(root["links"], link_id, user)
+            link["tokenHash"] = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            link["tokenSecret"] = self._encrypt_secret(token)
+            link["updatedAt"] = _now_iso()
+            self.store.set("incoming_api", root)
+            public = self._incoming_api_public_link(link)
+        self.append_bot_log(
+            "incoming_api.rotate",
+            account_id=str(link.get("accountId") or ""),
+            detail=str(link.get("name") or ""),
+            data={"linkId": link_id},
+        )
+        return {"ok": True, "link": public}
+
+    def delete_incoming_api_link(
+        self, link_id: str, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        with self.incoming_api_lock:
+            root = self._incoming_api_root()
+            link = self._find_owned_incoming_api_link(root["links"], link_id, user)
+            root["links"] = [item for item in root["links"] if item is not link]
+            self.store.set("incoming_api", root)
+            self.incoming_api_rate.pop(link_id, None)
+        self.append_bot_log(
+            "incoming_api.delete",
+            account_id=str(link.get("accountId") or ""),
+            detail=str(link.get("name") or ""),
+            data={"linkId": link_id},
+        )
+        return {"ok": True, "id": link_id}
+
+    def execute_incoming_api(
+        self,
+        link_id: str,
+        token: str,
+        body: dict[str, Any],
+        *,
+        method: str = "POST",
+    ) -> dict[str, Any]:
+        request_method = str(method or "POST").strip().upper()
+        if request_method not in {"GET", "POST"}:
+            raise WebError(HTTPStatus.METHOD_NOT_ALLOWED, "Use GET or POST.")
+        supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        now_epoch = time.time()
+        with self.incoming_api_lock:
+            root = self._incoming_api_root()
+            stored = next(
+                (
+                    item
+                    for item in root["links"]
+                    if isinstance(item, dict) and str(item.get("id") or "") == link_id
+                ),
+                None,
+            )
+            if stored is None or not hmac.compare_digest(
+                str(stored.get("tokenHash") or ""), supplied_hash
+            ):
+                raise WebError(
+                    HTTPStatus.NOT_FOUND, "Incoming API link not found.", "api_link_not_found"
+                )
+            if not bool(stored.get("active", True)):
+                raise WebError(
+                    HTTPStatus.NOT_FOUND, "Incoming API link not found.", "api_link_not_found"
+                )
+            cutoff = now_epoch - 60.0
+            recent = [
+                stamp for stamp in self.incoming_api_rate.get(link_id, []) if stamp > cutoff
+            ]
+            if len(recent) >= MAX_INCOMING_API_REQUESTS_PER_MINUTE:
+                retry_after = max(1, math.ceil(recent[0] + 60.0 - now_epoch))
+                raise WebError(
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    "Incoming API rate limit exceeded.",
+                    "api_rate_limited",
+                    headers=[("Retry-After", str(retry_after))],
+                )
+            recent.append(now_epoch)
+            self.incoming_api_rate[link_id] = recent
+            link = copy.deepcopy(stored)
+
+        owner = self.web_auth._find_user(str(link.get("ownerId") or ""))
+        account_id = str(link.get("accountId") or "")
+        if (
+            owner is None
+            or not self.web_auth._is_active_user(owner)
+            or not self.web_auth.has_permission(owner, "send")
+            or not self.web_auth.can_access_account(owner, account_id)
+            or not self.account_store.get(account_id)
+        ):
+            raise WebError(
+                HTTPStatus.NOT_FOUND, "Incoming API link not found.", "api_link_not_found"
+            )
+        targets = [item for item in link.get("targets", []) if isinstance(item, dict)]
+        if not targets:
+            raise WebError(HTTPStatus.CONFLICT, "Incoming API link has no targets.")
+
+        text, image = _incoming_api_payload(body, allow_image=request_method == "POST")
+        content_kinds = [
+            kind
+            for kind, present in (("text", bool(text)), ("image", image is not None))
+            if present
+        ]
+        request_detail = (
+            _short_text(text, 120) if text else str((image or {}).get("name") or "image")
+        )
+
+        self.append_bot_log(
+            "incoming_api.request",
+            account_id=account_id,
+            detail=request_detail,
+            data={
+                "linkId": link_id,
+                "method": request_method,
+                "targets": len(targets),
+                "contents": content_kinds,
+            },
+        )
+        results: list[dict[str, Any]] = []
+        with self.api_lock_for(account_id):
+            api = self.get_api(account_id)
+            for target in targets:
+                mid = str(target.get("mid") or "")
+                name = str(target.get("name") or mid)
+                kind = str(target.get("type") or "contact")
+                try:
+                    message_ids: list[Any] = []
+                    if text:
+                        result = (
+                            api.send_encrypted_text(mid, text)
+                            if bool(link.get("encrypt"))
+                            else api.send_text(mid, text)
+                        )
+                        message_ids.append(
+                            result.get("id") if isinstance(result, dict) else result
+                        )
+                    if image is not None:
+                        result = api.send_image(mid, image["data"], name=image["name"])
+                        message_ids.append(
+                            result.get("id") if isinstance(result, dict) else result
+                        )
+                    results.append(
+                        {
+                            "ok": True,
+                            "name": name,
+                            "type": kind,
+                            "messageId": message_ids[-1] if message_ids else None,
+                            "messageIds": message_ids,
+                            "contents": content_kinds,
+                        }
+                    )
+                    self.append_bot_log(
+                        "incoming_api.send.success",
+                        account_id=account_id,
+                        detail=name,
+                        data={
+                            "linkId": link_id,
+                            "target": mid,
+                            "type": kind,
+                            "contents": content_kinds,
+                        },
+                    )
+                except Exception as exc:
+                    error = _safe_log_detail(exc, 500)
+                    results.append({"ok": False, "name": name, "type": kind, "error": error})
+                    self.append_bot_log(
+                        "incoming_api.send.error",
+                        account_id=account_id,
+                        ok=False,
+                        detail=error,
+                        data={"linkId": link_id, "target": mid, "type": kind},
+                    )
+
+        success_count = sum(1 for item in results if item.get("ok"))
+        failure_count = len(results) - success_count
+        with self.incoming_api_lock:
+            latest_root = self._incoming_api_root()
+            latest = next(
+                (
+                    item
+                    for item in latest_root["links"]
+                    if isinstance(item, dict) and str(item.get("id") or "") == link_id
+                ),
+                None,
+            )
+            if latest is not None:
+                latest["requestCount"] = int(latest.get("requestCount") or 0) + 1
+                latest["successCount"] = int(latest.get("successCount") or 0) + success_count
+                latest["failureCount"] = int(latest.get("failureCount") or 0) + failure_count
+                latest["lastUsedAt"] = _now_iso()
+                latest["lastStatus"] = (
+                    "success" if not failure_count else "partial" if success_count else "error"
+                )
+                if failure_count:
+                    latest["lastError"] = str(
+                        next(item.get("error") for item in results if not item.get("ok"))
+                    )
+                else:
+                    latest.pop("lastError", None)
+                self.store.set("incoming_api", latest_root)
+        return {
+            "ok": failure_count == 0,
+            "linkId": link_id,
+            "method": request_method,
+            "contents": content_kinds,
+            "sent": success_count,
+            "failed": failure_count,
+            "results": results,
+        }
 
     # -- schedules ---------------------------------------------------------
     def _load_schedules(self) -> list[dict[str, Any]]:
@@ -12114,8 +14376,7 @@ class WebState:
         categories.extend(
             dict(category)
             for category in raw_categories
-            if isinstance(category, dict)
-            and str(category.get("ownerId") or "") == owner_id
+            if isinstance(category, dict) and str(category.get("ownerId") or "") == owner_id
         )
         category_names = {
             str(category.get("id") or ""): str(category.get("name") or "")
@@ -12187,9 +14448,7 @@ class WebState:
                 "createdAt": _now_iso(),
             }
             categories.append(category)
-            self.store.set(
-                "patterns", {"patterns": items, "categories": categories}
-            )
+            self.store.set("patterns", {"patterns": items, "categories": categories})
             self.append_bot_log(
                 "pattern.category.create",
                 account_id=str(body.get("accountId") or ""),
@@ -12243,9 +14502,7 @@ class WebState:
             old_name = str(category.get("name") or "")
             category["name"] = name
             category["updatedAt"] = _now_iso()
-            self.store.set(
-                "patterns", {"patterns": items, "categories": categories}
-            )
+            self.store.set("patterns", {"patterns": items, "categories": categories})
             self.append_bot_log(
                 "pattern.category.update",
                 account_id=str(body.get("accountId") or ""),
@@ -12293,9 +14550,7 @@ class WebState:
                 ):
                     pattern["categoryId"] = DEFAULT_PATTERN_CATEGORY_ID
                     moved += 1
-            self.store.set(
-                "patterns", {"patterns": items, "categories": kept_categories}
-            )
+            self.store.set("patterns", {"patterns": items, "categories": kept_categories})
             self.append_bot_log(
                 "pattern.category.delete",
                 account_id=account_id,
@@ -12309,9 +14564,7 @@ class WebState:
     ) -> dict[str, Any]:
         name = str(body.get("name") or "").strip()
         text = str(body.get("text") or "")
-        category_id = str(
-            body.get("categoryId") or DEFAULT_PATTERN_CATEGORY_ID
-        ).strip()
+        category_id = str(body.get("categoryId") or DEFAULT_PATTERN_CATEGORY_ID).strip()
         if not name:
             raise WebError(HTTPStatus.BAD_REQUEST, "Pattern name is required.")
         if not text.strip():
@@ -12332,8 +14585,7 @@ class WebState:
             owner_patterns = sum(
                 1
                 for pattern in items
-                if isinstance(pattern, dict)
-                and str(pattern.get("ownerId") or "") == owner_id
+                if isinstance(pattern, dict) and str(pattern.get("ownerId") or "") == owner_id
             )
             if owner_patterns >= MAX_PATTERNS_PER_USER:
                 raise WebError(
@@ -12357,9 +14609,7 @@ class WebState:
                 "categoryId": category_id,
             }
             items.append(item)
-            self.store.set(
-                "patterns", {"patterns": items, "categories": categories}
-            )
+            self.store.set("patterns", {"patterns": items, "categories": categories})
             self.append_bot_log(
                 "pattern.create",
                 account_id=str(body.get("accountId") or ""),
@@ -12373,9 +14623,7 @@ class WebState:
         pattern_id = str(body.get("id") or "").strip()
         name = str(body.get("name") or "").strip()
         text = str(body.get("text") or "")
-        category_id = str(
-            body.get("categoryId") or DEFAULT_PATTERN_CATEGORY_ID
-        ).strip()
+        category_id = str(body.get("categoryId") or DEFAULT_PATTERN_CATEGORY_ID).strip()
         if not pattern_id:
             raise WebError(HTTPStatus.BAD_REQUEST, "Pattern id is required.")
         if not name:
@@ -12424,9 +14672,7 @@ class WebState:
                     "updatedAt": _now_iso(),
                 }
             )
-            self.store.set(
-                "patterns", {"patterns": items, "categories": categories}
-            )
+            self.store.set("patterns", {"patterns": items, "categories": categories})
             self.append_bot_log(
                 "pattern.update",
                 account_id=str(body.get("accountId") or ""),
@@ -12460,9 +14706,7 @@ class WebState:
             if len(kept) == len(items):
                 raise WebError(HTTPStatus.NOT_FOUND, "Pattern not found.")
             categories = data.get("categories", []) if isinstance(data, dict) else []
-            self.store.set(
-                "patterns", {"patterns": kept, "categories": categories}
-            )
+            self.store.set("patterns", {"patterns": kept, "categories": categories})
             self.append_bot_log(
                 "pattern.delete",
                 account_id=account_id,
@@ -12775,18 +15019,16 @@ class WebState:
             embedding_model = str(
                 body.get("embeddingModel") or current["embeddingModel"]
             ).strip()[:200]
-            system_prompt = str(
-                body.get("systemPrompt") or current["systemPrompt"]
-            ).strip()[:20_000]
+            system_prompt = str(body.get("systemPrompt") or current["systemPrompt"]).strip()[
+                :20_000
+            ]
             try:
                 top_k = max(1, min(int(body.get("topK", current["topK"])), 12))
                 temperature = max(
                     0.0,
                     min(float(body.get("temperature", current["temperature"])), 2.0),
                 )
-                timeout = max(
-                    5.0, min(float(body.get("timeout", current["timeout"])), 600.0)
-                )
+                timeout = max(5.0, min(float(body.get("timeout", current["timeout"])), 600.0))
             except (TypeError, ValueError) as exc:
                 raise WebError(
                     HTTPStatus.BAD_REQUEST,
@@ -12826,9 +15068,7 @@ class WebState:
             self.store.set("global_ai", data)
         return {"ok": True, **self.global_ai_settings()}
 
-    def _ollama_client(
-        self, settings: dict[str, Any] | None = None
-    ) -> OllamaClient:
+    def _ollama_client(self, settings: dict[str, Any] | None = None) -> OllamaClient:
         cfg = settings or self.global_ai_settings(reveal=True)
         return OllamaClient(
             str(cfg.get("baseUrl") or DEFAULT_OLLAMA_BASE_URL),
@@ -12848,9 +15088,7 @@ class WebState:
         try:
             models = self._ollama_client(settings).list_models()
         except OllamaError as exc:
-            raise WebError(
-                HTTPStatus.BAD_GATEWAY, str(exc), "ollama_unavailable"
-            ) from exc
+            raise WebError(HTTPStatus.BAD_GATEWAY, str(exc), "ollama_unavailable") from exc
         return {"ok": True, "baseUrl": settings["baseUrl"], "models": models}
 
     @staticmethod
@@ -12883,9 +15121,7 @@ class WebState:
             "indexedAt": str(data.get("indexedAt") or ""),
         }
 
-    def assistant_knowledge(
-        self, user: dict[str, Any] | None
-    ) -> dict[str, Any]:
+    def assistant_knowledge(self, user: dict[str, Any] | None) -> dict[str, Any]:
         data = self._global_ai_all()
         _, tenant = self._tenant_ai_knowledge(data, user)
         return {
@@ -13120,9 +15356,7 @@ class WebState:
                         "Knowledge API returned invalid JSON.",
                         "knowledge_api_invalid_json",
                     ) from exc
-                selected = self._json_path_value(
-                    parsed, str(source.get("jsonPath") or "")
-                )
+                selected = self._json_path_value(parsed, str(source.get("jsonPath") or ""))
                 content = (
                     selected
                     if isinstance(selected, str)
@@ -13171,9 +15405,7 @@ class WebState:
                         "Knowledge API returned invalid JSON.",
                         "knowledge_api_invalid_json",
                     ) from exc
-                selected = self._json_path_value(
-                    parsed, str(source.get("jsonPath") or "")
-                )
+                selected = self._json_path_value(parsed, str(source.get("jsonPath") or ""))
                 content = (
                     selected
                     if isinstance(selected, str)
@@ -13248,9 +15480,7 @@ class WebState:
             )
         return chunks
 
-    def reindex_assistant_knowledge(
-        self, user: dict[str, Any] | None
-    ) -> dict[str, Any]:
+    def reindex_assistant_knowledge(self, user: dict[str, Any] | None) -> dict[str, Any]:
         data = self._global_ai_all()
         settings = self._global_ai_private_settings(data)
         owner_id, tenant = self._tenant_ai_knowledge(data, user)
@@ -13329,9 +15559,7 @@ class WebState:
             "resolvedBy": str(item.get("resolvedBy") or ""),
         }
 
-    def ask_global_ai(
-        self, question: str, user: dict[str, Any] | None
-    ) -> dict[str, Any]:
+    def ask_global_ai(self, question: str, user: dict[str, Any] | None) -> dict[str, Any]:
         question = question.strip()
         if not question:
             raise WebError(HTTPStatus.BAD_REQUEST, "Question is required.")
@@ -13349,9 +15577,7 @@ class WebState:
         client = self._ollama_client(settings)
         query_embedding: list[float] | None = None
         knowledge_chunks = [
-            item
-            for item in [*data["chunks"], *tenant["chunks"]]
-            if isinstance(item, dict)
+            item for item in [*data["chunks"], *tenant["chunks"]] if isinstance(item, dict)
         ]
         if (
             knowledge_chunks
@@ -13390,9 +15616,7 @@ class WebState:
                     temperature=settings["temperature"],
                 )
             except OllamaError as exc:
-                raise WebError(
-                    HTTPStatus.BAD_GATEWAY, str(exc), "ollama_unavailable"
-                ) from exc
+                raise WebError(HTTPStatus.BAD_GATEWAY, str(exc), "ollama_unavailable") from exc
         can_answer = bool(result.get("canAnswer"))
         answer = str(result.get("answer") or "").strip() if can_answer else ""
         now = _now_iso()
@@ -13501,9 +15725,7 @@ class WebState:
                 manual_owner = tenant
             else:
                 manual_owner = data
-            manual = [
-                item for item in manual_owner["manualAnswers"] if isinstance(item, dict)
-            ]
+            manual = [item for item in manual_owner["manualAnswers"] if isinstance(item, dict)]
             existing = next(
                 (item for item in manual if item.get("questionId") == question_id), None
             )
@@ -13583,9 +15805,8 @@ class WebState:
                 with self.schedule_lock:
                     self.schedule_inflight.discard(schedule_id)
                 raise
-            def schedule_done(
-                completed: Future[Any], schedule_id: str = schedule_id
-            ) -> None:
+
+            def schedule_done(completed: Future[Any], schedule_id: str = schedule_id) -> None:
                 self._schedule_future_done(schedule_id, completed)
 
             future.add_done_callback(schedule_done)
@@ -13785,6 +16006,39 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 return self._html(GOD_HTML)
             if parsed.path == "/favicon.ico":
                 return self._bytes(b"", "image/x-icon", HTTPStatus.NO_CONTENT)
+            incoming_match = re.fullmatch(
+                r"/api/incoming/([0-9a-f]{32})/([A-Za-z0-9_-]{40,100})",
+                parsed.path,
+            )
+            if incoming_match:
+                if method not in {"GET", "POST"}:
+                    raise WebError(
+                        HTTPStatus.METHOD_NOT_ALLOWED,
+                        "Incoming API links accept GET and POST requests.",
+                    )
+                if method == "GET":
+                    incoming_query = parse_qs(parsed.query, keep_blank_values=True)
+                    incoming_body = {
+                        key: values[-1]
+                        for key, values in incoming_query.items()
+                        if key in {"text", "message"} and values
+                    }
+                else:
+                    incoming_body = self._read_json(max_bytes=MAX_INCOMING_API_BODY_BYTES)
+                result = self.state.execute_incoming_api(
+                    incoming_match.group(1),
+                    incoming_match.group(2),
+                    incoming_body,
+                    method=method,
+                )
+                status = (
+                    HTTPStatus.OK
+                    if not result.get("failed")
+                    else HTTPStatus.MULTI_STATUS
+                    if result.get("sent")
+                    else HTTPStatus.BAD_GATEWAY
+                )
+                return self._json(result, status)
             if method != "GET" and parsed.path.startswith("/api/"):
                 self._require_same_origin()
             self.current_user: dict[str, Any] | None = None
@@ -13805,9 +16059,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                             "God authentication required.",
                             "god_auth_required",
                         )
-            elif parsed.path.startswith("/api/") and not parsed.path.startswith(
-                "/api/auth/"
-            ):
+            elif parsed.path.startswith("/api/") and not parsed.path.startswith("/api/auth/"):
                 self.current_user = self.state.web_auth.require_user(
                     self.headers.get("cookie")
                 )
@@ -13817,14 +16069,28 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                         "Use the God portal at /god.",
                         "god_portal_only",
                     )
+            query = parse_qs(parsed.query)
+            if self.current_user is not None:
+                self.state.enforce_api_rate_limit(
+                    self.current_user,
+                    method,
+                    parsed.path,
+                    _query_one(query, "accountId", ""),
+                )
             if method == "GET" and parsed.path == "/api/message-content":
-                return self._message_content(parse_qs(parsed.query))
-            data = self._dispatch(method, parsed.path, parse_qs(parsed.query))
+                return self._message_content(query)
+            if method == "GET" and parsed.path == "/api/profile-avatar":
+                return self._profile_avatar(query)
+            data = self._dispatch(method, parsed.path, query)
             if isinstance(data, WebResult):
                 return self._json(data.data, data.status, headers=data.headers)
             return self._json(data)
         except WebError as exc:
-            return self._json({"error": exc.message, "code": exc.code}, exc.status)
+            return self._json(
+                {"error": exc.message, "code": exc.code},
+                exc.status,
+                headers=exc.headers,
+            )
         except LineLoginRequired as exc:
             return self._json(
                 {"error": str(exc), "code": "line_login_required"},
@@ -13850,9 +16116,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 self.headers.get("cookie"), cookie_name=WebAuth.god_cookie_name
             )
             if user is not None and not auth._is_god(user):
-                auth.logout(
-                    self.headers.get("cookie"), cookie_name=WebAuth.god_cookie_name
-                )
+                auth.logout(self.headers.get("cookie"), cookie_name=WebAuth.god_cookie_name)
                 user = None
             return {
                 "authenticated": bool(user),
@@ -13874,9 +16138,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 headers=[
                     (
                         "Set-Cookie",
-                        self._cookie_header(
-                            token, cookie_name=WebAuth.god_cookie_name
-                        ),
+                        self._cookie_header(token, cookie_name=WebAuth.god_cookie_name),
                     )
                 ],
             )
@@ -13889,18 +16151,14 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 headers=[
                     (
                         "Set-Cookie",
-                        self._clear_cookie_header(
-                            cookie_name=WebAuth.god_cookie_name
-                        ),
+                        self._clear_cookie_header(cookie_name=WebAuth.god_cookie_name),
                     )
                 ],
             )
         if method == "GET" and path == "/api/god/users":
             return self.state.god_users_payload()
         if method == "GET" and path == "/api/god/users/detail":
-            return self.state.user_detail(
-                _query_one(query, "userId", ""), self.current_user
-            )
+            return self.state.user_detail(_query_one(query, "userId", ""), self.current_user)
         if method == "POST" and path == "/api/god/users/update":
             return self.state.update_user(self._read_json(), self.current_user)
         if method == "POST" and path == "/api/god/users/delete":
@@ -13932,9 +16190,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 limit=_query_int(query, "limit", 500, minimum=1, maximum=1000)
             )
         if method == "POST" and path == "/api/god/ai/answer":
-            return self.state.answer_assistant_question(
-                self._read_json(), self.current_user
-            )
+            return self.state.answer_assistant_question(self._read_json(), self.current_user)
         if method == "GET" and path == "/api/auth/status":
             auth = self.state.web_auth
             setup_token: str | None = (
@@ -14065,9 +16321,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/assistant/ask":
             self._require_permission("ask_ai")
             body = self._read_json()
-            return self.state.ask_global_ai(
-                str(body.get("question") or ""), self.current_user
-            )
+            return self.state.ask_global_ai(str(body.get("question") or ""), self.current_user)
         if method == "GET" and path == "/api/assistant/knowledge":
             self._require_permission("ask_ai")
             return self.state.assistant_knowledge(self.current_user)
@@ -14081,9 +16335,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return {"ok": True, **self.state.reindex_assistant_knowledge(self.current_user)}
         if method == "POST" and path == "/api/assistant/knowledge/sources/save":
             self._require_permission("ask_ai")
-            return self.state.save_assistant_api_source(
-                self._read_json(), self.current_user
-            )
+            return self.state.save_assistant_api_source(self._read_json(), self.current_user)
         if method == "POST" and path == "/api/assistant/knowledge/sources/sync":
             self._require_permission("ask_ai")
             body = self._read_json()
@@ -14103,9 +16355,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             )
         if method == "POST" and path == "/api/assistant/answer":
             self._require_permission("manage_ai")
-            return self.state.answer_assistant_question(
-                self._read_json(), self.current_user
-            )
+            return self.state.answer_assistant_question(self._read_json(), self.current_user)
         if method == "GET" and path == "/api/status":
             return self.state.status(_query_one(query, "accountId", ""), self.current_user)
         if method == "GET" and path == "/api/accounts":
@@ -14138,9 +16388,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.users_payload()
         if method == "GET" and path == "/api/users/detail":
             self._require_permission("manage_users")
-            return self.state.user_detail(
-                _query_one(query, "userId", ""), self.current_user
-            )
+            return self.state.user_detail(_query_one(query, "userId", ""), self.current_user)
         if method == "POST" and path == "/api/users/create":
             self._require_permission("manage_users")
             return self.state.create_user(self._read_json(), self.current_user)
@@ -14150,6 +16398,33 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/users/delete":
             self._require_permission("manage_users")
             return self.state.delete_user(self._read_json(), self.current_user or {})
+        if method == "GET" and path == "/api/incoming-links":
+            self._require_permission("manage_api")
+            account_id = _required_account_id(_query_one(query, "accountId", ""))
+            self._require_account_access(account_id)
+            return self.state.list_incoming_api_links(account_id, self.current_user)
+        if method == "POST" and path == "/api/incoming-links/create":
+            self._require_permission("manage_api")
+            body = self._read_json(max_bytes=MAX_INCOMING_API_BODY_BYTES)
+            return self._with_api(
+                body,
+                lambda api: self.state.create_incoming_api_link(body, self.current_user, api),
+            )
+        if method == "POST" and path == "/api/incoming-links/update":
+            self._require_permission("manage_api")
+            return self.state.update_incoming_api_link(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/incoming-links/rotate":
+            self._require_permission("manage_api")
+            body = self._read_json()
+            return self.state.rotate_incoming_api_link(
+                str(body.get("id") or ""), self.current_user
+            )
+        if method == "POST" and path == "/api/incoming-links/delete":
+            self._require_permission("manage_api")
+            body = self._read_json()
+            return self.state.delete_incoming_api_link(
+                str(body.get("id") or ""), self.current_user
+            )
         if method == "POST" and path == "/api/login/start":
             self._require_permission("manage_accounts")
             body = self._read_json()
@@ -14351,7 +16626,9 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             name = contact.get("name") or ""
             if search and search not in name.lower():
                 continue
-            contact.update(_chat_list_fields(chat_summaries.get(str(contact.get("mid") or ""))))
+            contact.update(
+                _chat_list_fields(chat_summaries.get(str(contact.get("mid") or "")))
+            )
             rows.append(contact)
         rows.sort(key=lambda row: _recent_chat_sort_key(row, recency))
         rows = rows[:limit]
@@ -14429,9 +16706,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         messages = api.get_recent_messages(chat_mid, count) or []
         # resolve senders we don't know yet (e.g. group members who aren't in
         # our own contact list) to their real LINE display names
-        message_mids = [
-            m["from"] for m in messages if isinstance(m, dict) and m.get("from")
-        ]
+        message_mids = [m["from"] for m in messages if isinstance(m, dict) and m.get("from")]
         for message in messages:
             message_mids.extend(_chat_event_mids(message))
             contact_mid = _message_contact_mid(message)
@@ -14550,6 +16825,47 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             headers=headers,
         )
 
+    def _profile_avatar(self, query: dict[str, list[str]]) -> None:
+        """Load the selected account's LINE profile picture through our session."""
+        self._require_permission("read")
+        account_id = _required_account_id(_query_one(query, "accountId", ""))
+        self._require_account_access(account_id)
+        account = self.state.account_store.get(account_id) or {}
+        cached_picture_path = str(account.get("picturePath") or "").strip()
+
+        def load_avatar(api: OkLine) -> bytes:
+            picture_path = cached_picture_path
+            if not picture_path:
+                profile = api.get_profile()
+                if isinstance(profile, dict):
+                    self.state.account_store.update_profile(account_id, profile)
+                    picture_path = str(profile.get("picturePath") or "").strip()
+            if not picture_path:
+                raise WebError(
+                    HTTPStatus.NOT_FOUND,
+                    "LINE profile picture is not available.",
+                    "profile_picture_not_found",
+                )
+            session = getattr(getattr(api, "transport", None), "session", None)
+            try:
+                return _download_line_media_url(picture_path, session=session)
+            except Exception as exc:
+                raise WebError(
+                    HTTPStatus.NOT_FOUND,
+                    "LINE profile picture is not available.",
+                    "profile_picture_not_found",
+                ) from exc
+
+        data = self._with_api(query, load_avatar)
+        content_type = _sniff_content_type(data)
+        if not content_type.startswith("image/"):
+            raise WebError(
+                HTTPStatus.NOT_FOUND,
+                "LINE profile picture is not an image.",
+                "profile_picture_not_found",
+            )
+        self._bytes(data, content_type, HTTPStatus.OK)
+
     def _call(self, api: OkLine, body: dict[str, Any]) -> dict[str, Any]:
         endpoint = str(body.get("endpoint") or "")
         args = body.get("args")
@@ -14620,7 +16936,9 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             "base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
         )
         if self._secure_cookies():
-            self.send_header("strict-transport-security", "max-age=31536000; includeSubDomains")
+            self.send_header(
+                "strict-transport-security", "max-age=31536000; includeSubDomains"
+            )
         for key, value in headers or []:
             self.send_header(key, value)
         self.send_header("content-length", str(len(payload)))
@@ -15007,7 +17325,9 @@ def _schedule_from_body(
     image_data = str(body.get("imageData") or (existing or {}).get("imageData") or "")
     image_name = str(body.get("imageName") or (existing or {}).get("imageName") or "")
     if image_data:
-        encoded = image_data.split(",", 1)[-1] if image_data.startswith("data:") else image_data
+        encoded = (
+            image_data.split(",", 1)[-1] if image_data.startswith("data:") else image_data
+        )
         if len(encoded) > ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 4:
             raise WebError(HTTPStatus.BAD_REQUEST, "Job image is too large (max 30 MB).")
         try:
@@ -15023,7 +17343,10 @@ def _schedule_from_body(
     pattern_texts = (
         [str(x) for x in raw_ptexts if str(x).strip()] if isinstance(raw_ptexts, list) else []
     )
-    if len(pattern_ids) > MAX_PATTERN_REFERENCES or len(pattern_texts) > MAX_PATTERN_REFERENCES:
+    if (
+        len(pattern_ids) > MAX_PATTERN_REFERENCES
+        or len(pattern_texts) > MAX_PATTERN_REFERENCES
+    ):
         raise WebError(HTTPStatus.BAD_REQUEST, "Too many message patterns were selected.")
     api_url = str(body.get("apiUrl") or (existing or {}).get("apiUrl") or "")
     api_method = str(
@@ -15325,7 +17648,9 @@ def _send_job_contents(
                 text = str(item.get("text") or "")
                 if not text:
                     continue
-                result = api.send_encrypted_text(to, text) if encrypt else api.send_text(to, text)
+                result = (
+                    api.send_encrypted_text(to, text) if encrypt else api.send_text(to, text)
+                )
             elif kind == "image":
                 if encrypt:
                     raise WebError(HTTPStatus.BAD_REQUEST, "Images cannot be sent with E2EE.")
@@ -15386,7 +17711,9 @@ def _resolve_job_contents(
             return [
                 {"kind": "image", "data": raw, "name": job.get("imageName") or "image.jpg"}
             ]
-        return [_image_content(_apply_placeholders(str(job.get("imageSource") or "")), log=log)]
+        return [
+            _image_content(_apply_placeholders(str(job.get("imageSource") or "")), log=log)
+        ]
     if source == "api":
         return _api_contents(job, log=log)
     if source == "ai_image":
@@ -15394,7 +17721,11 @@ def _resolve_job_contents(
         # Prompt patterns work like the text source: tick 2+ and each send picks
         # one at random; otherwise fall back to the single AI prompt field.
         texts = [str(x) for x in (job.get("patternTexts") or []) if str(x).strip()]
-        base = random.choice(texts) if texts else str(job.get("aiPrompt") or job.get("text") or "")
+        base = (
+            random.choice(texts)
+            if texts
+            else str(job.get("aiPrompt") or job.get("text") or "")
+        )
         prompt = _prepare_ai_image_prompt(_apply_placeholders(base))
         provider = str(cfg.get("provider") or "google")
         model = str(cfg.get("model") or "")
@@ -15472,7 +17803,9 @@ def _api_contents(job: dict[str, Any], *, log: BotLogFn | None = None) -> list[d
         try:
             resp.raise_for_status()
             ctype = resp.headers.get("content-type", "").lower()
-            limit = MAX_IMAGE_BYTES if ctype.startswith("image/") else MAX_OUTBOUND_DOCUMENT_BYTES
+            limit = (
+                MAX_IMAGE_BYTES if ctype.startswith("image/") else MAX_OUTBOUND_DOCUMENT_BYTES
+            )
             raw = _read_limited_response(resp, limit)
         finally:
             resp.close()
@@ -15489,7 +17822,9 @@ def _api_contents(job: dict[str, Any], *, log: BotLogFn | None = None) -> list[d
     text_value = raw.decode("utf-8", errors="replace")
     if "json" in ctype or text_value.lstrip()[:1] in "[{":
         try:
-            items = _contents_from_api_json(json.loads(text_value), base_url=final_url, log=log)
+            items = _contents_from_api_json(
+                json.loads(text_value), base_url=final_url, log=log
+            )
             _bot_log(
                 log,
                 "content.api.loaded",
@@ -15531,7 +17866,9 @@ def _contents_from_api_json(
 
     if image_b64:
         try:
-            encoded = image_b64.split(",", 1)[-1] if image_b64.startswith("data:") else image_b64
+            encoded = (
+                image_b64.split(",", 1)[-1] if image_b64.startswith("data:") else image_b64
+            )
             if len(encoded) > ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 4:
                 raise WebError(HTTPStatus.BAD_GATEWAY, "API imageBase64 is too large.")
             decoded = base64.b64decode(encoded, validate=True)
@@ -15566,6 +17903,71 @@ def _first_str(data: dict[str, Any], keys: tuple[str, ...]) -> str:
         if value is not None:
             return str(value).strip()
     return ""
+
+
+def _incoming_api_payload(
+    body: dict[str, Any], *, allow_image: bool
+) -> tuple[str, dict[str, Any] | None]:
+    text = _first_str(body, ("text", "message"))
+    if len(text) > MAX_TEXT_LENGTH:
+        raise WebError(HTTPStatus.BAD_REQUEST, "text is too long.")
+
+    image_url = _first_str(body, ("imageUrl", "image_url", "image"))
+    image_base64 = _first_str(body, ("imageBase64", "image_base64", "base64Image"))
+    if (image_url or image_base64) and not allow_image:
+        raise WebError(HTTPStatus.BAD_REQUEST, "GET requests support text only.")
+    if image_url and image_base64:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Use either imageUrl or imageBase64, not both.",
+        )
+
+    image: dict[str, Any] | None = None
+    requested_name = _first_str(body, ("filename", "fileName", "name"))
+    if image_base64:
+        encoded = image_base64
+        default_name = "api-image.jpg"
+        if image_base64.startswith("data:"):
+            header, separator, encoded = image_base64.partition(",")
+            media_type = header[5:].split(";", 1)[0].strip().lower()
+            if not separator or ";base64" not in header.lower():
+                raise WebError(HTTPStatus.BAD_REQUEST, "imageBase64 data URL is invalid.")
+            if media_type and not media_type.startswith("image/"):
+                raise WebError(HTTPStatus.BAD_REQUEST, "imageBase64 must contain an image.")
+            extension = mimetypes.guess_extension(media_type) if media_type else None
+            if extension == ".jpe":
+                extension = ".jpg"
+            if extension:
+                default_name = f"api-image{extension}"
+        if len(encoded) > ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 4:
+            raise WebError(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Image is too large (max 30 MB)."
+            )
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise WebError(HTTPStatus.BAD_REQUEST, "imageBase64 is invalid.") from exc
+        if not raw:
+            raise WebError(HTTPStatus.BAD_REQUEST, "imageBase64 is empty.")
+        if len(raw) > MAX_IMAGE_BYTES:
+            raise WebError(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Image is too large (max 30 MB)."
+            )
+        image = {
+            "data": raw,
+            "name": _safe_message_filename(requested_name or default_name),
+        }
+    elif image_url:
+        raw, downloaded_name = _download_image(image_url)
+        image = {
+            "data": raw,
+            "name": _safe_message_filename(requested_name or downloaded_name),
+        }
+
+    if not text and image is None:
+        message = "text is required." if not allow_image else "text or image is required."
+        raise WebError(HTTPStatus.BAD_REQUEST, message)
+    return text, image
 
 
 def _image_content(
@@ -15818,7 +18220,9 @@ def _same_origin_provider_url(url: str, base_url: str) -> str:
         parsed_port = parsed.port or (443 if parsed.scheme == "https" else 80)
         base_port = base.port or (443 if base.scheme == "https" else 80)
     except ValueError as exc:
-        raise WebError(HTTPStatus.BAD_GATEWAY, "Provider returned an invalid URL.", "ai_error") from exc
+        raise WebError(
+            HTTPStatus.BAD_GATEWAY, "Provider returned an invalid URL.", "ai_error"
+        ) from exc
     if (
         parsed.scheme != base.scheme
         or (parsed.hostname or "").lower() != (base.hostname or "").lower()
@@ -15845,9 +18249,7 @@ def _mask_secret(value: str) -> str:
 
 def _ai_image_ext(mime: str) -> str:
     base = (mime or "").split(";")[0].strip().lower()
-    return {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(
-        base, ".png"
-    )
+    return {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(base, ".png")
 
 
 def _extract_inline_image(data: Any) -> tuple[bytes, str] | None:
@@ -16500,9 +18902,7 @@ def _nbapi_create_task(
     except ValueError:
         data = None
     code = data.get("code") if isinstance(data, dict) else None
-    effective = (
-        int(code) if code is not None and str(code).isdigit() else resp.status_code
-    )
+    effective = int(code) if code is not None and str(code).isdigit() else resp.status_code
     if effective != 200 or not isinstance(data, dict):
         message = _nbapi_message(data) or (resp.text or "").strip()[:240]
         tail = f": {message}" if message else ""
@@ -16573,7 +18973,13 @@ def _nbapi_poll_result(
             )
             continue
         flag = inner.get("successFlag")
-        status = "ready" if flag in (1, "1") else "failed" if flag in (2, 3, "2", "3") else "waiting"
+        status = (
+            "ready"
+            if flag in (1, "1")
+            else "failed"
+            if flag in (2, 3, "2", "3")
+            else "waiting"
+        )
         _bot_log(
             log,
             "content.ai.poll",
@@ -16588,9 +18994,7 @@ def _nbapi_poll_result(
         if flag in (1, "1"):
             response = inner.get("response")
             result_url = (
-                str(response.get("resultImageUrl") or "")
-                if isinstance(response, dict)
-                else ""
+                str(response.get("resultImageUrl") or "") if isinstance(response, dict) else ""
             )
             if not result_url:
                 raise WebError(
@@ -16835,8 +19239,7 @@ def _validated_line_media_url(url: str) -> str:
         raise RuntimeError("Invalid LINE media URL") from exc
     host = (parsed.hostname or "").rstrip(".").lower()
     trusted = any(
-        host == suffix or host.endswith("." + suffix)
-        for suffix in _LINE_MEDIA_HOST_SUFFIXES
+        host == suffix or host.endswith("." + suffix) for suffix in _LINE_MEDIA_HOST_SUFFIXES
     )
     if (
         parsed.scheme.lower() != "https"
@@ -16875,7 +19278,8 @@ def _download_line_media_url(url: str, *, session: requests.Session | None = Non
                 or content_type.startswith("video/")
                 or content_type.startswith("audio/")
                 or content_type.startswith("application/octet-stream")
-                or content_type in {
+                or content_type
+                in {
                     "application/mp4",
                     "application/ogg",
                     "application/pdf",
@@ -16943,19 +19347,27 @@ def _download_message_payload(
         if content_type in {5, 14}:
             filename = str(meta.get("FILE_NAME") or "")
         if content_type in _MESSAGE_MEDIA_CONTENT_TYPES:
-            preferred = ("PREVIEW_URL", "DOWNLOAD_URL") if preview else (
-                "DOWNLOAD_URL",
-                "PREVIEW_URL",
+            preferred = (
+                ("PREVIEW_URL", "DOWNLOAD_URL")
+                if preview
+                else (
+                    "DOWNLOAD_URL",
+                    "PREVIEW_URL",
+                )
             )
             for key in preferred:
                 media_url = str(meta.get(key) or "").strip()
                 if not media_url:
                     continue
                 try:
-                    return _download_line_media_url(
-                        media_url,
-                        session=getattr(getattr(api, "transport", None), "session", None),
-                    ), filename, content_type
+                    return (
+                        _download_line_media_url(
+                            media_url,
+                            session=getattr(getattr(api, "transport", None), "session", None),
+                        ),
+                        filename,
+                        content_type,
+                    )
                 except RuntimeError:
                     continue
     if not message or not message.get("chunks"):
@@ -16991,9 +19403,7 @@ def _download_message_content(
     *,
     preview: bool = False,
 ) -> bytes:
-    data, _, _ = _download_message_payload(
-        api, message_id, chat_mid, preview=preview
-    )
+    data, _, _ = _download_message_payload(api, message_id, chat_mid, preview=preview)
     return data
 
 
@@ -17002,11 +19412,7 @@ def _chat_event_mids(msg: Any) -> list[str]:
         return []
     raw_meta = msg.get("contentMetadata")
     meta = raw_meta if isinstance(raw_meta, dict) else {}
-    return [
-        value
-        for value in str(meta.get("LOC_ARGS") or "").split("\x1e")
-        if is_mid(value)
-    ]
+    return [value for value in str(meta.get("LOC_ARGS") or "").split("\x1e") if is_mid(value)]
 
 
 def _metadata_text(meta: dict[str, Any], *keys: str, limit: int = 500) -> str:

@@ -260,14 +260,16 @@ def test_web_ui_configures_proxy_per_line_account():
     assert 'id="loginProxyUsername" type="text"' in INDEX_HTML
     assert 'id="loginProxyPassword" type="password"' in INDEX_HTML
     assert 'id="loginProxyUrl"' not in INDEX_HTML
-    assert 'await post("/api/login/start", {waitSeconds: 180, ...proxySettings});' in INDEX_HTML
-    assert 'proxyEnabled: proxyEnabled.checked' in INDEX_HTML
+    assert (
+        'await post("/api/login/start", {waitSeconds: 180, ...proxySettings});' in INDEX_HTML
+    )
+    assert "proxyEnabled: proxyEnabled.checked" in INDEX_HTML
     assert "proxyScheme: scheme.value" in INDEX_HTML
     assert "proxyHost: host.input.value.trim()" in INDEX_HTML
     assert "proxyPort: port.input.value.trim()" in INDEX_HTML
     assert "proxyUsername: username.input.value.trim()" in INDEX_HTML
     assert "proxyPassword: password.input.value" in INDEX_HTML
-    assert 'account.proxyConfigured' in INDEX_HTML
+    assert "account.proxyConfigured" in INDEX_HTML
 
 
 def test_file_state_store_serializes_writes(tmp_path, monkeypatch):
@@ -381,7 +383,11 @@ def test_web_ui_has_tab_bar_subtabs_and_menu_toggles():
     assert 'class="line-list-tabbar"' in INDEX_HTML
     assert 'id="contactsRefreshButton"' in INDEX_HTML
     assert 'class="line-list-refresh"' not in INDEX_HTML
-    assert INDEX_HTML.index('id="loadGroupsButton"') < INDEX_HTML.index('id="contactsRefreshButton"') < INDEX_HTML.index('id="contactSearchRow"')
+    assert (
+        INDEX_HTML.index('id="loadGroupsButton"')
+        < INDEX_HTML.index('id="contactsRefreshButton"')
+        < INDEX_HTML.index('id="contactSearchRow"')
+    )
 
 
 def test_account_switch_loading_overlay_returns_to_line_tab():
@@ -400,6 +406,120 @@ def test_account_switch_loading_overlay_returns_to_line_tab():
     assert '$("appShell").setAttribute("aria-busy", String(on))' in INDEX_HTML
     assert "finally" in block
     assert "setAccountSwitchLoading(false)" in block
+
+
+def test_profile_details_are_collapsed_until_username_is_opened():
+    assert 'id="profileDetailsToggle"' in INDEX_HTML
+    assert 'aria-expanded="false" aria-controls="profileDetailsPanel"' in INDEX_HTML
+    assert 'id="profileDetailsPanel" aria-hidden="true"' in INDEX_HTML
+    assert ".line-me-detail-panel.expanded" in INDEX_HTML
+    assert "function setProfileDetailsExpanded(expanded)" in INDEX_HTML
+    assert "function toggleProfileDetails()" in INDEX_HTML
+    assert '$("profileDetailsToggle").addEventListener("click", toggleProfileDetails);' in INDEX_HTML
+    assert "setProfileDetailsExpanded(false);" in INDEX_HTML
+    assert '"profile.show_details"' in INDEX_HTML
+    assert '"profile.hide_details"' in INDEX_HTML
+    assert 'grid-area: info;' in INDEX_HTML
+    assert 'grid-area: pills;' in INDEX_HTML
+    assert '.line-me > .avatar {' in INDEX_HTML
+    assert 'cursor: pointer;' in INDEX_HTML
+
+
+def test_profile_avatar_loads_through_the_selected_account_session(web_state):
+    assert 'class="avatar avatar-lg" id="profileAvatar"' in INDEX_HTML
+    assert 'image.src = `/api/profile-avatar?${accountQuery(accountId)}' in INDEX_HTML
+    assert 'function renderProfileAvatar(profile, displayName)' in INDEX_HTML
+    assert 'image.addEventListener("error"' in INDEX_HTML
+    assert '.avatar-image {' in INDEX_HTML
+    assert hasattr(OkLineWebHandler, "_profile_avatar")
+
+    _seed_account(web_state)
+    web_state.account_store.update_profile(
+        "acct",
+        {
+            "displayName": "Photo account",
+            "picturePath": "https://profile.line-scdn.net/photo.jpg",
+            "pictureStatus": "v2",
+        },
+    )
+    account = web_state.account_store.get("acct")
+    assert account["picturePath"] == "https://profile.line-scdn.net/photo.jpg"
+    assert account["pictureStatus"] == "v2"
+
+
+def test_profile_avatar_endpoint_uses_the_line_transport_session(web_state, monkeypatch):
+    _seed_account(web_state)
+    picture_url = "https://profile.line-scdn.net/photo.jpg"
+    web_state.account_store.update_profile("acct", {"picturePath": picture_url})
+    line_session = object()
+    seen = {}
+
+    class Transport:
+        session = line_session
+
+    class Api:
+        transport = Transport()
+
+    class Server:
+        state = web_state
+
+    def fake_download(url, *, session=None):
+        seen["download"] = (url, session)
+        return b"\x89PNG\r\n\x1a\nprofile"
+
+    handler = object.__new__(OkLineWebHandler)
+    handler.server = Server()
+    handler.current_user = {}
+    handler._require_permission = lambda permission: seen.setdefault(
+        "permission", permission
+    )
+    handler._require_account_access = lambda account_id: seen.setdefault(
+        "accountId", account_id
+    )
+    handler._with_api = lambda source, callback: callback(Api())
+    handler._bytes = lambda data, content_type, status: seen.update(
+        data=data, contentType=content_type, status=status
+    )
+    monkeypatch.setattr(webapp_module, "_download_line_media_url", fake_download)
+
+    handler._profile_avatar({"accountId": ["acct"]})
+
+    assert seen["permission"] == "read"
+    assert seen["accountId"] == "acct"
+    assert seen["download"] == (picture_url, line_session)
+    assert seen["contentType"] == "image/png"
+    assert seen["status"] == HTTPStatus.OK
+
+
+def test_web_ui_has_incoming_api_wizard_and_management_actions():
+    assert 'id="tabIncomingApi"' in INDEX_HTML
+    assert 'data-tab-panel="incoming-api"' in INDEX_HTML
+    assert 'id="incomingApiWizardPage"' in INDEX_HTML
+    assert 'data-incoming-api-step="1"' in INDEX_HTML
+    assert 'data-incoming-api-step="4"' in INDEX_HTML
+    assert 'id="incomingApiContactsTab"' in INDEX_HTML
+    assert 'id="incomingApiGroupsTab"' in INDEX_HTML
+    assert 'id="incomingApiStatusOnButton"' in INDEX_HTML
+    assert 'id="incomingApiStatusOffButton"' in INDEX_HTML
+    assert 'id="incomingApiEncryptState"' in INDEX_HTML
+    assert 'id="incomingApiGuidePage"' in INDEX_HTML
+    assert 'id="incomingApiGuideLinkSelect"' in INDEX_HTML
+    assert 'id="incomingApiGuideGetCode"' in INDEX_HTML
+    assert 'id="incomingApiGuidePostTextCode"' in INDEX_HTML
+    assert 'id="incomingApiGuideImageUrlCode"' in INDEX_HTML
+    assert 'id="incomingApiGuideImageBase64Code"' in INDEX_HTML
+    assert "function updateIncomingApiGuideExamples" in INDEX_HTML
+    assert 'data-copy-incoming-api-guide="incomingApiGuidePostTextCode"' in INDEX_HTML
+    assert "60 requests per minute" in INDEX_HTML
+    assert "maximum image size is 30 MB" in INDEX_HTML
+    assert "GET {API_URL}?text=" in INDEX_HTML
+    assert '"imageUrl": "https://example.com/photo.jpg"' in INDEX_HTML
+    assert '"imageBase64": "data:image/png;base64,..."' in INDEX_HTML
+    assert '"/api/incoming-links/create"' in INDEX_HTML
+    assert '"/api/incoming-links/rotate"' in INDEX_HTML
+    assert '"/api/incoming-links/delete"' in INDEX_HTML
+    assert "state.incomingApiSelectedTargets.size >= 20" in INDEX_HTML
+    assert "active: incomingApiIsActive()" in INDEX_HTML
 
 
 def test_web_ui_has_clear_stuck_schedule_action():
@@ -440,7 +560,7 @@ def test_web_ui_has_pattern_category_management():
 
 
 def test_web_ui_has_pattern_edit_and_delete_actions():
-    assert 'editingPatternId: null' in INDEX_HTML
+    assert "editingPatternId: null" in INDEX_HTML
     assert 'id="patternFormTitle"' in INDEX_HTML
     assert '"/api/patterns/update"' in INDEX_HTML
     assert "function editPattern(pattern)" in INDEX_HTML
@@ -492,7 +612,9 @@ def test_mobile_scheduler_uses_primary_tabs_and_compact_job_actions():
     assert 'class="section-head scheduler-list-head"' in INDEX_HTML
     assert 'class="row compact scheduler-list-actions"' in INDEX_HTML
     assert ".scheduler-list-actions #openBotLogsButton," in INDEX_HTML
-    assert ".scheduler-list-actions #scheduleFormToggle {\n        display: none;" in INDEX_HTML
+    assert (
+        ".scheduler-list-actions #scheduleFormToggle {\n        display: none;" in INDEX_HTML
+    )
     assert ".schedule-item .item-actions {\n        display: grid;" in INDEX_HTML
     assert 'item.className = "item schedule-item";' in INDEX_HTML
 
@@ -502,7 +624,10 @@ def test_placeholder_chips_stay_in_one_scrollable_row_on_mobile():
     assert ".ph-chips {\n      display: flex;\n      flex-wrap: nowrap;" in INDEX_HTML
     assert "overflow-x: auto;" in INDEX_HTML
     assert ".ph-chip {\n      flex: 0 0 auto;\n      width: auto;" in INDEX_HTML
-    assert '$("scheduleTextHelp").style.display = source === "text" ? "grid" : "none";' in INDEX_HTML
+    assert (
+        '$("scheduleTextHelp").style.display = source === "text" ? "grid" : "none";'
+        in INDEX_HTML
+    )
 
 
 def test_web_ui_tab_panels_are_siblings():
@@ -548,7 +673,7 @@ def test_web_ui_tab_panels_are_siblings():
     assert 'id="newUserEmail" type="email"' in INDEX_HTML
     assert 'displayName: mode === "register"' in INDEX_HTML
     assert 'select.value = "member"' in INDEX_HTML
-    assert 'accountIds: checkedAccountIds' not in INDEX_HTML
+    assert "accountIds: checkedAccountIds" not in INDEX_HTML
     assert '"Each member has a private workspace' in INDEX_HTML
 
     focus_start = INDEX_HTML.index("function showAuthPanel")
@@ -565,15 +690,17 @@ def test_web_ui_tab_panels_are_siblings():
     assert "body.login-page-scroll" in INDEX_HTML
     assert "body.login-page-scroll .app-shell" in INDEX_HTML
     assert "body.login-page-scroll .main-stage" in INDEX_HTML
-    assert 'document.body.classList.toggle("login-page-scroll", view === "login")' in INDEX_HTML
+    assert (
+        'document.body.classList.toggle("login-page-scroll", view === "login")' in INDEX_HTML
+    )
 
     require_start = INDEX_HTML.index("function requireAccount")
     require_end = INDEX_HTML.index("function accountQuery", require_start)
     require_block = INDEX_HTML[require_start:require_end]
     assert 'if (!state.accounts.length) return ""' in require_block
-    assert require_block.index(
-        'if (!state.accounts.length) return ""'
-    ) < require_block.index("showGate(false)")
+    assert require_block.index('if (!state.accounts.length) return ""') < require_block.index(
+        "showGate(false)"
+    )
     assert 'code === "no_account" && state.accounts.length === 0' in INDEX_HTML
     assert 'id="confirmNewPasswordInput"' in INDEX_HTML
     assert "newPassword !== confirmNewPassword" in INDEX_HTML
@@ -666,6 +793,35 @@ def test_registration_rate_limit_is_per_source(tmp_path, monkeypatch):
     with pytest.raises(WebError) as caught:
         auth.register("three@example.com", "member-pass", source="203.0.113.11")
     assert caught.value.status == HTTPStatus.TOO_MANY_REQUESTS
+
+
+def test_authenticated_api_rate_limit_is_scoped_by_user_and_account(
+    web_state, monkeypatch
+):
+    clock = [100.0]
+    monkeypatch.setattr(webapp_module.time, "monotonic", lambda: clock[0])
+    first_user = {"id": "user-one", "username": "one@example.com"}
+    second_user = {"id": "user-two", "username": "two@example.com"}
+
+    for _ in range(20):
+        web_state.enforce_api_rate_limit(
+            first_user, "GET", "/api/messages", "line-one"
+        )
+
+    with pytest.raises(WebError) as caught:
+        web_state.enforce_api_rate_limit(
+            first_user, "GET", "/api/messages", "line-one"
+        )
+
+    assert caught.value.status == HTTPStatus.TOO_MANY_REQUESTS
+    assert caught.value.code == "api_rate_limited"
+    assert caught.value.headers == [("Retry-After", "10")]
+
+    web_state.enforce_api_rate_limit(first_user, "GET", "/api/messages", "line-two")
+    web_state.enforce_api_rate_limit(second_user, "GET", "/api/messages", "line-one")
+
+    clock[0] += 10.1
+    web_state.enforce_api_rate_limit(first_user, "GET", "/api/messages", "line-one")
 
 
 def test_web_auth_legacy_username_can_still_login(tmp_path):
@@ -779,8 +935,265 @@ def test_web_auth_roles_and_account_scope(tmp_path):
 
     assert auth.has_permission(user, "read") is True
     assert auth.has_permission(user, "send") is False
+    assert auth.has_permission(user, "manage_api") is False
     assert auth.can_access_account(user, "acct-1") is True
     assert auth.can_access_account(user, "acct-2") is False
+
+
+class _IncomingApiFake:
+    contact_mid = "U-incoming-contact"
+    group_mid = "C-incoming-group"
+
+    def __init__(self):
+        self.calls = []
+
+    def get_all_contact_ids(self):
+        return [self.contact_mid]
+
+    def get_contacts(self, mids):
+        return {
+            "contacts": {
+                mid: {
+                    "contact": {
+                        "mid": mid,
+                        "displayName": "API Contact",
+                        "statusMessage": "",
+                    }
+                }
+                for mid in mids
+            }
+        }
+
+    def get_all_chat_mids(self):
+        return {"memberChatMids": [self.group_mid], "invitedChatMids": []}
+
+    def get_chats(self, mids):
+        return {
+            "chats": [
+                {
+                    "chatMid": mid,
+                    "chatName": "API Group",
+                    "extra": {"groupExtra": {"memberMids": ["U-one", "U-two"]}},
+                }
+                for mid in mids
+            ]
+        }
+
+    def send_text(self, mid, text):
+        self.calls.append(("plain", mid, text))
+        return {"id": f"message-{len(self.calls)}"}
+
+    def send_encrypted_text(self, mid, text):
+        self.calls.append(("encrypted", mid, text))
+        return {"id": f"message-{len(self.calls)}"}
+
+    def send_image(self, mid, data, name=None):
+        self.calls.append(("image", mid, data, name))
+        return {"id": f"message-{len(self.calls)}"}
+
+
+def _incoming_api_owner(state):
+    token = state.web_auth.setup("owner@example.com", "owner-pass")
+    owner = state.web_auth.current_user(WebAuth.cookie_header(token))
+    assert owner
+    _seed_account(state, "incoming-account")
+    state.web_auth.grant_account_access(owner["id"], "incoming-account")
+    owner = state.web_auth._find_user(owner["id"])
+    assert owner
+    return owner
+
+
+def test_incoming_api_link_is_scoped_encrypted_and_sends_to_selected_targets(web_state):
+    owner = _incoming_api_owner(web_state)
+    fake = _IncomingApiFake()
+    created = web_state.create_incoming_api_link(
+        {
+            "accountId": "incoming-account",
+            "name": "Website notifications",
+            "targets": [
+                {"type": "contact", "mid": fake.contact_mid},
+                {"type": "group", "mid": fake.group_mid},
+            ],
+            "encrypt": True,
+        },
+        owner,
+        fake,
+    )["link"]
+
+    link_id, token = created["endpointPath"].rsplit("/", 2)[-2:]
+    stored = json.dumps(web_state.store.get("incoming_api", {"links": []}), ensure_ascii=False)
+    assert token not in stored
+    assert "tokenSecret" in stored
+    assert web_state.list_incoming_api_links("incoming-account", owner)["count"] == 1
+
+    web_state.get_api = lambda account_id: fake
+    result = web_state.execute_incoming_api(link_id, token, {"text": "hello API"})
+
+    assert result["ok"] is True
+    assert result["sent"] == 2
+    assert result["failed"] == 0
+    assert fake.calls == [
+        ("encrypted", fake.contact_mid, "hello API"),
+        ("encrypted", fake.group_mid, "hello API"),
+    ]
+    actions = [
+        entry["action"] for entry in web_state.list_bot_logs("incoming-account", owner)["logs"]
+    ]
+    assert "incoming_api.create" in actions
+    assert "incoming_api.request" in actions
+    assert actions.count("incoming_api.send.success") == 2
+
+    with pytest.raises(WebError) as invalid:
+        web_state.execute_incoming_api(link_id, "x" * len(token), {"text": "denied"})
+    assert invalid.value.status == HTTPStatus.NOT_FOUND
+
+
+def test_incoming_api_post_sends_image_and_optional_text(web_state):
+    owner = _incoming_api_owner(web_state)
+    fake = _IncomingApiFake()
+    created = web_state.create_incoming_api_link(
+        {
+            "accountId": "incoming-account",
+            "name": "Image notifications",
+            "targets": [{"type": "contact", "mid": fake.contact_mid}],
+            "encrypt": True,
+        },
+        owner,
+        fake,
+    )["link"]
+    link_id, token = created["endpointPath"].rsplit("/", 2)[-2:]
+    web_state.get_api = lambda account_id: fake
+    image = b"fake-png-content"
+
+    result = web_state.execute_incoming_api(
+        link_id,
+        token,
+        {
+            "text": "caption",
+            "imageBase64": base64.b64encode(image).decode("ascii"),
+            "filename": "notice.png",
+        },
+        method="POST",
+    )
+
+    assert result["ok"] is True
+    assert result["method"] == "POST"
+    assert result["contents"] == ["text", "image"]
+    assert result["results"][0]["messageIds"] == ["message-1", "message-2"]
+    assert fake.calls == [
+        ("encrypted", fake.contact_mid, "caption"),
+        ("image", fake.contact_mid, image, "notice.png"),
+    ]
+
+
+def test_incoming_api_get_rejects_image_payload(web_state):
+    owner = _incoming_api_owner(web_state)
+    fake = _IncomingApiFake()
+    created = web_state.create_incoming_api_link(
+        {
+            "accountId": "incoming-account",
+            "name": "GET notifications",
+            "targets": [{"type": "contact", "mid": fake.contact_mid}],
+        },
+        owner,
+        fake,
+    )["link"]
+    link_id, token = created["endpointPath"].rsplit("/", 2)[-2:]
+    web_state.get_api = lambda account_id: fake
+
+    with pytest.raises(WebError) as invalid:
+        web_state.execute_incoming_api(
+            link_id,
+            token,
+            {"imageUrl": "https://example.com/photo.jpg"},
+            method="GET",
+        )
+    assert invalid.value.status == HTTPStatus.BAD_REQUEST
+
+
+def test_incoming_api_links_are_tenant_isolated(web_state):
+    owner = _incoming_api_owner(web_state)
+    other_token = web_state.web_auth.register("other@example.com", "other-pass", "Other")
+    other = web_state.web_auth.current_user(WebAuth.cookie_header(other_token))
+    assert other
+    fake = _IncomingApiFake()
+    created = web_state.create_incoming_api_link(
+        {
+            "accountId": "incoming-account",
+            "name": "Private link",
+            "targets": [{"type": "contact", "mid": fake.contact_mid}],
+            "active": False,
+        },
+        owner,
+        fake,
+    )["link"]
+
+    assert created["active"] is False
+    assert web_state.list_incoming_api_links("incoming-account", owner)["count"] == 1
+    with pytest.raises(WebError) as forbidden:
+        web_state.list_incoming_api_links("incoming-account", other)
+    assert forbidden.value.status == HTTPStatus.FORBIDDEN
+    with pytest.raises(WebError) as hidden:
+        web_state.update_incoming_api_link({"id": created["id"], "active": False}, other)
+    assert hidden.value.status == HTTPStatus.NOT_FOUND
+
+
+def test_external_incoming_api_route_needs_only_the_generated_secret(tmp_path, monkeypatch):
+    monkeypatch.delenv("OKLINE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    server = OkLineWebServer(("127.0.0.1", 0), OkLineWebHandler)
+    server.state = WebState(_make_config(tmp_path))
+    owner = _incoming_api_owner(server.state)
+    fake = _IncomingApiFake()
+    created = server.state.create_incoming_api_link(
+        {
+            "accountId": "incoming-account",
+            "name": "External system",
+            "targets": [{"type": "contact", "mid": fake.contact_mid}],
+        },
+        owner,
+        fake,
+    )["link"]
+    server.state.get_api = lambda account_id: fake
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        response = requests.get(
+            f"{base}{created['endpointPath']}",
+            params={"text": "sent with GET"},
+            headers={"Origin": "https://external.example"},
+            timeout=5,
+        )
+        assert response.status_code == HTTPStatus.OK
+        assert response.json()["sent"] == 1
+        assert response.json()["method"] == "GET"
+
+        image = b"external-image"
+        response = requests.post(
+            f"{base}{created['endpointPath']}",
+            json={
+                "imageBase64": base64.b64encode(image).decode("ascii"),
+                "filename": "external.png",
+            },
+            headers={"Origin": "https://external.example"},
+            timeout=5,
+        )
+        assert response.status_code == HTTPStatus.OK
+        assert response.json()["contents"] == ["image"]
+        assert fake.calls == [
+            ("plain", fake.contact_mid, "sent with GET"),
+            ("image", fake.contact_mid, image, "external.png"),
+        ]
+
+        protected = requests.get(
+            f"{base}/api/incoming-links?accountId=incoming-account", timeout=5
+        )
+        assert protected.status_code == HTTPStatus.UNAUTHORIZED
+    finally:
+        server.shutdown()
+        server.state.close()
+        server.server_close()
 
 
 def test_member_tenant_data_is_isolated_and_god_can_inspect(web_state):
@@ -795,12 +1208,8 @@ def test_member_tenant_data_is_isolated_and_god_can_inspect(web_state):
 
     web_state.create_pattern({"name": "A only", "text": "alpha"}, member_a)
     web_state.create_pattern({"name": "B only", "text": "beta"}, member_b)
-    assert [p["name"] for p in web_state.list_patterns(member_a)["patterns"]] == [
-        "A only"
-    ]
-    assert [p["name"] for p in web_state.list_patterns(member_b)["patterns"]] == [
-        "B only"
-    ]
+    assert [p["name"] for p in web_state.list_patterns(member_a)["patterns"]] == ["A only"]
+    assert [p["name"] for p in web_state.list_patterns(member_b)["patterns"]] == ["B only"]
 
     web_state.save_ai_settings(
         {"provider": "fal", "apiKey": "tenant-a-key", "model": "fal-ai/flux/dev"},
@@ -826,6 +1235,17 @@ def test_member_tenant_data_is_isolated_and_god_can_inspect(web_state):
     assert auth.can_access_account(member_a, account_id) is True
     assert auth.can_access_account(member_b, account_id) is False
 
+    fake = _IncomingApiFake()
+    web_state.create_incoming_api_link(
+        {
+            "accountId": account_id,
+            "name": "Member A API",
+            "targets": [{"type": "contact", "mid": fake.contact_mid}],
+        },
+        member_a,
+        fake,
+    )
+
     detail = web_state.user_detail(member_a["id"], god)
     assert detail["accounts"][0]["label"] == "Member A LINE"
     assert detail["patterns"][0]["name"] == "A only"
@@ -837,6 +1257,7 @@ def test_member_tenant_data_is_isolated_and_god_can_inspect(web_state):
     assert web_state.account_store.get(account_id) is None
     assert web_state.list_patterns(member_a)["patterns"] == []
     assert member_a["id"] not in web_state.store.get("ai_settings", {})["tenants"]
+    assert web_state.store.get("incoming_api", {"links": []})["links"] == []
 
 
 def test_delete_user_keeps_all_state_when_transaction_fails(web_state, monkeypatch):
@@ -915,9 +1336,7 @@ def test_web_managed_line_session_is_encrypted_and_loadable(web_state, tmp_path)
         api.close()
 
 
-def test_web_session_keeps_stored_e2ee_when_restored_key_cannot_export(
-    web_state, tmp_path
-):
+def test_web_session_keeps_stored_e2ee_when_restored_key_cannot_export(web_state, tmp_path):
     class RestoredE2EE:
         @staticmethod
         def is_ready():
@@ -953,9 +1372,7 @@ def test_web_session_keeps_stored_e2ee_when_restored_key_cannot_export(
         api.close()
 
 
-def test_legacy_web_session_migration_preserves_e2ee(
-    web_state, tmp_path, monkeypatch
-):
+def test_legacy_web_session_migration_preserves_e2ee(web_state, tmp_path, monkeypatch):
     from okline.session import Session
 
     token_file = tmp_path / "legacy-session.json"
@@ -1096,9 +1513,7 @@ def test_mark_messages_read_sends_line_read_receipt():
     handler = OkLineWebHandler.__new__(OkLineWebHandler)
     api = _RecentChatFakeApi()
 
-    result = handler._mark_messages_read(
-        api, {"chatMid": "u_new", "lastMessageId": "dm-1"}
-    )
+    result = handler._mark_messages_read(api, {"chatMid": "u_new", "lastMessageId": "dm-1"})
 
     assert result == {"ok": True, "chatMid": "u_new", "lastMessageId": "dm-1"}
     assert api.checked == ("u_new", "dm-1")
@@ -1110,6 +1525,27 @@ def test_web_ui_shows_unread_conversation_previews():
     assert "options.lastMessage ? contentLabel(options.lastMessage)" in INDEX_HTML
     assert 'await post("/api/messages/read"' in INDEX_HTML
     assert "function clearUnreadForTarget(mid)" in INDEX_HTML
+
+
+def test_chat_background_refresh_does_not_clear_or_jump_the_message_list():
+    assert 'id="messagesShell" aria-busy="false"' in INDEX_HTML
+    assert 'id="messagesLoading" role="status"' in INDEX_HTML
+    assert "function setMessagesLoading(loading)" in INDEX_HTML
+    assert "function messageRenderSignature(messages)" in INDEX_HTML
+    assert "function renderMessageRows(messages, accountId" in INDEX_HTML
+    assert "messageRenderSignatures: new Map()" in INDEX_HTML
+    assert "messageRequestSeq: 0" in INDEX_HTML
+    assert "state.messageLoading" in INDEX_HTML
+    assert "requestSeq !== state.messageRequestSeq" in INDEX_HTML
+    assert "signature !== previousSignature" in INDEX_HTML
+    assert "previousBottomDistance < 80" in INDEX_HTML
+
+    start = INDEX_HTML.index("async function loadMessages")
+    end = INDEX_HTML.index("async function sendText", start)
+    block = INDEX_HTML[start:end]
+    assert 'listLoading("messagesList")' not in block
+    assert "if (!silent)" in block
+    assert "toastError(err);" in block
 
 
 def test_web_ui_renders_line_media_and_structured_message_types():
@@ -1137,12 +1573,14 @@ def test_web_ui_combines_contacts_and_groups_in_leftmost_all_tab():
     assert 'contactsSubtab: "all"' in INDEX_HTML
     assert "function renderAllList()" in INDEX_HTML
     assert 'setContactsSubtab("all");' in INDEX_HTML
-    assert '.sort((a, b) => compareConversationItems(a.item, b.item))' in INDEX_HTML
+    assert ".sort((a, b) => compareConversationItems(a.item, b.item))" in INDEX_HTML
 
 
 def test_web_ui_notifies_only_after_conversation_baseline_is_ready():
     assert 'id="notificationButton"' in INDEX_HTML
-    assert INDEX_HTML.index('id="notificationButton"') < INDEX_HTML.index('id="refreshAllButton"')
+    assert INDEX_HTML.index('id="notificationButton"') < INDEX_HTML.index(
+        'id="refreshAllButton"'
+    )
     assert 'data-sound-status="idle"' in INDEX_HTML
     assert "Notification.requestPermission()" in INDEX_HTML
     assert 'navigator.serviceWorker.register("/service-worker.js")' in INDEX_HTML
@@ -1153,21 +1591,25 @@ def test_web_ui_notifies_only_after_conversation_baseline_is_ready():
     assert 'button.dataset.soundStatus = "played";' in INDEX_HTML
     assert 'button.dataset.soundStatus = "blocked";' in INDEX_HTML
     assert "function playNotificationSoundForItems(accountId, items)" in INDEX_HTML
-    assert "const permissionPromise = permission === \"default\"" in INDEX_HTML
+    assert 'const permissionPromise = permission === "default"' in INDEX_HTML
     assert "? Notification.requestPermission()" in INDEX_HTML
-    assert "if (permission !== \"granted\")" in INDEX_HTML
+    assert 'if (permission !== "granted")' in INDEX_HTML
     assert "state.notificationsEnabled = true;" in INDEX_HTML
     assert "const soundReady = soundUnlocked && await playNotificationSound();" in INDEX_HTML
-    assert "state.notificationsEnabled = saved === \"on\"" in INDEX_HTML
-    assert "&& Notification.permission === \"granted\";" in INDEX_HTML
-    assert "silent && previousMessageKey && lastMessageKey !== previousMessageKey" in INDEX_HTML
+    assert 'state.notificationsEnabled = saved === "on"' in INDEX_HTML
+    assert '&& Notification.permission === "granted";' in INDEX_HTML
+    assert (
+        "silent && previousMessageKey && lastMessageKey !== previousMessageKey" in INDEX_HTML
+    )
     assert "silent: false" in INDEX_HTML
     assert "vibrate: [100, 60, 100]" in INDEX_HTML
     assert "function processNewMessageNotifications(accountId, conversations)" in INDEX_HTML
     assert "state.notificationAccountId !== accountId" in INDEX_HTML
     assert "!state.conversationBaselineReady" in INDEX_HTML
     assert "processNewMessageNotifications(accountId, conversations);" in INDEX_HTML
-    assert 'document.title = unread ? `(${count}) LinePassport` : "LinePassport";' in INDEX_HTML
+    assert (
+        'document.title = unread ? `(${count}) LinePassport` : "LinePassport";' in INDEX_HTML
+    )
 
 
 def test_chat_images_open_in_accessible_modal_viewer():
@@ -1175,7 +1617,10 @@ def test_chat_images_open_in_accessible_modal_viewer():
     assert 'id="imageViewerImage"' in INDEX_HTML
     assert 'id="imageViewerOriginal"' in INDEX_HTML
     assert 'button.className = "msg-media-button";' in INDEX_HTML
-    assert "button.addEventListener(\"click\", () => openImageViewer(mediaSrc, img.alt));" in INDEX_HTML
+    assert (
+        'button.addEventListener("click", () => openImageViewer(mediaSrc, img.alt));'
+        in INDEX_HTML
+    )
     assert "function openImageViewer(src, alt)" in INDEX_HTML
     assert "function closeImageViewer()" in INDEX_HTML
     assert 'event.key === "Escape"' in INDEX_HTML
@@ -1193,11 +1638,10 @@ def test_notification_service_worker_is_public(live_server):
 def test_contacts_background_refresh_uses_lightweight_conversation_endpoint():
     assert "const CONVERSATION_BACKGROUND_REFRESH_MS = 8000;" in INDEX_HTML
     assert "function refreshConversationsInBackground()" in INDEX_HTML
-    assert 'api(`/api/conversations?${accountQuery(accountId)}&limit=1000`)' in INDEX_HTML
+    assert "api(`/api/conversations?${accountQuery(accountId)}&limit=1000`)" in INDEX_HTML
     assert "if (signature === state.conversationSignature) return;" in INDEX_HTML
     assert (
-        "setInterval(refreshConversationsInBackground, "
-        "CONVERSATION_BACKGROUND_REFRESH_MS);"
+        "setInterval(refreshConversationsInBackground, CONVERSATION_BACKGROUND_REFRESH_MS);"
     ) in INDEX_HTML
     start = INDEX_HTML.index("async function refreshConversationsInBackground")
     end = INDEX_HTML.index("function listLoading", start)
@@ -1445,12 +1889,10 @@ def test_sniff_content_type_detects_media_and_documents():
     assert webapp_module._sniff_content_type(b"nope") == "application/octet-stream"
     assert webapp_module._message_content_type(b"nope", "notes.txt") == "text/plain"
     assert (
-        webapp_module._message_content_type(b"\x00\x00\x00\x18ftypisom", "", 2)
-        == "video/mp4"
+        webapp_module._message_content_type(b"\x00\x00\x00\x18ftypisom", "", 2) == "video/mp4"
     )
     assert (
-        webapp_module._message_content_type(b"\x00\x00\x00\x18ftypM4A ", "", 3)
-        == "audio/mp4"
+        webapp_module._message_content_type(b"\x00\x00\x00\x18ftypM4A ", "", 3) == "audio/mp4"
     )
 
 
@@ -1615,9 +2057,7 @@ def test_message_summary_exposes_chat_event_names_instead_of_a_fake_file():
     }
 
     assert webapp_module._chat_event_mids(message) == [actor, member]
-    summary = webapp_module._message_summary(
-        None, message, {actor: "Alice", member: "Bob"}
-    )
+    summary = webapp_module._message_summary(None, message, {actor: "Alice", member: "Bob"})
 
     assert summary["eventKey"] == "C_GI"
     assert summary["eventNames"] == ["Alice", "Bob"]
@@ -1762,9 +2202,10 @@ def test_download_message_content_prefers_line_cdn_urls_for_plain_images(monkeyp
 
     monkeypatch.setattr(webapp_module, "_download_line_media_url", fake_download)
 
-    assert webapp_module._download_message_content(
-        Api(), "123", "Uchat", preview=True
-    ) == b"preview"
+    assert (
+        webapp_module._download_message_content(Api(), "123", "Uchat", preview=True)
+        == b"preview"
+    )
     assert webapp_module._download_message_content(Api(), "123", "Uchat") == b"full"
     assert calls == [
         "https://manager.line-scdn.net/image/preview",
@@ -1809,9 +2250,7 @@ def test_download_message_content_uses_account_session_for_plain_video(monkeypat
 
     monkeypatch.setattr(webapp_module, "_download_line_media_url", fake_download)
 
-    assert webapp_module._download_message_content(
-        Api(), "video-123", "Uchat"
-    ) == b"video"
+    assert webapp_module._download_message_content(Api(), "video-123", "Uchat") == b"video"
     assert calls == [("https://manager.line-scdn.net/video/full", session)]
 
 
@@ -1862,9 +2301,7 @@ def test_apply_placeholders_randomizes_each_occurrence():
 def test_message_patterns_crud(web_state):
     initial = web_state.list_patterns()
     assert initial["patterns"] == []
-    assert initial["categories"] == [
-        {"id": "general", "name": "General", "system": True}
-    ]
+    assert initial["categories"] == [{"id": "general", "name": "General", "system": True}]
     created = web_state.create_pattern({"name": "greeting", "text": "hi {1D}"})
     pid = created["pattern"]["id"]
     items = web_state.list_patterns()["patterns"]
@@ -1916,9 +2353,9 @@ def test_pattern_categories_group_and_move_patterns_to_general(web_state):
     assert listed["patterns"][0]["categoryId"] == category["id"]
     assert listed["patterns"][0]["categoryName"] == "Promotions"
 
-    updated = web_state.update_pattern_category(
-        {"id": category["id"], "name": "Campaigns"}
-    )["category"]
+    updated = web_state.update_pattern_category({"id": category["id"], "name": "Campaigns"})[
+        "category"
+    ]
     assert updated["name"] == "Campaigns"
     renamed = web_state.list_patterns()
     assert renamed["patterns"][0]["categoryName"] == "Campaigns"
@@ -1943,9 +2380,7 @@ def test_pattern_categories_are_tenant_owned(web_state):
     member_b = auth.current_user(WebAuth.cookie_header(token_b))
     assert member_a and member_b
 
-    category_a = web_state.create_pattern_category(
-        {"name": "Private A"}, member_a
-    )["category"]
+    category_a = web_state.create_pattern_category({"name": "Private A"}, member_a)["category"]
     pattern_a = web_state.create_pattern(
         {"name": "Member A pattern", "text": "private"}, member_a
     )["pattern"]
@@ -1992,9 +2427,7 @@ def test_bot_logs_record_schedule_and_pattern_actions(web_state):
     )
     web_state.delete_pattern(pattern["id"], "acct")
 
-    logs = web_state.list_bot_logs(
-        "acct", {"role": "admin", "accountIds": ["acct"]}
-    )["logs"]
+    logs = web_state.list_bot_logs("acct", {"role": "admin", "accountIds": ["acct"]})["logs"]
     assert [log["action"] for log in logs[:5]] == [
         "pattern.delete",
         "pattern.update",
@@ -2007,9 +2440,7 @@ def test_bot_logs_record_schedule_and_pattern_actions(web_state):
     scoped_admin = {"role": "admin", "accountIds": ["acct"]}
     cleared = web_state.clear_bot_logs("acct", scoped_admin)
     assert cleared["logs"][0]["action"] == "logs.clear"
-    assert web_state.list_bot_logs("acct", scoped_admin)["logs"][0]["action"] == (
-        "logs.clear"
-    )
+    assert web_state.list_bot_logs("acct", scoped_admin)["logs"][0]["action"] == ("logs.clear")
 
 
 def test_clear_stuck_schedules_resets_selected_account_only(web_state):
@@ -2072,9 +2503,7 @@ def test_clear_stuck_schedules_resets_selected_account_only(web_state):
     other = web_state._find_schedule(second["id"])
     assert other["running"] is True
     assert other["lastError"] == "stuck"
-    logs = web_state.list_bot_logs(
-        "acct", {"role": "admin", "accountIds": ["acct"]}
-    )["logs"]
+    logs = web_state.list_bot_logs("acct", {"role": "admin", "accountIds": ["acct"]})["logs"]
     assert logs[0]["action"] == "schedule.clear_stuck"
 
 
@@ -2083,8 +2512,7 @@ def test_bot_log_detail_sanitizes_long_line_media_urls(web_state):
         "send.item.error",
         account_id="acct",
         detail=(
-            "request to https://obs.line-apps.com/r/talk/m/622310832885727233 "
-            "failed: timeout"
+            "request to https://obs.line-apps.com/r/talk/m/622310832885727233 failed: timeout"
         ),
     )
 
@@ -2114,9 +2542,9 @@ def test_bot_log_listing_sanitizes_existing_raw_details(web_state):
         },
     )
 
-    detail = web_state.list_bot_logs(
-        "acct", {"role": "admin", "accountIds": ["acct"]}
-    )["logs"][0]["detail"]
+    detail = web_state.list_bot_logs("acct", {"role": "admin", "accountIds": ["acct"]})[
+        "logs"
+    ][0]["detail"]
     assert "obs.line-apps.com" in detail
     assert "622310832885727233" not in detail
 
@@ -2146,9 +2574,9 @@ def test_bot_log_preserves_full_ai_prompt(web_state):
     )
     web_state.store.set("bot_logs", {"logs": [entry]})
 
-    listed = web_state.list_bot_logs(
-        "acct", {"role": "admin", "accountIds": ["acct"]}
-    )["logs"][0]
+    listed = web_state.list_bot_logs("acct", {"role": "admin", "accountIds": ["acct"]})[
+        "logs"
+    ][0]
 
     assert len(prompt) > 500
     assert listed["detail"] == prompt
@@ -2317,8 +2745,7 @@ def test_schedule_embedded_image_quota_counts_existing_jobs(monkeypatch):
 def test_bot_log_retention_honors_total_byte_cap(monkeypatch):
     monkeypatch.setattr(webapp_module, "MAX_BOT_LOG_STORAGE_BYTES", 250)
     logs = [
-        {"id": str(index), "accountId": "acct", "detail": "x" * 100}
-        for index in range(10)
+        {"id": str(index), "accountId": "acct", "detail": "x" * 100} for index in range(10)
     ]
 
     kept = webapp_module._trim_bot_logs(logs)
@@ -2357,6 +2784,26 @@ def test_simple_mode_auto_provisions_over_http(live_server):
     # The Set-Cookie from status auto-authenticates later protected calls.
     accounts = session.get(f"{live_server}/api/accounts", timeout=5)
     assert accounts.status_code == 200
+
+
+def test_authenticated_http_api_rate_limit_returns_retry_after(
+    live_server, monkeypatch
+):
+    monkeypatch.setitem(
+        webapp_module.AUTHENTICATED_API_RATE_LIMITS,
+        ("GET", "/api/status"),
+        (2, 60.0),
+    )
+    session = requests.Session()
+    session.get(f"{live_server}/api/auth/status", timeout=5)
+
+    assert session.get(f"{live_server}/api/status", timeout=5).status_code == 200
+    assert session.get(f"{live_server}/api/status", timeout=5).status_code == 200
+    blocked = session.get(f"{live_server}/api/status", timeout=5)
+
+    assert blocked.status_code == HTTPStatus.TOO_MANY_REQUESTS
+    assert blocked.json()["code"] == "api_rate_limited"
+    assert int(blocked.headers["Retry-After"]) >= 1
 
 
 def test_protected_route_returns_error_and_code(live_server):
@@ -2453,6 +2900,25 @@ def test_web_ui_has_bot_ai_settings_page_and_source():
     assert 'value="ai_image"' in INDEX_HTML
     assert 'id="scheduleAiPrompt"' in INDEX_HTML
     assert '"scheduler.source_ai_image"' in INDEX_HTML
+
+
+def test_assistant_has_an_in_app_usage_guide():
+    assert 'data-assistant-view-target="guide"' in INDEX_HTML
+    assert 'data-assistant-view="guide"' in INDEX_HTML
+    assert 'id="assistantGuideKnowledgeButton"' in INDEX_HTML
+    assert 'id="assistantGuideChatButton"' in INDEX_HTML
+    assert 'assistant.guide_step_4_body' in INDEX_HTML
+
+
+def test_bot_has_an_in_app_usage_guide():
+    assert 'data-bot-page-target="guide"' in INDEX_HTML
+    assert 'data-bot-page="guide"' in INDEX_HTML
+    assert 'id="botGuideScheduleButton"' in INDEX_HTML
+    assert 'id="botGuidePatternsButton"' in INDEX_HTML
+    assert 'id="botGuideLogsButton"' in INDEX_HTML
+    assert 'id="botGuideAiButton"' in INDEX_HTML
+    assert '"bot.guide_step_5_body"' in INDEX_HTML
+    assert '"ai-settings", "guide"' in INDEX_HTML
 
 
 def test_web_ui_bot_dates_display_dd_mm_yyyy():
@@ -2605,7 +3071,9 @@ def test_resolve_job_contents_ai_image_logs_generation_steps(monkeypatch):
     def log(action, detail="", ok=True, data=None):
         events.append((action, detail, ok, data or {}))
 
-    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
+    def fake_post(
+        url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None
+    ):
         calls["post"] += 1
 
         class R:
@@ -2616,7 +3084,9 @@ def test_resolve_job_contents_ai_image_logs_generation_steps(monkeypatch):
 
         return R()
 
-    def fake_get(url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None):
+    def fake_get(
+        url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None
+    ):
         calls["get"] += 1
         flag = 0 if calls["get"] == 1 else 1
 
@@ -2639,7 +3109,9 @@ def test_resolve_job_contents_ai_image_logs_generation_steps(monkeypatch):
     monkeypatch.setattr(webapp_module.requests, "post", fake_post)
     monkeypatch.setattr(webapp_module.requests, "get", fake_get)
     monkeypatch.setattr(webapp_module.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(webapp_module, "_download_image", lambda url: (b"\x89PNG\r\n\x1a\nX", "out.png"))
+    monkeypatch.setattr(
+        webapp_module, "_download_image", lambda url: (b"\x89PNG\r\n\x1a\nX", "out.png")
+    )
 
     prompt = ("a cat with complete campaign details " * 20).strip()
     items = webapp_module._resolve_job_contents(
@@ -2725,7 +3197,9 @@ def test_generate_ai_image_extracts_inline_image(monkeypatch):
                 ]
             }
 
-    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
+    def fake_post(
+        url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None
+    ):
         captured.update(url=url, body=json, headers=headers, timeout=timeout)
         return _Resp()
 
@@ -2743,9 +3217,7 @@ def test_generate_ai_image_extracts_inline_image(monkeypatch):
     assert res["data"] == b"PNG-BYTES"
     assert res["mime"] == "image/png"
     assert res["name"] == "gemini-image.png"
-    assert captured["url"].endswith(
-        "/v1beta/models/gemini-2.5-flash-image:generateContent"
-    )
+    assert captured["url"].endswith("/v1beta/models/gemini-2.5-flash-image:generateContent")
     assert captured["headers"]["x-goog-api-key"] == "secret"
     expected_prompt = webapp_module._prepare_ai_image_prompt("a cat")
     assert captured["body"]["contents"][0]["parts"][0]["text"] == expected_prompt
@@ -2787,7 +3259,9 @@ def test_generate_ai_image_surfaces_upstream_error(monkeypatch):
 def test_generate_nbapi_image_polls_then_downloads(monkeypatch):
     calls = {"post": 0, "get": 0}
 
-    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
+    def fake_post(
+        url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None
+    ):
         calls["post"] += 1
         assert url.endswith("/api/v1/nanobanana/generate")
         assert headers["Authorization"] == "Bearer nb-key"
@@ -2804,7 +3278,9 @@ def test_generate_nbapi_image_polls_then_downloads(monkeypatch):
 
         return R()
 
-    def fake_get(url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None):
+    def fake_get(
+        url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None
+    ):
         calls["get"] += 1
         assert url.endswith("/api/v1/nanobanana/record-info")
         assert params["taskId"] == "t-1"
@@ -2863,7 +3339,9 @@ def test_generate_nbapi_image_uses_selected_model_endpoint(
 ):
     captured = {}
 
-    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
+    def fake_post(
+        url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None
+    ):
         captured.update(url=url, body=json)
 
         class R:
@@ -2874,7 +3352,9 @@ def test_generate_nbapi_image_uses_selected_model_endpoint(
 
         return R()
 
-    def fake_get(url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None):
+    def fake_get(
+        url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None
+    ):
         class R:
             status_code = 200
 
@@ -2892,7 +3372,9 @@ def test_generate_nbapi_image_uses_selected_model_endpoint(
     monkeypatch.setattr(webapp_module.requests, "post", fake_post)
     monkeypatch.setattr(webapp_module.requests, "get", fake_get)
     monkeypatch.setattr(webapp_module.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(webapp_module, "_download_image", lambda url: (b"\xff\xd8\xff\xe0", "out.jpg"))
+    monkeypatch.setattr(
+        webapp_module, "_download_image", lambda url: (b"\xff\xd8\xff\xe0", "out.jpg")
+    )
 
     res = webapp_module._generate_ai_image(
         "a dog",
@@ -2940,7 +3422,10 @@ def test_generate_nbapi_image_reports_generation_failure(monkeypatch):
             status_code = 200
 
             def json(self):
-                return {"code": 200, "data": {"successFlag": 3, "errorMessage": "nsfw blocked"}}
+                return {
+                    "code": 200,
+                    "data": {"successFlag": 3, "errorMessage": "nsfw blocked"},
+                }
 
         return R()
 
@@ -2973,7 +3458,9 @@ def test_generate_fal_image_uses_queue_and_downloads_result(monkeypatch):
         def raise_for_status(self):
             return None
 
-    def fake_post(url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None):
+    def fake_post(
+        url, json=None, headers=None, timeout=None, stream=None, allow_redirects=None
+    ):
         captured.update(url=url, body=json, headers=headers, timeout=timeout)
         return JsonResponse(
             202,
@@ -2984,7 +3471,9 @@ def test_generate_fal_image_uses_queue_and_downloads_result(monkeypatch):
             },
         )
 
-    def fake_get(url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None):
+    def fake_get(
+        url, params=None, headers=None, timeout=None, stream=None, allow_redirects=None
+    ):
         if "/status/" in url:
             calls["status"] += 1
             status = "IN_PROGRESS" if calls["status"] == 1 else "COMPLETED"
@@ -3086,15 +3575,14 @@ def test_fal_model_catalog_has_labels_prices_and_valid_payloads():
         payload = webapp_module._fal_model_payload("draw", model, "landscape_16_9")
         assert payload["prompt"] == "draw"
         assert payload["num_images"] == 1
-        assert payload.get("image_size") == "landscape_16_9" or payload.get(
-            "aspect_ratio"
-        ) == "16:9"
+        assert (
+            payload.get("image_size") == "landscape_16_9"
+            or payload.get("aspect_ratio") == "16:9"
+        )
 
 
 def test_fal_model_payload_adapts_model_specific_schemas():
-    nano = webapp_module._fal_model_payload(
-        "draw", "fal-ai/nano-banana-2", "portrait_16_9"
-    )
+    nano = webapp_module._fal_model_payload("draw", "fal-ai/nano-banana-2", "portrait_16_9")
     assert nano["aspect_ratio"] == "9:16"
     assert nano["resolution"] == "1K"
     assert "image_size" not in nano
@@ -3164,7 +3652,10 @@ def test_ai_settings_save_mask_and_clear(web_state):
     # A blank key on save keeps the stored one but still updates the model.
     web_state.save_ai_settings({"model": "gemini-2.5-flash-image-preview"})
     assert web_state.ai_settings(reveal=True)["apiKey"] == "abcd1234wxyz"
-    assert web_state.ai_settings()["providers"]["google"]["model"] == "gemini-2.5-flash-image-preview"
+    assert (
+        web_state.ai_settings()["providers"]["google"]["model"]
+        == "gemini-2.5-flash-image-preview"
+    )
 
     # Explicit clear wipes the key.
     web_state.save_ai_settings({"clearApiKey": True})
