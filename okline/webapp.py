@@ -571,6 +571,63 @@ INDEX_HTML = r"""<!doctype html>
       color: #65d987;
     }
 
+    .activity-log-inner { width: min(1120px, 100%); }
+
+    .activity-log-heading {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .activity-log-heading h2 { margin: 0; }
+
+    .activity-log-toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(150px, 190px) minmax(150px, 190px);
+      gap: 10px;
+      margin-bottom: 12px;
+      align-items: end;
+    }
+
+    .activity-log-toolbar label {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .activity-log-toolbar input,
+    .activity-log-toolbar select { width: 100%; }
+
+    .activity-log-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .activity-log-summary .pill {
+      min-height: 30px;
+      padding-inline: 10px;
+    }
+
+    .bot-log-item .log-category {
+      flex: 0 0 auto;
+      border: 1px solid #425168;
+      border-radius: 999px;
+      padding: 1px 7px;
+      color: #aebbd0;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .bot-log-item .log-category[data-category="bot"] { color: #81dfa0; border-color: #34704a; }
+    .bot-log-item .log-category[data-category="ai"] { color: #a9c7ff; border-color: #456596; }
+    .bot-log-item .log-category[data-category="api"] { color: #ffd18b; border-color: #7a5b30; }
+
     .mono {
       font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
       font-size: 12px;
@@ -1042,7 +1099,7 @@ INDEX_HTML = r"""<!doctype html>
       overflow: hidden;
     }
 
-    /* Top-level tab bar (LINE / Tools / Bot). */
+    /* Top-level workspace navigation. */
     .tabbar {
       display: flex;
       flex-wrap: wrap;
@@ -1095,6 +1152,7 @@ INDEX_HTML = r"""<!doctype html>
 
     .tab-panel[data-tab-panel="tools"].active,
     .tab-panel[data-tab-panel="bot"].active,
+    .tab-panel[data-tab-panel="logs"].active,
     .tab-panel[data-tab-panel="assistant"].active,
     .tab-panel[data-tab-panel="incoming-api"].active,
     .tab-panel[data-tab-panel="ai"].active {
@@ -1293,6 +1351,38 @@ INDEX_HTML = r"""<!doctype html>
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+    .guide-panel-inner { width: min(920px, 100%); }
+    .guide-section-nav {
+      width: min(920px, 100%);
+      margin: 0 auto;
+      border-bottom: 1px solid var(--line);
+    }
+    .line-guide-view {
+      grid-column: 1 / -1;
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      padding: 16px;
+      overflow: auto;
+      background: var(--bg);
+    }
+    .tab-panel[data-tab-panel="line"].guide-active {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .tab-panel[data-tab-panel="line"].guide-active > .line-list,
+    .tab-panel[data-tab-panel="line"].guide-active > .line-convo {
+      display: none;
+    }
+    .usage-guide-term {
+      display: grid;
+      grid-template-columns: minmax(110px, 180px) minmax(0, 1fr);
+      gap: 16px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .usage-guide-term:last-child { border-bottom: 0; }
+    .usage-guide-term strong { color: var(--ink); }
+    .usage-guide-term span { color: var(--muted); }
     @media (max-width: 720px) {
       .assistant-knowledge-grid { grid-template-columns: 1fr; }
       .assistant-knowledge-grid .wide { grid-column: auto; }
@@ -1302,6 +1392,8 @@ INDEX_HTML = r"""<!doctype html>
       .assistant-auto-reply-error { grid-column: auto; }
       .usage-guide-actions { display: grid; }
       .usage-guide-actions button { width: 100%; }
+      .line-guide-view { padding: 12px; }
+      .usage-guide-term { grid-template-columns: 1fr; gap: 3px; }
     }
 
     .incoming-api-inner { width: min(980px, 100%); }
@@ -2976,6 +3068,9 @@ INDEX_HTML = r"""<!doctype html>
         white-space: nowrap;
       }
 
+      .activity-log-toolbar { grid-template-columns: 1fr 1fr; }
+      .activity-log-toolbar label:first-child { grid-column: 1 / -1; }
+
       .top-actions {
         flex-wrap: nowrap;
         width: 100%;
@@ -3159,6 +3254,7 @@ INDEX_HTML = r"""<!doctype html>
             <button id="passwordTabButton" data-settings-pane="password" data-i18n="topbar.change_password">Change Password</button>
             <button id="accountsTabButton" data-settings-pane="accounts" data-i18n="topbar.line_account_management">LINE Account Management</button>
             <button id="usersTabButton" data-settings-pane="users" data-i18n="topbar.user_management">User Management</button>
+            <button id="settingsGuideTabButton" data-settings-pane="guide" data-i18n="settings.nav_guide">วิธีใช้</button>
           </div>
 
           <div class="settings-pane" id="passwordPane">
@@ -3229,6 +3325,30 @@ INDEX_HTML = r"""<!doctype html>
               <button id="createUserButton" class="primary" data-i18n="users.create">Create User</button>
             </div>
             <div class="management-list" id="userList"></div>
+          </div>
+
+          <div class="settings-pane" id="settingsGuidePane">
+            <section>
+              <div class="section-head"><div class="usage-guide-intro"><h3 data-i18n="settings.guide_title">วิธีใช้เมนูตั้งค่า</h3><span class="muted" data-i18n="settings.guide_subtitle">จัดการรหัสผ่าน บัญชี LINE และสิทธิ์ผู้ใช้โดยไม่ทำข้อมูลข้ามกัน</span></div></div>
+              <div class="section-body">
+                <ol class="usage-guide-steps">
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">1</span><div><strong data-i18n="settings.guide_password_title">เปลี่ยนรหัสผ่านเว็บ</strong><p data-i18n="settings.guide_password_body">ใส่รหัสปัจจุบัน รหัสใหม่ 8-128 ตัวอักษร และยืนยันรหัสใหม่ให้ตรงกัน รหัสนี้ใช้เข้า LinePassport ไม่ใช่รหัสผ่าน LINE</p></div></li>
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">2</span><div><strong data-i18n="settings.guide_account_title">เพิ่มบัญชี LINE</strong><p data-i18n="settings.guide_account_body">ไปที่ “จัดการบัญชี LINE” กด “เพิ่มบัญชี” แล้วทำ 4 ขั้นตอน: เริ่ม → สแกน QR → ยืนยัน PIN บนมือถือเมื่อ LINE ขอ → รอเสร็จสิ้น ระบบจะดึงชื่อที่แสดงจาก LINE ให้อัตโนมัติ</p></div></li>
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">3</span><div><strong data-i18n="settings.guide_proxy_title">ใช้ Proxy เฉพาะเมื่อจำเป็น</strong><p data-i18n="settings.guide_proxy_body">เปิด Proxy ก่อนกดเริ่ม แล้วกรอกประเภท Host และ Port; Username/Password ใส่เมื่อผู้ให้บริการกำหนด Proxy จะผูกกับบัญชี LINE นี้เท่านั้น กรอกผิดจะทำให้ QR หรือการส่งข้อความล้มเหลว</p></div></li>
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">4</span><div><strong data-i18n="settings.guide_manage_account_title">แก้ชื่อหรือลบบัญชี</strong><p data-i18n="settings.guide_manage_account_body">แก้ชื่อเพื่อช่วยแยกหลายบัญชีได้โดยไม่เปลี่ยนชื่อจริงใน LINE การลบบัญชีจะลบเซสชันออกจากพื้นที่ผู้ใช้นี้และพักงานตั้งเวลาของบัญชีนั้น ควรตรวจงานก่อนยืนยัน</p></div></li>
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">5</span><div><strong data-i18n="settings.guide_users_title">จัดการผู้ใช้และบทบาท</strong><p data-i18n="settings.guide_users_body">เมนูนี้แสดงเฉพาะผู้มีสิทธิ์ ผู้ใช้ใหม่มีพื้นที่ส่วนตัวแบบคลีนและต้องเพิ่ม LINE ของตนเอง กำหนดบทบาทตามงานที่ต้องทำ และปิดใช้งานบัญชีแทนการลบเมื่อยังต้องเก็บประวัติ</p></div></li>
+                </ol>
+              </div>
+            </section>
+            <section>
+              <div class="section-head"><h3 data-i18n="settings.guide_roles_title">เลือกบทบาทอย่างไร</h3></div>
+              <div class="section-body usage-guide-notes">
+                <div class="usage-guide-note"><strong>Admin</strong><span class="muted" data-i18n="settings.guide_admin_body">เหมาะกับเจ้าของพื้นที่หรือผู้ดูแลที่ต้องตั้งค่าบัญชี ผู้ใช้ บอท API และ AI ภายในขอบเขตที่ระบบอนุญาต</span></div>
+                <div class="usage-guide-note"><strong>Operator</strong><span class="muted" data-i18n="settings.guide_operator_body">เหมาะกับผู้ปฏิบัติงานที่ต้องอ่าน ส่งข้อความ และดูแลตารางส่ง แต่ไม่ควรเปลี่ยนการตั้งค่าระบบหรือจัดการสมาชิก</span></div>
+                <div class="usage-guide-note"><strong>Viewer</strong><span class="muted" data-i18n="settings.guide_viewer_body">เหมาะกับผู้ตรวจสอบที่ต้องดูข้อมูลและ Log โดยไม่แก้ไขหรือส่งข้อความ</span></div>
+                <div class="usage-guide-note"><strong data-i18n="settings.guide_isolation_title">ข้อมูลของสมาชิกแยกจากกัน</strong><span class="muted" data-i18n="settings.guide_isolation_body">บัญชี LINE, Pattern, ตารางส่ง, Incoming API, AI Settings และ Knowledge ของผู้ใช้หนึ่งจะไม่ถูกแชร์ให้อีกผู้ใช้โดยอัตโนมัติ God ใช้หน้าจัดการระบบเพื่อตรวจรายละเอียดได้</span></div>
+              </div>
+            </section>
           </div>
         </div>
       </section>
@@ -3343,10 +3463,11 @@ INDEX_HTML = r"""<!doctype html>
           <button class="tab" id="tabIncomingApi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelIncomingApi" data-tab="incoming-api" data-requires-permission="manage_api" data-i18n="tabs.incoming_api">API</button>
           <button class="tab" id="tabTools" type="button" role="tab" aria-selected="false" aria-controls="tabPanelTools" data-tab="tools" data-i18n="tabs.tools">Tools</button>
           <button class="tab" id="tabBot" type="button" role="tab" aria-selected="false" aria-controls="tabPanelBot" data-tab="bot" data-i18n="tabs.bot">Bot</button>
+          <button class="tab" id="tabLogs" type="button" role="tab" aria-selected="false" aria-controls="tabPanelLogs" data-tab="logs" data-requires-permission="read" data-i18n="tabs.logs">Logs</button>
         </div>
         <div class="tab-panels">
           <div class="tab-panel active" data-tab-panel="line" id="tabPanelLine" role="tabpanel" aria-labelledby="tabLine">
-        <aside class="line-list">
+        <aside class="line-list" id="lineListPanel">
           <div class="line-me">
             <div class="avatar avatar-lg" id="profileAvatar" aria-hidden="true"></div>
             <button class="line-me-info" id="profileDetailsToggle" type="button" aria-expanded="false" aria-controls="profileDetailsPanel" data-i18n-title="profile.show_details" title="Show account details">
@@ -3385,13 +3506,14 @@ INDEX_HTML = r"""<!doctype html>
           <div class="line-rows group-list hidden" id="groupsList"></div>
         </aside>
 
-        <section class="line-convo">
+        <section class="line-convo" id="lineConversationPanel">
           <header class="convo-header">
             <div class="convo-title">
               <h2 id="chatTitle" data-i18n="chat.title">Chat</h2>
               <span id="targetLabel" class="convo-sub" data-i18n="chat.no_target">No target selected</span>
             </div>
             <div class="convo-actions">
+              <button class="icon-ghost" id="lineGuideButton" type="button" data-i18n-title="line_guide.open" title="Usage guide" aria-label="Usage guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.7 2c-1 .6-1.5 1.1-1.5 2.2"/><path d="M12 17h.01"/></svg></button>
               <button class="icon-ghost" id="reloadMessagesButton" type="button" data-requires-account data-requires-permission="read" data-i18n-title="chat.refresh" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.9 6.3"/><path d="M20 5v5h-5"/></svg></button>
               <button class="icon-ghost" type="button" data-i18n-title="convo.menu" title="Menu" aria-label="Menu"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
             </div>
@@ -3423,6 +3545,50 @@ INDEX_HTML = r"""<!doctype html>
             <button class="send-btn" id="sendButton" type="button" data-requires-account data-requires-permission="send" data-i18n-title="chat.send" title="Send" aria-label="Send"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4l17.4-8a1 1 0 0 0 0-1.8l-17.4-8A1 1 0 0 0 2 3.5L4 11l10 1-10 1-2 7.5a1 1 0 0 0 1.4 1z"/></svg></button>
           </div>
         </section>
+        <div class="line-guide-view hidden" id="lineGuideView">
+          <div class="tab-panel-inner guide-panel-inner">
+            <section class="section">
+              <div class="section-head">
+                <div class="usage-guide-intro">
+                  <h2 data-i18n="line_guide.title">เริ่มใช้งาน LINE</h2>
+                  <span class="muted" data-i18n="line_guide.subtitle">อ่านรายชื่อ เปิดแชท และส่งข้อความจากบัญชี LINE ที่เลือกอย่างปลอดภัย</span>
+                </div>
+                <button id="lineGuideBackButton" type="button" data-i18n="common.back">กลับ</button>
+              </div>
+              <div class="section-body">
+                <ol class="usage-guide-steps">
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">1</span><div><strong data-i18n="line_guide.step_1_title">เลือกบัญชี LINE ด้านบน</strong><p data-i18n="line_guide.step_1_body">ทุกอย่างในหน้านี้ใช้เฉพาะบัญชีที่เลือก ตรวจป้ายสถานะให้ขึ้น “เชื่อมต่อแล้ว” และ “พร้อมส่งข้อความ” ก่อนเริ่ม หากยังไม่มีบัญชี ให้เพิ่มจาก ตั้งค่า → จัดการบัญชี LINE</p></div></li>
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">2</span><div><strong data-i18n="line_guide.step_2_title">หารายชื่อหรือกลุ่ม</strong><p data-i18n="line_guide.step_2_body">แท็บ “ทั้งหมด” รวมรายชื่อและกลุ่มไว้ด้วยกัน หรือเลือกดูเฉพาะ “รายชื่อ” และ “กลุ่ม” ใช้ช่องค้นหาชื่อ และกดปุ่มรีเฟรชเมื่อเพิ่งเพิ่มเพื่อนหรือเข้ากลุ่มใหม่</p></div></li>
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">3</span><div><strong data-i18n="line_guide.step_3_title">เปิดบทสนทนา</strong><p data-i18n="line_guide.step_3_body">กดรายการที่ต้องการเพื่อเปิดข้อความ รายการจะเรียงตามการติดต่อล่าสุดและแสดงจำนวนที่ยังไม่อ่าน หน้าที่เปิดอยู่จะตรวจข้อความใหม่เป็นระยะโดยไม่ต้องกดรีเฟรชเอง</p></div></li>
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">4</span><div><strong data-i18n="line_guide.step_4_title">ส่งข้อความหรือไฟล์</strong><p data-i18n="line_guide.step_4_body">พิมพ์ข้อความแล้วกดปุ่มส่งสีเขียว หรือกด Enter; ใช้ Shift+Enter เพื่อขึ้นบรรทัดใหม่ ปุ่มคลิปหนีบใช้ส่งไฟล์ ปุ่มรูปใช้ส่งรูป และปุ่มรูปกุญแจใช้ส่งข้อความปัจจุบันแบบเข้ารหัส</p></div></li>
+                  <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">5</span><div><strong data-i18n="line_guide.step_5_title">เปิดการแจ้งเตือนข้อความใหม่</strong><p data-i18n="line_guide.step_5_body">กดรูประฆังด้านบนแล้วอนุญาต Notification และเสียงในเบราว์เซอร์ ต้องกดเปิดด้วยตัวเองอย่างน้อยหนึ่งครั้ง หากเคยกดบล็อก ให้เปลี่ยนสิทธิ์จากการตั้งค่าเว็บไซต์ของเบราว์เซอร์</p></div></li>
+                </ol>
+                <div class="usage-guide-actions">
+                  <button class="primary" id="lineGuideOpenChatButton" type="button" data-i18n="line_guide.open_chat">กลับไปหน้ารายชื่อและแชท</button>
+                  <button id="lineGuideNotificationButton" type="button" data-i18n="line_guide.enable_notifications">เปิดการแจ้งเตือน</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-head"><h2 data-i18n="line_guide.media_title">ข้อความแต่ละชนิดจะแสดงอย่างไร</h2></div>
+              <div class="section-body usage-guide-notes">
+                <div class="usage-guide-note"><strong data-i18n="line_guide.image_title">รูปภาพ</strong><span class="muted" data-i18n="line_guide.image_body">รูปที่ระบบอ่านได้จะแสดงในแชทและกดเพื่อขยายเต็มจอได้ หาก LINE เข้ารหัสสื่อชนิดนั้นและระบบถอดไม่ได้ จะมีข้อความให้เปิดดูในแอป LINE</span></div>
+                <div class="usage-guide-note"><strong data-i18n="line_guide.video_title">วิดีโอ เสียง และไฟล์</strong><span class="muted" data-i18n="line_guide.video_body">วิดีโอและเสียงที่ดาวน์โหลดได้จะมีตัวเล่น ส่วนไฟล์จะแสดงชื่อและปุ่มดาวน์โหลด เนื้อหาที่หมดอายุหรือเข้ารหัสอาจต้องเปิดจาก LINE บนมือถือ</span></div>
+                <div class="usage-guide-note"><strong data-i18n="line_guide.location_title">ตำแหน่งที่ตั้งและรายชื่อผู้ติดต่อ</strong><span class="muted" data-i18n="line_guide.location_body">ตำแหน่งจะแสดงชื่อสถานที่ พิกัด และปุ่มเปิดแผนที่ ส่วนข้อมูลผู้ติดต่อสามารถกดเปิดแชทได้เมื่อ LINE ส่งรหัสปลายทางมาครบ</span></div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-head"><h2 data-i18n="line_guide.troubleshoot_title">เมื่อใช้งานไม่ได้ ให้ตรวจตามนี้</h2></div>
+              <div class="section-body usage-guide-notes">
+                <div class="usage-guide-note"><strong data-i18n="line_guide.no_contacts_title">ไม่พบรายชื่อหรือข้อความไม่อัปเดต</strong><span class="muted" data-i18n="line_guide.no_contacts_body">ตรวจว่าบัญชีด้านบนถูกต้อง กดรีเฟรชหนึ่งครั้ง และดูสถานะการเชื่อมต่อ หากเซสชันหมดอายุให้ลบบัญชีเดิมแล้วเพิ่มบัญชี LINE ใหม่</span></div>
+                <div class="usage-guide-note"><strong data-i18n="line_guide.send_error_title">ส่งข้อความหรือสื่อไม่สำเร็จ</strong><span class="muted" data-i18n="line_guide.send_error_body">ลองส่งข้อความธรรมดาก่อน ตรวจอินเทอร์เน็ตและ Proxy ของบัญชี แล้วเปิดเมนู Log เพื่อดูข้อความผิดพลาดแบบเต็ม โดยเฉพาะ SSL, session expired หรือ media upload failed</span></div>
+                <div class="usage-guide-note"><strong data-i18n="line_guide.scope_title">ข้อมูลไม่ข้ามบัญชี</strong><span class="muted" data-i18n="line_guide.scope_body">เมื่อเปลี่ยนบัญชี LINE รายชื่อ แชท บอท API และ Log จะเปลี่ยนตามบัญชีที่เลือก และไม่ไปแก้ข้อมูลของบัญชีอื่น</span></div>
+              </div>
+            </section>
+          </div>
+        </div>
           </div>
 
           <div class="tab-panel" data-tab-panel="assistant" id="tabPanelAssistant" role="tabpanel" aria-labelledby="tabAssistant">
@@ -3479,7 +3645,7 @@ INDEX_HTML = r"""<!doctype html>
                   <div class="section-head">
                     <div>
                       <h2 data-i18n="assistant.auto_reply_title">ตอบ LINE อัตโนมัติ</h2>
-                      <span class="muted" data-i18n="assistant.auto_reply_hint">ใช้ AI และ Knowledge / RAG ของคุณตอบเฉพาะข้อความใหม่ในบัญชี LINE ที่เลือก</span>
+                      <span class="muted" data-i18n="assistant.auto_reply_hint">ทำงานบนเซิร์ฟเวอร์ตลอดเวลาแม้ปิดหน้าเว็บ โดยใช้ AI และ Knowledge / RAG ตอบเฉพาะข้อความใหม่</span>
                     </div>
                     <div class="row compact">
                       <span class="pill" id="assistantAutoReplyStatus" data-i18n="assistant.auto_reply_off">ปิดอยู่</span>
@@ -3594,7 +3760,7 @@ INDEX_HTML = r"""<!doctype html>
                   <div class="section-head">
                     <div class="usage-guide-intro">
                       <h2 data-i18n="assistant.guide_title">เริ่มใช้งาน AI Chat Bot</h2>
-                      <span class="muted" data-i18n="assistant.guide_subtitle">เตรียม Knowledge แล้วถาม AI จากข้อมูลของคุณตาม 4 ขั้นตอน</span>
+                      <span class="muted" data-i18n="assistant.guide_subtitle">ตั้งค่า Knowledge ทดสอบคำตอบ และเปิดตอบ LINE อัตโนมัติอย่างเป็นขั้นตอน</span>
                     </div>
                   </div>
                   <div class="section-body">
@@ -3615,10 +3781,20 @@ INDEX_HTML = r"""<!doctype html>
                         <span class="usage-guide-number" aria-hidden="true">4</span>
                         <div><strong data-i18n="assistant.guide_step_4_title">ถามให้ชัดเจนแล้วตรวจแหล่งข้อมูล</strong><p data-i18n="assistant.guide_step_4_body">ถามคำถามที่เกี่ยวข้องกับ Knowledge ระบบจะแสดงคำตอบพร้อมแหล่งข้อมูล หากตอบไม่ได้ คำถามจะถูกส่งให้ Admin ตรวจสอบ</p></div>
                       </li>
+                      <li class="usage-guide-step">
+                        <span class="usage-guide-number" aria-hidden="true">5</span>
+                        <div><strong data-i18n="assistant.guide_step_5_title">ทดสอบก่อนเปิดตอบ LINE อัตโนมัติ</strong><p data-i18n="assistant.guide_step_5_body">ถามคำถามตัวอย่างในหน้าแชทหลายแบบจนคำตอบถูกต้อง แล้วไปที่ “ตอบ LINE อัตโนมัติ” เลือกบัญชี LINE เปิดสวิตช์หลัก และเลือกว่าจะตอบ Contact, Group หรือทั้งสองแบบ</p></div>
+                      </li>
+                      <li class="usage-guide-step">
+                        <span class="usage-guide-number" aria-hidden="true">6</span>
+                        <div><strong data-i18n="assistant.guide_step_6_title">ติดตามคำตอบและปรับ Knowledge</strong><p data-i18n="assistant.guide_step_6_body">ดูเวลาตรวจข้อความและเวลาตอบล่าสุด หากไม่ตอบให้เปิด Log หมวด AI ส่วนคำถามที่ AI ตอบไม่ได้จะถูกส่งให้ Admin หรือ God เติมคำตอบกลับเข้า Knowledge</p></div>
+                      </li>
                     </ol>
                     <div class="usage-guide-actions">
                       <button class="primary" id="assistantGuideKnowledgeButton" type="button" data-i18n="assistant.guide_open_knowledge">ไปที่ Knowledge / RAG</button>
                       <button id="assistantGuideChatButton" type="button" data-i18n="assistant.guide_open_chat">เริ่มถาม AI</button>
+                      <button id="assistantGuideAutoReplyButton" type="button" data-requires-account data-requires-permission="ask_ai" data-i18n="assistant.guide_open_auto_reply">ตั้งค่าตอบ LINE อัตโนมัติ</button>
+                      <button id="assistantGuideLogsButton" type="button" data-requires-permission="read" data-i18n="assistant.guide_open_logs">เปิด Log</button>
                     </div>
                   </div>
                 </section>
@@ -3633,11 +3809,23 @@ INDEX_HTML = r"""<!doctype html>
                 </section>
 
                 <section class="section">
+                  <div class="section-head"><h2 data-i18n="assistant.guide_knowledge_rules_title">เขียน Knowledge ให้ AI ตอบง่าย</h2></div>
+                  <div class="section-body usage-guide-notes">
+                    <div class="usage-guide-note"><strong data-i18n="assistant.guide_knowledge_specific_title">แยกหัวข้อและเขียนข้อเท็จจริงสั้น ๆ</strong><span class="muted" data-i18n="assistant.guide_knowledge_specific_body">ใช้หัวข้อ เช่น เวลาเปิดบริการ, ราคา, วิธีจัดส่ง แล้วเขียนหนึ่งข้อเท็จจริงต่อหนึ่งบรรทัด หลีกเลี่ยงย่อหน้ายาวที่รวมหลายเรื่อง</span></div>
+                    <div class="usage-guide-note"><strong data-i18n="assistant.guide_knowledge_variants_title">ใส่คำที่ลูกค้าใช้จริง</strong><span class="muted" data-i18n="assistant.guide_knowledge_variants_body">ถ้าลูกค้าอาจถามว่า “เปิดกี่โมง”, “ร้านปิดตอนไหน” หรือ “เวลาทำการ” ให้มีคำเหล่านี้อยู่ใกล้ข้อมูลเวลาเพื่อช่วยค้นหา</span></div>
+                    <div class="usage-guide-note"><strong data-i18n="assistant.guide_knowledge_reindex_title">บันทึกและสร้างดัชนีทุกครั้ง</strong><span class="muted" data-i18n="assistant.guide_knowledge_reindex_body">การแก้ข้อความอย่างเดียวไม่ทำให้ AI เห็นข้อมูลใหม่ ต้องกด “บันทึกและสร้างดัชนี” หรือ “ดึงข้อมูล” ของ Knowledge API ให้เสร็จก่อนทดสอบ</span></div>
+                  </div>
+                </section>
+
+                <section class="section">
                   <div class="section-head"><h2 data-i18n="assistant.guide_notes_title">ข้อควรรู้</h2></div>
                   <div class="section-body usage-guide-notes">
                     <div class="usage-guide-note"><strong data-i18n="assistant.guide_private_title">Knowledge เป็นส่วนตัว</strong><span class="muted" data-i18n="assistant.guide_private_body">Knowledge และประวัติคำถามของคุณแยกจากผู้ใช้อื่นในระบบ</span></div>
                     <div class="usage-guide-note"><strong data-i18n="assistant.guide_unanswered_title">เมื่อ AI ตอบไม่ได้</strong><span class="muted" data-i18n="assistant.guide_unanswered_body">Admin สามารถตอบคำถามค้างได้ และคำตอบที่อนุมัติจะถูกเพิ่มกลับเข้า Knowledge ของเจ้าของคำถาม</span></div>
                     <div class="usage-guide-note"><strong data-i18n="assistant.guide_refresh_title">เมื่อข้อมูลเปลี่ยน</strong><span class="muted" data-i18n="assistant.guide_refresh_body">บันทึก knowledge.md ใหม่ หรือกด “ดึงข้อมูล” ที่ Knowledge API เพื่อสร้างดัชนีล่าสุดก่อนถามอีกครั้ง</span></div>
+                    <div class="usage-guide-note"><strong data-i18n="assistant.guide_background_title">ตอบอัตโนมัติทำงานบนเซิร์ฟเวอร์</strong><span class="muted" data-i18n="assistant.guide_background_body">หลังเปิดสวิตช์แล้วสามารถปิดหน้าเว็บได้ แต่โปรแกรม LinePassport, Ollama และเซสชัน LINE ต้องยังทำงานอยู่บนเซิร์ฟเวอร์</span></div>
+                    <div class="usage-guide-note"><strong data-i18n="assistant.guide_new_messages_title">ตอบเฉพาะข้อความใหม่</strong><span class="muted" data-i18n="assistant.guide_new_messages_body">ระบบสร้างจุดเริ่มต้นเมื่อเปิดใช้งานและไม่ย้อนตอบข้อความเก่า รองรับข้อความตัวอักษรที่เข้ามาหลังจากเปิดระบบ และมีการจำกัดความถี่เพื่อป้องกันการตอบวนหรือ Flood</span></div>
+                    <div class="usage-guide-note"><strong data-i18n="assistant.guide_error_title">เมื่อไม่ตอบ LINE</strong><span class="muted" data-i18n="assistant.guide_error_body">ตรวจว่าสวิตช์หลักและ Contact/Group เปิดอยู่ สถานะ AI ขึ้นพร้อมใช้งาน เวลา “ตรวจข้อความล่าสุด” เดินต่อ และไม่มี error ในหน้า Log หมวด AI</span></div>
                   </div>
                 </section>
               </div>
@@ -3690,13 +3878,24 @@ INDEX_HTML = r"""<!doctype html>
                     </div>
 
                     <div class="incoming-api-guide-block">
-                      <h3 data-i18n="incoming_api.guide_start_title">Before calling the API</h3>
+                      <h3 data-i18n="incoming_api.guide_start_title">สร้างลิงก์ API ทีละขั้น</h3>
                       <div class="incoming-api-guide-steps">
-                        <div class="incoming-api-guide-step"><strong>1</strong><span data-i18n="incoming_api.guide_start_1">Create a link, choose the LINE account and one or more contacts or groups.</span></div>
-                        <div class="incoming-api-guide-step"><strong>2</strong><span data-i18n="incoming_api.guide_start_2">Keep the link status on. Turn on LINE encryption when encrypted text is required.</span></div>
-                        <div class="incoming-api-guide-step"><strong>3</strong><span data-i18n="incoming_api.guide_start_3">Send a GET or POST request to the generated Endpoint URL. No login cookie or extra header is required.</span></div>
+                        <div class="incoming-api-guide-step"><strong>1</strong><span data-i18n="incoming_api.guide_start_1">เลือกบัญชี LINE ด้านบน กด “สร้างลิงก์ API” ตั้งชื่อที่บอกแหล่งที่มา เช่น แจ้งเตือนคำสั่งซื้อ และเปิดสถานะไว้</span></div>
+                        <div class="incoming-api-guide-step"><strong>2</strong><span data-i18n="incoming_api.guide_start_2">เลือกรายชื่อหรือกลุ่มอย่างน้อยหนึ่งปลายทาง แต่ไม่เกิน 20 ปลายทาง ทุกคำขอหนึ่งครั้งจะส่งเนื้อหาเดียวกันไปยังทุกปลายทางที่เลือก</span></div>
+                        <div class="incoming-api-guide-step"><strong>3</strong><span data-i18n="incoming_api.guide_start_3">ตรวจรูปแบบคำขอ: GET ใช้ส่งข้อความอย่างเดียว ส่วน POST ส่งข้อความ รูปจาก URL หรือรูป Base64 ได้ เปิดการเข้ารหัสเมื่อปลายทางรองรับและต้องการเท่านั้น</span></div>
+                        <div class="incoming-api-guide-step"><strong>4</strong><span data-i18n="incoming_api.guide_start_4">ตรวจสรุปแล้วกดสร้าง จากนั้นคัดลอก Endpoint URL ไปเก็บในระบบภายนอก URL มี token ลับอยู่แล้วจึงไม่ต้องใช้ cookie เข้าสู่ระบบหรือ header เพิ่มเติม</span></div>
+                        <div class="incoming-api-guide-step"><strong>5</strong><span data-i18n="incoming_api.guide_start_5">ทดสอบข้อความสั้นไปยังปลายทางทดสอบก่อนใช้งานจริง แล้วตรวจ HTTP status, JSON response และหน้า Log ว่าทุกปลายทางสำเร็จ</span></div>
                       </div>
                       <div class="incoming-api-guide-warning" data-i18n="incoming_api.guide_secret">Treat the Endpoint URL like a password. Anyone who has it can send to the configured targets.</div>
+                    </div>
+
+                    <div class="incoming-api-guide-block">
+                      <h3 data-i18n="incoming_api.guide_beginner_title">เริ่มทดสอบแบบง่ายที่สุด</h3>
+                      <div class="usage-guide-notes">
+                        <div class="usage-guide-note"><strong data-i18n="incoming_api.guide_browser_title">ทดสอบ GET จากเบราว์เซอร์</strong><span class="muted" data-i18n="incoming_api.guide_browser_body">คัดลอก Endpoint URL เติม ?text=ข้อความทดสอบ ต่อท้าย แล้วเปิด URL นั้นในเบราว์เซอร์ เหมาะกับการตรวจว่าลิงก์และปลายทางทำงานก่อนเขียนโปรแกรม</span></div>
+                        <div class="usage-guide-note"><strong data-i18n="incoming_api.guide_postman_title">ทดสอบ POST ด้วย Postman หรือ cURL</strong><span class="muted" data-i18n="incoming_api.guide_postman_body">เลือกตัวอย่างด้านล่าง กดคัดลอก cURL แล้วเปลี่ยนข้อความหรือ URL รูปตามต้องการ สำหรับ Postman ให้เลือก Body → raw → JSON และตั้ง Content-Type เป็น application/json</span></div>
+                        <div class="usage-guide-note"><strong data-i18n="incoming_api.guide_same_content_title">หนึ่งคำขอส่งเนื้อหาเดียวกันทุกปลายทาง</strong><span class="muted" data-i18n="incoming_api.guide_same_content_body">หากต้องการให้แต่ละรายชื่อได้รับข้อความต่างกัน ให้สร้างลิงก์แยก หรือเรียกคนละลิงก์พร้อมเนื้อหาที่ต้องการ</span></div>
+                      </div>
                     </div>
 
                     <div class="incoming-api-guide-block">
@@ -3746,6 +3945,15 @@ INDEX_HTML = r"""<!doctype html>
                         <div class="incoming-api-guide-status"><code>502</code><span data-i18n="incoming_api.guide_response_502">Sending failed for every target.</span></div>
                       </div>
                       <p class="muted" data-i18n="incoming_api.guide_limits">Maximum text length is 20,000 characters and maximum image size is 30 MB. GET supports text only; images require POST.</p>
+                    </div>
+
+                    <div class="incoming-api-guide-block">
+                      <h3 data-i18n="incoming_api.guide_manage_title">จัดการและแก้ปัญหาลิงก์</h3>
+                      <div class="usage-guide-notes">
+                        <div class="usage-guide-note"><strong data-i18n="incoming_api.guide_disable_title">ปิดใช้เมื่อต้องการหยุดชั่วคราว</strong><span class="muted" data-i18n="incoming_api.guide_disable_body">ปุ่ม “ปิดใช้” ทำให้คำขอใหม่เข้าไม่ได้แต่ยังเก็บการตั้งค่าและสถิติไว้ เปิดกลับได้ภายหลัง</span></div>
+                        <div class="usage-guide-note"><strong data-i18n="incoming_api.guide_rotate_title">สร้าง URL ใหม่เมื่อสงสัยว่ารั่ว</strong><span class="muted" data-i18n="incoming_api.guide_rotate_body">ปุ่ม “สร้าง URL ใหม่” จะยกเลิก URL เดิมทันที ต้องนำ URL ใหม่ไปเปลี่ยนในทุกระบบที่เรียกใช้งาน</span></div>
+                        <div class="usage-guide-note"><strong data-i18n="incoming_api.guide_error_check_title">เมื่อ API ตอบ error</strong><span class="muted" data-i18n="incoming_api.guide_error_check_body">ตรวจ HTTP status และ response body ก่อน จากนั้นดูหน้า Log หมวด API เพื่อแยกว่า request ไม่ถูกต้อง ลิงก์ถูกปิด เรียกถี่เกิน หรือ LINE ส่งไปยังบางปลายทางไม่สำเร็จ</span></div>
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -3867,7 +4075,6 @@ INDEX_HTML = r"""<!doctype html>
             <button type="button" id="botNavSchedules" data-bot-page-target="schedules" class="active" role="tab" aria-selected="true" data-i18n="bot.nav_schedules">Schedules</button>
             <button type="button" id="botNavScheduleForm" data-bot-page-target="schedule" role="tab" aria-selected="false" data-requires-account data-requires-permission="schedule" data-i18n="bot.nav_new">New schedule</button>
             <button type="button" id="botNavPatterns" data-bot-page-target="patterns" role="tab" aria-selected="false" data-requires-account data-requires-permission="schedule" data-i18n="bot.nav_patterns">Patterns</button>
-            <button type="button" id="botNavLogs" data-bot-page-target="logs" role="tab" aria-selected="false" data-requires-account data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
             <button type="button" id="botNavAiSettings" data-bot-page-target="ai-settings" role="tab" aria-selected="false" data-requires-permission="manage_accounts" data-i18n="bot.nav_ai_settings">AI Settings</button>
             <button type="button" id="botNavGuide" data-bot-page-target="guide" role="tab" aria-selected="false" data-i18n="bot.nav_guide">Usage guide</button>
           </div>
@@ -3877,7 +4084,7 @@ INDEX_HTML = r"""<!doctype html>
               <h2 data-i18n="scheduler.title">Scheduler</h2>
               <div class="row compact scheduler-list-actions">
                 <span class="pill" id="scheduleCount">0</span>
-                <button id="openBotLogsButton" type="button" data-requires-account data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
+                <button id="openBotLogsButton" type="button" data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
                 <button id="clearStuckSchedulesButton" type="button" class="danger hidden" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.clear_stuck">Clear stuck jobs</button>
                 <button id="openPatternsButton" type="button" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.patterns_menu">Message patterns</button>
                 <button id="scheduleFormToggle" class="primary" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.new">+ New scheduled message</button>
@@ -4056,27 +4263,6 @@ INDEX_HTML = r"""<!doctype html>
             </div>
           </section>
           </div>
-          <div id="botLogs" class="bot-page hidden" data-bot-page="logs">
-          <section class="section">
-            <div class="section-head">
-              <h2 data-i18n="botlog.title">Bot Log</h2>
-              <div class="row compact">
-                <span class="pill" id="botLogCount">0</span>
-                <button id="botLogRefreshButton" type="button" data-requires-account data-requires-permission="read" data-i18n="botlog.refresh">Refresh</button>
-                <button id="botLogClearButton" type="button" class="danger" data-requires-account data-requires-permission="schedule" data-i18n="botlog.clear">Clear</button>
-              </div>
-            </div>
-            <div class="section-body">
-              <div class="bot-terminal">
-                <div class="bot-terminal-bar" aria-hidden="true">
-                  <span class="bot-terminal-title"><span class="bot-terminal-prompt">&gt;_</span> linepassport/bot.log</span>
-                  <span class="bot-terminal-live">LIVE</span>
-                </div>
-                <div class="bot-log-list" id="botLogList" role="log" aria-live="polite" aria-relevant="additions text" tabindex="0"></div>
-              </div>
-            </div>
-          </section>
-          </div>
           <div id="botPatterns" class="bot-page hidden" data-bot-page="patterns">
           <section class="section pattern-page-header">
             <div class="section-head">
@@ -4193,15 +4379,19 @@ INDEX_HTML = r"""<!doctype html>
                     <span class="usage-guide-number" aria-hidden="true">4</span>
                     <div><strong data-i18n="bot.guide_step_4_title">กำหนดเวลาและขอบเขต</strong><p data-i18n="bot.guide_step_4_body">เลือกส่งครั้งเดียวหรือส่งซ้ำ ระบุช่วงวันที่ ช่วงเวลารายวัน ระยะห่างเป็นนาที และจำนวนครั้งสูงสุดได้</p></div>
                   </li>
-                  <li class="usage-guide-step">
-                    <span class="usage-guide-number" aria-hidden="true">5</span>
-                    <div><strong data-i18n="bot.guide_step_5_title">ทดสอบแล้วติดตามผล</strong><p data-i18n="bot.guide_step_5_body">ใช้ “ส่งเดี๋ยวนี้” ทดสอบก่อนเปิดงานซ้ำ จากนั้นตรวจสถานะและรายละเอียดทุก action ในหน้า Log</p></div>
-                  </li>
+                      <li class="usage-guide-step">
+                        <span class="usage-guide-number" aria-hidden="true">5</span>
+                        <div><strong data-i18n="bot.guide_step_5_title">ทดสอบแล้วติดตามผล</strong><p data-i18n="bot.guide_step_5_body">ใช้ “ส่งเดี๋ยวนี้” ทดสอบก่อนเปิดงานซ้ำ จากนั้นตรวจสถานะและรายละเอียดทุก action ในหน้า Log</p></div>
+                      </li>
+                      <li class="usage-guide-step">
+                        <span class="usage-guide-number" aria-hidden="true">6</span>
+                        <div><strong data-i18n="bot.guide_step_6_title">ปล่อยให้บอททำงานบนเซิร์ฟเวอร์</strong><p data-i18n="bot.guide_step_6_body">เมื่อสถานะงานเป็น “ทำงานอยู่” สามารถปิดหน้าเว็บได้ ตัว Worker บนเซิร์ฟเวอร์จะตรวจเวลาและส่งต่อเอง แต่โปรแกรม LinePassport และเซสชัน LINE ต้องยังออนไลน์</p></div>
+                      </li>
                 </ol>
                 <div class="usage-guide-actions">
                   <button class="primary" id="botGuideScheduleButton" type="button" data-requires-account data-requires-permission="schedule" data-i18n="bot.guide_open_schedule">สร้างตารางส่ง</button>
                   <button id="botGuidePatternsButton" type="button" data-requires-account data-requires-permission="schedule" data-i18n="bot.guide_open_patterns">จัดการแพทเทิร์น</button>
-                  <button id="botGuideLogsButton" type="button" data-requires-account data-requires-permission="read" data-i18n="bot.guide_open_logs">เปิด Log</button>
+                  <button id="botGuideLogsButton" type="button" data-requires-permission="read" data-i18n="bot.guide_open_logs">เปิด Log</button>
                 </div>
               </div>
             </section>
@@ -4229,11 +4419,24 @@ INDEX_HTML = r"""<!doctype html>
             </section>
 
             <section class="section">
+              <div class="section-head"><h2 data-i18n="bot.guide_fields_title">ความหมายของเวลาส่ง</h2></div>
+              <div class="section-body">
+                <div class="usage-guide-term"><strong data-i18n="bot.guide_once_title">ส่งครั้งเดียว</strong><span data-i18n="bot.guide_once_body">ส่งหนึ่งครั้งตามวันและเวลาที่กำหนด เมื่อส่งสำเร็จแล้วงานจะไม่ทำซ้ำ</span></div>
+                <div class="usage-guide-term"><strong data-i18n="bot.guide_repeat_mode_title">ส่งซ้ำ</strong><span data-i18n="bot.guide_repeat_mode_body">ส่งหลายครั้งภายในช่วงวันที่ โดยจะส่งเฉพาะช่วงเวลาเริ่ม-สิ้นสุดของแต่ละวันและเว้นตามจำนวนนาทีที่กำหนด</span></div>
+                <div class="usage-guide-term"><strong data-i18n="bot.guide_interval_title">เว้นระยะ</strong><span data-i18n="bot.guide_interval_body">เวลาระหว่างรอบ เช่น 30 นาที หมายถึงหลังส่งรอบหนึ่งแล้วจะรออย่างน้อย 30 นาทีก่อนรอบถัดไป</span></div>
+                <div class="usage-guide-term"><strong data-i18n="bot.guide_limit_title">จำนวนสูงสุด</strong><span data-i18n="bot.guide_limit_body">เพดานจำนวนครั้งของงาน ใช้ป้องกันส่งเกินที่ตั้งใจ หากไม่แน่ใจควรกำหนดไว้และตรวจผลก่อนเพิ่มจำนวน</span></div>
+              </div>
+            </section>
+
+            <section class="section">
               <div class="section-head"><h2 data-i18n="bot.guide_notes_title">ข้อควรรู้ก่อนเปิดใช้งาน</h2></div>
               <div class="section-body usage-guide-notes">
                 <div class="usage-guide-note"><strong data-i18n="bot.guide_account_title">แยกตามบัญชี LINE</strong><span class="muted" data-i18n="bot.guide_account_body">การเลือกบัญชีใหม่จะเปลี่ยนชุดงาน แพทเทิร์น และ Log โดยไม่ไปรบกวนบัญชีอื่น</span></div>
                 <div class="usage-guide-note"><strong data-i18n="bot.guide_test_title">ทดสอบก่อนส่งซ้ำ</strong><span class="muted" data-i18n="bot.guide_test_body">ตรวจปลายทาง ข้อความ รูปภาพ และการเข้ารหัสด้วย “ส่งเดี๋ยวนี้” ก่อนตั้งช่วงเวลายาว</span></div>
                 <div class="usage-guide-note"><strong data-i18n="bot.guide_error_title">เมื่อเกิดข้อผิดพลาด</strong><span class="muted" data-i18n="bot.guide_error_body">หยุดงาน ตรวจรายละเอียดใน Log แล้วใช้ “เคลียร์งานค้าง” เฉพาะกรณีสถานะค้างหรือเกิด error</span></div>
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_paused_title">สถานะหยุดและทำต่อ</strong><span class="muted" data-i18n="bot.guide_paused_body">“หยุด” จะพักงานโดยไม่ลบการตั้งค่า กด “ทำต่อ” เพื่อให้คำนวณเวลารอบถัดไปใหม่ ส่วน “ลบ” จะลบงานถาวร</span></div>
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_ai_prompt_title">Prompt สร้างรูปต้องสั่งให้สร้างรูปชัดเจน</strong><span class="muted" data-i18n="bot.guide_ai_prompt_body">ระบุหัวข้อ ฉาก สไตล์ และสิ่งที่ไม่ต้องการให้ชัด ระบบจะส่งคำสั่งสร้างรูปพร้อม Prompt แบบเต็มและเก็บไว้ใน Log เพื่อใช้ตรวจสอบ</span></div>
+                <div class="usage-guide-note"><strong data-i18n="bot.guide_stuck_title">เคลียร์งานค้างใช้เมื่อจำเป็นเท่านั้น</strong><span class="muted" data-i18n="bot.guide_stuck_body">ปุ่มนี้ปลดสถานะรันที่ค้างหลังโปรเซสหยุดหรือเกิด error ไม่ได้ลบงานและไม่ควรกดระหว่างงานกำลังส่งจริง</span></div>
               </div>
             </section>
           </div>
@@ -4301,28 +4504,159 @@ INDEX_HTML = r"""<!doctype html>
             </div>
           </div>
 
-          <div class="tab-panel" data-tab-panel="tools" id="tabPanelTools" role="tabpanel" aria-labelledby="tabTools">
-            <div class="tab-panel-inner">
-          <section class="section">
-            <div class="section-head">
-              <h2 data-i18n="tools.title">Tools</h2>
-              <span class="pill" data-i18n="tools.selected_only">Selected account only</span>
+          <div class="tab-panel" data-tab-panel="logs" id="tabPanelLogs" role="tabpanel" aria-labelledby="tabLogs">
+            <div class="subtabs guide-section-nav" role="tablist" aria-label="Logs">
+              <button id="logsMainViewButton" class="subtab active" type="button" role="tab" aria-selected="true" data-i18n="botlog.nav_logs">รายการ Log</button>
+              <button id="logsGuideViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-i18n="botlog.nav_guide">วิธีใช้</button>
             </div>
-            <div class="section-body">
-              <div class="two grid">
-                <input id="findUserInput" data-requires-account data-i18n-ph="tools.find_ph" placeholder="LINE ID">
-                <button id="findUserButton" data-requires-account data-requires-permission="tools" data-i18n="tools.find">Find User</button>
-              </div>
-              <pre id="toolOutput">{}</pre>
-              <div class="form-grid advanced-only">
-                <div class="two grid">
-                  <input id="endpointInput" data-requires-account data-i18n-ph="tools.endpoint_ph" placeholder="Endpoint key">
-                  <input id="endpointArgs" data-requires-account data-i18n-ph="tools.args_ph" placeholder="JSON args array" value="[]">
+            <div class="tab-panel-inner activity-log-inner" id="logsMainView">
+              <section class="section">
+                <div class="section-head">
+                  <div class="activity-log-heading">
+                    <h2 data-i18n="botlog.title">Activity Log</h2>
+                    <span class="muted" data-i18n="botlog.subtitle">All Bot, API, AI, and automatic reply activity for the selected LINE account.</span>
+                  </div>
+                  <div class="row compact">
+                    <span class="pill" id="botLogCount">0</span>
+                    <button id="botLogRefreshButton" type="button" data-requires-permission="read" data-i18n="botlog.refresh">Refresh</button>
+                    <button id="botLogClearButton" type="button" class="danger" data-requires-permission="schedule" data-i18n="botlog.clear">Clear</button>
+                  </div>
                 </div>
-                <button id="callEndpointButton" data-requires-account data-requires-permission="tools" data-i18n="tools.call">Call Endpoint</button>
-              </div>
+                <div class="section-body">
+                  <div class="activity-log-toolbar" aria-label="Log filters">
+                    <label>
+                      <span data-i18n="botlog.search">Search logs</span>
+                      <input id="botLogSearch" type="search" autocomplete="off" data-i18n-ph="botlog.search_ph" placeholder="Action, target, or details">
+                    </label>
+                    <label>
+                      <span data-i18n="botlog.category">Category</span>
+                      <select id="botLogCategoryFilter">
+                        <option value="all" data-i18n="botlog.category_all">All categories</option>
+                        <option value="bot" data-i18n="botlog.category_bot">Bot</option>
+                        <option value="ai" data-i18n="botlog.category_ai">AI</option>
+                        <option value="api" data-i18n="botlog.category_api">API</option>
+                        <option value="system" data-i18n="botlog.category_system">System</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span data-i18n="botlog.status">Status</span>
+                      <select id="botLogStatusFilter">
+                        <option value="all" data-i18n="botlog.status_all">All statuses</option>
+                        <option value="success" data-i18n="botlog.status_success">Success</option>
+                        <option value="error" data-i18n="botlog.status_error">Error</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="activity-log-summary" aria-live="polite">
+                    <span class="pill ok" id="botLogSuccessCount">0</span>
+                    <span class="pill warn" id="botLogErrorCount">0</span>
+                  </div>
+                  <div class="bot-terminal">
+                    <div class="bot-terminal-bar" aria-hidden="true">
+                      <span class="bot-terminal-title"><span class="bot-terminal-prompt">&gt;_</span> linepassport/activity.log</span>
+                      <span class="bot-terminal-live">LIVE</span>
+                    </div>
+                    <div class="bot-log-list" id="botLogList" role="log" aria-live="polite" aria-relevant="additions text" tabindex="0"></div>
+                  </div>
+                </div>
+              </section>
             </div>
-          </section>
+            <div class="tab-panel-inner guide-panel-inner hidden" id="logsGuideView">
+              <section class="section">
+                <div class="section-head">
+                  <div class="usage-guide-intro"><h2 data-i18n="botlog.guide_title">วิธีอ่าน Log</h2><span class="muted" data-i18n="botlog.guide_subtitle">ใช้ Log เพื่อตรวจว่าระบบรับงาน ทำขั้นตอนไหนสำเร็จ และหยุดที่จุดใด</span></div>
+                </div>
+                <div class="section-body">
+                  <ol class="usage-guide-steps">
+                    <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">1</span><div><strong data-i18n="botlog.guide_step_1_title">เลือกบัญชี LINE ที่ต้องการตรวจ</strong><p data-i18n="botlog.guide_step_1_body">Log แยกตามบัญชี LINE เสมอ ถ้าไม่พบเหตุการณ์ ให้ตรวจชื่อบัญชีในเมนูด้านบนก่อน เพราะการเปลี่ยนบัญชีจะเปลี่ยนชุด Log ทันที</p></div></li>
+                    <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">2</span><div><strong data-i18n="botlog.guide_step_2_title">เริ่มจากรายการล่าสุด</strong><p data-i18n="botlog.guide_step_2_body">รายการใหม่อยู่ด้านบนและรีเฟรชเบื้องหลังอัตโนมัติขณะเปิดหน้านี้ ป้าย [OK] หมายถึงขั้นตอนสำเร็จ ส่วน [ERR] หมายถึงขั้นตอนนั้นผิดพลาด</p></div></li>
+                    <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">3</span><div><strong data-i18n="botlog.guide_step_3_title">กรองให้เหลือเหตุการณ์ที่เกี่ยวข้อง</strong><p data-i18n="botlog.guide_step_3_body">พิมพ์ชื่องาน ชื่อปลายทาง หรือข้อความผิดพลาดในช่องค้นหา แล้วเลือกหมวดหมู่ Bot, AI, API หรือ System และเลือกดูเฉพาะ Success หรือ Error ได้</p></div></li>
+                    <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">4</span><div><strong data-i18n="botlog.guide_step_4_title">เปิดรายละเอียดและอ่านตามเวลา</strong><p data-i18n="botlog.guide_step_4_body">งานหนึ่งครั้งอาจมีหลายบรรทัด เช่น รับงาน → เตรียมเนื้อหา → ส่งรายการ → สำเร็จหรือผิดพลาด ให้เทียบเวลา ชื่องาน และปลายทางเดียวกันเพื่อดูเส้นทางทั้งหมด</p></div></li>
+                    <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">5</span><div><strong data-i18n="botlog.guide_step_5_title">แก้สาเหตุก่อนลองใหม่</strong><p data-i18n="botlog.guide_step_5_body">อ่านข้อความผิดพลาดแบบเต็ม แก้การเชื่อมต่อ เซสชัน API Key Prompt หรือข้อมูลปลายทาง แล้วจึงกดส่งใหม่ การกด “ล้าง Log” ลบเฉพาะประวัติและไม่ได้แก้ข้อผิดพลาด</p></div></li>
+                  </ol>
+                  <div class="usage-guide-actions"><button class="primary" id="logsGuideOpenButton" type="button" data-i18n="botlog.guide_open">เปิดรายการ Log</button></div>
+                </div>
+              </section>
+              <section class="section">
+                <div class="section-head"><h2 data-i18n="botlog.guide_categories_title">แต่ละหมวดบอกอะไร</h2></div>
+                <div class="section-body">
+                  <div class="usage-guide-term"><strong data-i18n="botlog.guide_category_bot_title">Bot</strong><span data-i18n="botlog.guide_category_bot_body">การสร้าง แก้ไข หยุด และรันตารางส่ง รวมการเตรียมข้อความ รูป และการส่งแต่ละปลายทาง</span></div>
+                  <div class="usage-guide-term"><strong data-i18n="botlog.guide_category_ai_title">AI</strong><span data-i18n="botlog.guide_category_ai_body">การสร้างรูปด้วย AI และการตอบ LINE อัตโนมัติ ตั้งแต่รับข้อความ สร้างคำตอบ จนส่งกลับสำเร็จ</span></div>
+                  <div class="usage-guide-term"><strong data-i18n="botlog.guide_category_api_title">API</strong><span data-i18n="botlog.guide_category_api_body">การสร้างหรือแก้ลิงก์ Incoming API คำขอที่เข้ามา และผลส่งข้อความหรือรูปไปยังแต่ละปลายทาง</span></div>
+                  <div class="usage-guide-term"><strong data-i18n="botlog.guide_category_system_title">System</strong><span data-i18n="botlog.guide_category_system_body">เหตุการณ์ทั่วไปของระบบที่ไม่อยู่ในสามหมวดข้างต้น เช่น การจัดการข้อมูลหรือการเชื่อมต่อ</span></div>
+                </div>
+              </section>
+              <section class="section">
+                <div class="section-head"><h2 data-i18n="botlog.guide_errors_title">ข้อผิดพลาดที่พบบ่อย</h2></div>
+                <div class="section-body usage-guide-notes">
+                  <div class="usage-guide-note"><strong>session expired / login required</strong><span class="muted" data-i18n="botlog.guide_session_body">เซสชัน LINE หมดอายุ ให้เพิ่มบัญชี LINE ใหม่แล้วทดสอบส่งข้อความธรรมดาก่อน</span></div>
+                  <div class="usage-guide-note"><strong>SSL EOF / media upload failed</strong><span class="muted" data-i18n="botlog.guide_ssl_body">การเชื่อมต่ออัปโหลดสื่อถูกตัด ลองใหม่ ตรวจ Proxy, DNS และเครือข่ายของเซิร์ฟเวอร์ หรือทดสอบด้วยไฟล์ที่เล็กลง</span></div>
+                  <div class="usage-guide-note"><strong>401 / 403</strong><span class="muted" data-i18n="botlog.guide_auth_body">API Key หรือสิทธิ์ของบริการภายนอกไม่ถูกต้อง หมดอายุ หรือไม่มีเครดิต ให้ตรวจค่าที่หน้าตั้งค่าของฟังก์ชันนั้น</span></div>
+                  <div class="usage-guide-note"><strong>422 / no_media_generated</strong><span class="muted" data-i18n="botlog.guide_ai_error_body">โมเดล AI ไม่สามารถสร้างรูปจาก Prompt นี้ได้ ให้ตรวจว่าเลือกโมเดลภาพ ไม่มีไฟล์อ้างอิงที่หาย และปรับ Prompt ให้ชัดเจนและปลอดภัย</span></div>
+                  <div class="usage-guide-note"><strong>429</strong><span class="muted" data-i18n="botlog.guide_rate_body">เรียกบริการถี่เกินกำหนด ให้เว้นช่วง ลดจำนวนการส่ง หรือรอให้โควตากลับมาก่อนลองใหม่</span></div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="tab-panel" data-tab-panel="tools" id="tabPanelTools" role="tabpanel" aria-labelledby="tabTools">
+            <div class="subtabs guide-section-nav" role="tablist" aria-label="Tools">
+              <button id="toolsMainViewButton" class="subtab active" type="button" role="tab" aria-selected="true" data-i18n="tools.nav_tools">เครื่องมือ</button>
+              <button id="toolsGuideViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-i18n="tools.nav_guide">วิธีใช้</button>
+            </div>
+            <div class="tab-panel-inner" id="toolsMainView">
+              <section class="section">
+                <div class="section-head">
+                  <h2 data-i18n="tools.title">Tools</h2>
+                  <span class="pill" data-i18n="tools.selected_only">Selected account only</span>
+                </div>
+                <div class="section-body">
+                  <div class="two grid">
+                    <input id="findUserInput" data-requires-account data-i18n-ph="tools.find_ph" placeholder="LINE ID">
+                    <button id="findUserButton" data-requires-account data-requires-permission="tools" data-i18n="tools.find">Find User</button>
+                  </div>
+                  <pre id="toolOutput">{}</pre>
+                  <div class="form-grid advanced-only">
+                    <div class="two grid">
+                      <input id="endpointInput" data-requires-account data-i18n-ph="tools.endpoint_ph" placeholder="Endpoint key">
+                      <input id="endpointArgs" data-requires-account data-i18n-ph="tools.args_ph" placeholder="JSON args array" value="[]">
+                    </div>
+                    <button id="callEndpointButton" data-requires-account data-requires-permission="tools" data-i18n="tools.call">Call Endpoint</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div class="tab-panel-inner guide-panel-inner hidden" id="toolsGuideView">
+              <section class="section">
+                <div class="section-head">
+                  <div class="usage-guide-intro"><h2 data-i18n="tools.guide_title">วิธีใช้เครื่องมือ</h2><span class="muted" data-i18n="tools.guide_subtitle">ค้นหาผู้ใช้ LINE และเรียก Endpoint สำหรับตรวจสอบทางเทคนิค โดยจำกัดอยู่ในบัญชีที่เลือก</span></div>
+                </div>
+                <div class="section-body">
+                  <ol class="usage-guide-steps">
+                    <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">1</span><div><strong data-i18n="tools.guide_step_1_title">เลือกบัญชี LINE ให้ถูกต้อง</strong><p data-i18n="tools.guide_step_1_body">ผลลัพธ์และการเรียก Endpoint ใช้เซสชันของบัญชีที่เลือกด้านบนเท่านั้น หากเปลี่ยนบัญชี ให้ตรวจชื่ออีกครั้งก่อนกดทำงาน</p></div></li>
+                    <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">2</span><div><strong data-i18n="tools.guide_step_2_title">ค้นหาผู้ใช้จาก LINE ID</strong><p data-i18n="tools.guide_step_2_body">กรอก LINE ID ที่ผู้ใช้ตั้งไว้ เช่น ton123 แล้วกด “ค้นหาผู้ใช้” ถ้าพบ ระบบจะแสดงข้อมูลดิบแบบ JSON ซึ่งอาจมี MID ชื่อที่แสดง และสถานะรูปโปรไฟล์</p></div></li>
+                    <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">3</span><div><strong data-i18n="tools.guide_step_3_title">อ่านผลลัพธ์ในกล่อง JSON</strong><p data-i18n="tools.guide_step_3_body">ผลลัพธ์ที่สำเร็จมักเป็น object หรือ array ส่วนข้อผิดพลาดจะแสดงข้อความจาก LINE โดยตรง ไม่ควรนำ MID, token หรือข้อมูลภายในไปเผยแพร่</p></div></li>
+                    <li class="usage-guide-step"><span class="usage-guide-number" aria-hidden="true">4</span><div><strong data-i18n="tools.guide_step_4_title">เรียก Endpoint เฉพาะเมื่อทราบคำสั่ง</strong><p data-i18n="tools.guide_step_4_body">ใส่ชื่อ Endpoint และอาร์กิวเมนต์เป็น JSON array ที่ถูกต้อง เช่น [] หรือ ["Uxxxxxxxx"] ฟังก์ชันนี้ส่งคำสั่งระดับต่ำไปยัง LINE ควรใช้เพื่อทดสอบหรือแก้ปัญหาโดยผู้ดูแลเท่านั้น</p></div></li>
+                  </ol>
+                  <div class="usage-guide-actions"><button class="primary" id="toolsGuideOpenButton" type="button" data-i18n="tools.guide_open">เปิดหน้าเครื่องมือ</button></div>
+                </div>
+              </section>
+              <section class="section">
+                <div class="section-head"><h2 data-i18n="tools.guide_terms_title">ตัวอย่างและความหมาย</h2></div>
+                <div class="section-body">
+                  <div class="usage-guide-term"><strong data-i18n="tools.guide_line_id_title">LINE ID</strong><span data-i18n="tools.guide_line_id_body">ชื่อที่ผู้ใช้ตั้งเพื่อให้ค้นหาได้ ไม่ใช่ชื่อที่แสดง และไม่ใช่ MID ภายใน</span></div>
+                  <div class="usage-guide-term"><strong data-i18n="tools.guide_mid_title">MID</strong><span data-i18n="tools.guide_mid_body">รหัสภายในของ LINE มักขึ้นต้นด้วย U สำหรับผู้ใช้, C สำหรับกลุ่ม หรือ R สำหรับห้องแชท</span></div>
+                  <div class="usage-guide-term"><strong data-i18n="tools.guide_args_title">JSON array</strong><span data-i18n="tools.guide_args_body">รายการอาร์กิวเมนต์ต้องใช้วงเล็บเหลี่ยมและเครื่องหมายคำพูดแบบ JSON เช่น ["U123", 20] ห้ามใช้ข้อความธรรมดาที่ไม่ใช่ JSON</span></div>
+                </div>
+              </section>
+              <section class="section">
+                <div class="section-head"><h2 data-i18n="tools.guide_troubleshoot_title">เมื่อค้นหาหรือเรียก Endpoint ไม่ได้</h2></div>
+                <div class="section-body usage-guide-notes">
+                  <div class="usage-guide-note"><strong data-i18n="tools.guide_not_found_title">ค้นหาไม่พบ</strong><span class="muted" data-i18n="tools.guide_not_found_body">ตรวจตัวพิมพ์เล็ก-ใหญ่และเว้นวรรคของ LINE ID ผู้ใช้บางคนปิดการค้นหาด้วย ID หรือไม่ได้ตั้ง LINE ID จึงอาจค้นหาไม่ได้</span></div>
+                  <div class="usage-guide-note"><strong data-i18n="tools.guide_invalid_json_title">JSON ไม่ถูกต้อง</strong><span class="muted" data-i18n="tools.guide_invalid_json_body">ตรวจวงเล็บ เครื่องหมายคำพูด และเครื่องหมายจุลภาค แล้วเริ่มทดสอบจาก [] ก่อน</span></div>
+                  <div class="usage-guide-note"><strong data-i18n="tools.guide_permission_title">ปุ่มกดไม่ได้</strong><span class="muted" data-i18n="tools.guide_permission_body">ต้องเลือกบัญชี LINE และผู้ใช้ต้องมีสิทธิ์เครื่องมือ หากไม่มีสิทธิ์ให้ Admin หรือ God ปรับบทบาทให้</span></div>
+                </div>
+              </section>
             </div>
           </div>
         </div>
@@ -4423,7 +4757,7 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.nav_knowledge": {th: "Knowledge / RAG", en: "Knowledge / RAG"},
       "assistant.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
       "assistant.auto_reply_title": {th: "ตอบ LINE อัตโนมัติ", en: "Automatic LINE replies"},
-      "assistant.auto_reply_hint": {th: "ใช้ AI และ Knowledge / RAG ของคุณตอบเฉพาะข้อความใหม่ในบัญชี LINE ที่เลือก", en: "Use your AI and Knowledge / RAG to answer only new messages for the selected LINE account."},
+      "assistant.auto_reply_hint": {th: "ทำงานบนเซิร์ฟเวอร์ตลอดเวลาแม้ปิดหน้าเว็บ โดยใช้ AI และ Knowledge / RAG ตอบเฉพาะข้อความใหม่", en: "Runs continuously on the server even when the web page is closed, using AI and Knowledge / RAG for new messages."},
       "assistant.auto_reply_account": {th: "บัญชี LINE", en: "LINE account"},
       "assistant.auto_reply_master": {th: "เปิดระบบตอบอัตโนมัติ", en: "Enable automatic replies"},
       "assistant.auto_reply_master_hint": {th: "เมื่อปิด ระบบจะไม่อ่านข้อความเพื่อส่งคำตอบ AI", en: "When off, incoming messages are not processed for AI replies."},
@@ -4444,7 +4778,7 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.auto_reply_error": {th: "ข้อผิดพลาด", en: "Error"},
       "assistant.auto_reply_saved": {th: "บันทึกการตั้งค่าตอบ LINE อัตโนมัติแล้ว", en: "Automatic LINE reply settings saved."},
       "assistant.guide_title": {th: "เริ่มใช้งาน AI Chat Bot", en: "Get started with AI Chat Bot"},
-      "assistant.guide_subtitle": {th: "เตรียม Knowledge แล้วถาม AI จากข้อมูลของคุณตาม 4 ขั้นตอน", en: "Prepare your knowledge and start asking questions in four steps."},
+      "assistant.guide_subtitle": {th: "ตั้งค่า Knowledge ทดสอบคำตอบ และเปิดตอบ LINE อัตโนมัติอย่างเป็นขั้นตอน", en: "Set up knowledge, test answers, and enable automatic LINE replies step by step."},
       "assistant.guide_step_1_title": {th: "ตรวจสอบว่า AI พร้อมใช้งาน", en: "Check that AI is ready"},
       "assistant.guide_step_1_body": {th: "สถานะในหน้าแชทต้องเป็น “พร้อมใช้งาน” หากยังไม่ได้ตั้งค่า ให้ God เปิด Ollama และเลือกโมเดลที่หน้า /god", en: "The Chat page must show Ready. If it is not configured, ask God to enable Ollama and select a model at /god."},
       "assistant.guide_step_2_title": {th: "เพิ่ม Knowledge / RAG ของคุณ", en: "Add your Knowledge / RAG"},
@@ -4453,11 +4787,24 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.guide_step_3_body": {th: "เพิ่ม URL แบบ GET ระบุ JSON path และ Bearer token ได้ จากนั้นกด “ดึงข้อมูล” เพื่ออัปเดตและสร้างดัชนี", en: "Add a GET URL with an optional JSON path and Bearer token, then select Sync to update and index the data."},
       "assistant.guide_step_4_title": {th: "ถามให้ชัดเจนแล้วตรวจแหล่งข้อมูล", en: "Ask clearly and review the sources"},
       "assistant.guide_step_4_body": {th: "ถามคำถามที่เกี่ยวข้องกับ Knowledge ระบบจะแสดงคำตอบพร้อมแหล่งข้อมูล หากตอบไม่ได้ คำถามจะถูกส่งให้ Admin ตรวจสอบ", en: "Ask a question related to the knowledge. The answer includes its sources; unanswered questions are sent to an admin for review."},
+      "assistant.guide_step_5_title": {th: "ทดสอบก่อนเปิดตอบ LINE อัตโนมัติ", en: "Test before enabling automatic LINE replies"},
+      "assistant.guide_step_5_body": {th: "ถามคำถามตัวอย่างในหน้าแชทหลายแบบจนคำตอบถูกต้อง แล้วไปที่ “ตอบ LINE อัตโนมัติ” เลือกบัญชี LINE เปิดสวิตช์หลัก และเลือกว่าจะตอบ Contact, Group หรือทั้งสองแบบ", en: "Test several realistic questions in Chat until the answers are correct. Then open LINE Auto Reply, select the LINE account, enable the main switch, and choose Contacts, Groups, or both."},
+      "assistant.guide_step_6_title": {th: "ติดตามคำตอบและปรับ Knowledge", en: "Monitor replies and improve knowledge"},
+      "assistant.guide_step_6_body": {th: "ดูเวลาตรวจข้อความและเวลาตอบล่าสุด หากไม่ตอบให้เปิด Log หมวด AI ส่วนคำถามที่ AI ตอบไม่ได้จะถูกส่งให้ Admin หรือ God เติมคำตอบกลับเข้า Knowledge", en: "Review the last check and last reply times. If no reply is sent, open the AI logs. Questions the AI cannot answer are queued for an Admin or God to add an approved answer to knowledge."},
       "assistant.guide_open_knowledge": {th: "ไปที่ Knowledge / RAG", en: "Open Knowledge / RAG"},
       "assistant.guide_open_chat": {th: "เริ่มถาม AI", en: "Start asking AI"},
+      "assistant.guide_open_auto_reply": {th: "ตั้งค่าตอบ LINE อัตโนมัติ", en: "Configure LINE Auto Reply"},
+      "assistant.guide_open_logs": {th: "เปิด Log", en: "Open logs"},
       "assistant.guide_example_title": {th: "ตัวอย่าง knowledge.md", en: "knowledge.md example"},
       "assistant.guide_example_hint": {th: "เขียนหัวข้อและข้อมูลให้ตรงไปตรงมา เพื่อให้ค้นหาได้แม่นยำ", en: "Use direct headings and facts so retrieval stays accurate."},
       "assistant.guide_example": {th: "# ข้อมูลร้าน\n\n- เปิดทุกวัน 09:00-20:00 น.\n- ส่งฟรีเมื่อยอดสั่งซื้อครบ 500 บาท\n- เปลี่ยนสินค้าได้ภายใน 7 วัน พร้อมใบเสร็จ", en: "# Store information\n\n- Open daily from 09:00 to 20:00\n- Free delivery for orders of 500 THB or more\n- Returns accepted within 7 days with a receipt"},
+      "assistant.guide_knowledge_rules_title": {th: "เขียน Knowledge ให้ AI ตอบง่าย", en: "Write knowledge the AI can use easily"},
+      "assistant.guide_knowledge_specific_title": {th: "แยกหัวข้อและเขียนข้อเท็จจริงสั้น ๆ", en: "Use sections and short facts"},
+      "assistant.guide_knowledge_specific_body": {th: "ใช้หัวข้อ เช่น เวลาเปิดบริการ, ราคา, วิธีจัดส่ง แล้วเขียนหนึ่งข้อเท็จจริงต่อหนึ่งบรรทัด หลีกเลี่ยงย่อหน้ายาวที่รวมหลายเรื่อง", en: "Use headings such as Opening hours, Prices, and Delivery, then put one fact on each line. Avoid long paragraphs that mix unrelated subjects."},
+      "assistant.guide_knowledge_variants_title": {th: "ใส่คำที่ลูกค้าใช้จริง", en: "Include words customers actually use"},
+      "assistant.guide_knowledge_variants_body": {th: "ถ้าลูกค้าอาจถามว่า “เปิดกี่โมง”, “ร้านปิดตอนไหน” หรือ “เวลาทำการ” ให้มีคำเหล่านี้อยู่ใกล้ข้อมูลเวลาเพื่อช่วยค้นหา", en: "If customers may ask 'what time do you open,' 'when do you close,' or 'business hours,' keep those phrases near the hours so retrieval can find them."},
+      "assistant.guide_knowledge_reindex_title": {th: "บันทึกและสร้างดัชนีทุกครั้ง", en: "Save and index after every change"},
+      "assistant.guide_knowledge_reindex_body": {th: "การแก้ข้อความอย่างเดียวไม่ทำให้ AI เห็นข้อมูลใหม่ ต้องกด “บันทึกและสร้างดัชนี” หรือ “ดึงข้อมูล” ของ Knowledge API ให้เสร็จก่อนทดสอบ", en: "Editing text alone does not update the AI. Finish Save and index or sync the Knowledge API before testing the new information."},
       "assistant.guide_notes_title": {th: "ข้อควรรู้", en: "Good to know"},
       "assistant.guide_private_title": {th: "Knowledge เป็นส่วนตัว", en: "Knowledge is private"},
       "assistant.guide_private_body": {th: "Knowledge และประวัติคำถามของคุณแยกจากผู้ใช้อื่นในระบบ", en: "Your knowledge and question history are isolated from other users."},
@@ -4465,6 +4812,12 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.guide_unanswered_body": {th: "Admin สามารถตอบคำถามค้างได้ และคำตอบที่อนุมัติจะถูกเพิ่มกลับเข้า Knowledge ของเจ้าของคำถาม", en: "An admin can resolve the question, and the approved answer is added to the question owner's knowledge."},
       "assistant.guide_refresh_title": {th: "เมื่อข้อมูลเปลี่ยน", en: "When information changes"},
       "assistant.guide_refresh_body": {th: "บันทึก knowledge.md ใหม่ หรือกด “ดึงข้อมูล” ที่ Knowledge API เพื่อสร้างดัชนีล่าสุดก่อนถามอีกครั้ง", en: "Save knowledge.md again or sync the Knowledge API to rebuild the latest index before asking again."},
+      "assistant.guide_background_title": {th: "ตอบอัตโนมัติทำงานบนเซิร์ฟเวอร์", en: "Auto reply runs on the server"},
+      "assistant.guide_background_body": {th: "หลังเปิดสวิตช์แล้วสามารถปิดหน้าเว็บได้ แต่โปรแกรม LinePassport, Ollama และเซสชัน LINE ต้องยังทำงานอยู่บนเซิร์ฟเวอร์", en: "You may close the web page after enabling it, but LinePassport, Ollama, and the LINE session must keep running on the server."},
+      "assistant.guide_new_messages_title": {th: "ตอบเฉพาะข้อความใหม่", en: "Only new messages are answered"},
+      "assistant.guide_new_messages_body": {th: "ระบบสร้างจุดเริ่มต้นเมื่อเปิดใช้งานและไม่ย้อนตอบข้อความเก่า รองรับข้อความตัวอักษรที่เข้ามาหลังจากเปิดระบบ และมีการจำกัดความถี่เพื่อป้องกันการตอบวนหรือ Flood", en: "The system establishes a baseline when enabled and does not reply to old messages. It processes new text messages and rate-limits replies to prevent loops or flooding."},
+      "assistant.guide_error_title": {th: "เมื่อไม่ตอบ LINE", en: "When LINE receives no reply"},
+      "assistant.guide_error_body": {th: "ตรวจว่าสวิตช์หลักและ Contact/Group เปิดอยู่ สถานะ AI ขึ้นพร้อมใช้งาน เวลา “ตรวจข้อความล่าสุด” เดินต่อ และไม่มี error ในหน้า Log หมวด AI", en: "Check that the main switch and Contacts/Groups are enabled, AI shows Ready, Last checked keeps updating, and no error appears in the AI logs."},
       "assistant.knowledge_title": {th: "Knowledge / RAG ของฉัน", en: "My Knowledge / RAG"},
       "assistant.knowledge_hint": {th: "ข้อมูลนี้เป็นของบัญชีผู้ใช้คุณและไม่แชร์กับสมาชิกคนอื่น", en: "This knowledge belongs to your user account and is not shared with other members."},
       "assistant.knowledge_ph": {th: "# Knowledge\n\nใส่ข้อมูลที่ต้องการให้ AI ใช้ตอบคำถาม", en: "# Knowledge\n\nAdd information for the AI to use when answering."},
@@ -4522,7 +4875,37 @@ INDEX_HTML = r"""<!doctype html>
       "tabs.incoming_api": {th: "API", en: "API"},
       "tabs.tools": {th: "เครื่องมือ", en: "Tools"},
       "tabs.bot": {th: "บอท", en: "Bot"},
+      "tabs.logs": {th: "Log", en: "Logs"},
       "tabs.ai": {th: "AI", en: "AI Settings"},
+      "line_guide.open": {th: "วิธีใช้ LINE", en: "LINE usage guide"},
+      "line_guide.title": {th: "เริ่มใช้งาน LINE", en: "Get started with LINE"},
+      "line_guide.subtitle": {th: "อ่านรายชื่อ เปิดแชท และส่งข้อความจากบัญชี LINE ที่เลือกอย่างปลอดภัย", en: "Browse contacts, open conversations, and send safely from the selected LINE account."},
+      "line_guide.step_1_title": {th: "เลือกบัญชี LINE ด้านบน", en: "Select a LINE account at the top"},
+      "line_guide.step_1_body": {th: "ทุกอย่างในหน้านี้ใช้เฉพาะบัญชีที่เลือก ตรวจป้ายสถานะให้ขึ้น “เชื่อมต่อแล้ว” และ “พร้อมส่งข้อความ” ก่อนเริ่ม หากยังไม่มีบัญชี ให้เพิ่มจาก ตั้งค่า → จัดการบัญชี LINE", en: "Everything on this page uses only the selected account. Confirm the Connected and Ready to send labels first. If there is no account, add one from Settings > LINE Accounts."},
+      "line_guide.step_2_title": {th: "หารายชื่อหรือกลุ่ม", en: "Find a contact or group"},
+      "line_guide.step_2_body": {th: "แท็บ “ทั้งหมด” รวมรายชื่อและกลุ่มไว้ด้วยกัน หรือเลือกดูเฉพาะ “รายชื่อ” และ “กลุ่ม” ใช้ช่องค้นหาชื่อ และกดปุ่มรีเฟรชเมื่อเพิ่งเพิ่มเพื่อนหรือเข้ากลุ่มใหม่", en: "All combines contacts and groups, or use Contacts and Groups separately. Search by name, and refresh after adding a friend or joining a new group."},
+      "line_guide.step_3_title": {th: "เปิดบทสนทนา", en: "Open a conversation"},
+      "line_guide.step_3_body": {th: "กดรายการที่ต้องการเพื่อเปิดข้อความ รายการจะเรียงตามการติดต่อล่าสุดและแสดงจำนวนที่ยังไม่อ่าน หน้าที่เปิดอยู่จะตรวจข้อความใหม่เป็นระยะโดยไม่ต้องกดรีเฟรชเอง", en: "Select an item to open its messages. Items are ordered by recent activity and show unread counts. The open page checks for new messages periodically."},
+      "line_guide.step_4_title": {th: "ส่งข้อความหรือไฟล์", en: "Send text or files"},
+      "line_guide.step_4_body": {th: "พิมพ์ข้อความแล้วกดปุ่มส่งสีเขียว หรือกด Enter; ใช้ Shift+Enter เพื่อขึ้นบรรทัดใหม่ ปุ่มคลิปหนีบใช้ส่งไฟล์ ปุ่มรูปใช้ส่งรูป และปุ่มรูปกุญแจใช้ส่งข้อความปัจจุบันแบบเข้ารหัส", en: "Type a message and select the green Send button or press Enter; use Shift+Enter for a new line. The paperclip sends a file, the image button sends an image, and the lock sends the current text encrypted."},
+      "line_guide.step_5_title": {th: "เปิดการแจ้งเตือนข้อความใหม่", en: "Enable new-message notifications"},
+      "line_guide.step_5_body": {th: "กดรูประฆังด้านบนแล้วอนุญาต Notification และเสียงในเบราว์เซอร์ ต้องกดเปิดด้วยตัวเองอย่างน้อยหนึ่งครั้ง หากเคยกดบล็อก ให้เปลี่ยนสิทธิ์จากการตั้งค่าเว็บไซต์ของเบราว์เซอร์", en: "Select the bell at the top and allow browser notifications and sound. You must enable it manually at least once. If previously blocked, change the site's browser permissions."},
+      "line_guide.open_chat": {th: "กลับไปหน้ารายชื่อและแชท", en: "Return to contacts and chat"},
+      "line_guide.enable_notifications": {th: "เปิดการแจ้งเตือน", en: "Enable notifications"},
+      "line_guide.media_title": {th: "ข้อความแต่ละชนิดจะแสดงอย่างไร", en: "How each message type appears"},
+      "line_guide.image_title": {th: "รูปภาพ", en: "Images"},
+      "line_guide.image_body": {th: "รูปที่ระบบอ่านได้จะแสดงในแชทและกดเพื่อขยายเต็มจอได้ หาก LINE เข้ารหัสสื่อชนิดนั้นและระบบถอดไม่ได้ จะมีข้อความให้เปิดดูในแอป LINE", en: "Readable images appear in chat and can be selected for a full-screen preview. If LINE encrypts media that cannot be decoded, the message asks you to open it in LINE."},
+      "line_guide.video_title": {th: "วิดีโอ เสียง และไฟล์", en: "Video, audio, and files"},
+      "line_guide.video_body": {th: "วิดีโอและเสียงที่ดาวน์โหลดได้จะมีตัวเล่น ส่วนไฟล์จะแสดงชื่อและปุ่มดาวน์โหลด เนื้อหาที่หมดอายุหรือเข้ารหัสอาจต้องเปิดจาก LINE บนมือถือ", en: "Downloadable video and audio show a player, while files show a name and download action. Expired or encrypted content may need to be opened in the LINE mobile app."},
+      "line_guide.location_title": {th: "ตำแหน่งที่ตั้งและรายชื่อผู้ติดต่อ", en: "Locations and shared contacts"},
+      "line_guide.location_body": {th: "ตำแหน่งจะแสดงชื่อสถานที่ พิกัด และปุ่มเปิดแผนที่ ส่วนข้อมูลผู้ติดต่อสามารถกดเปิดแชทได้เมื่อ LINE ส่งรหัสปลายทางมาครบ", en: "A location shows its place name, coordinates, and an Open map action. A shared contact can open a chat when LINE provides its target ID."},
+      "line_guide.troubleshoot_title": {th: "เมื่อใช้งานไม่ได้ ให้ตรวจตามนี้", en: "Troubleshooting checklist"},
+      "line_guide.no_contacts_title": {th: "ไม่พบรายชื่อหรือข้อความไม่อัปเดต", en: "Contacts are missing or messages do not update"},
+      "line_guide.no_contacts_body": {th: "ตรวจว่าบัญชีด้านบนถูกต้อง กดรีเฟรชหนึ่งครั้ง และดูสถานะการเชื่อมต่อ หากเซสชันหมดอายุให้ลบบัญชีเดิมแล้วเพิ่มบัญชี LINE ใหม่", en: "Confirm the selected account, refresh once, and check connection status. If the session has expired, remove the old account and add the LINE account again."},
+      "line_guide.send_error_title": {th: "ส่งข้อความหรือสื่อไม่สำเร็จ", en: "Text or media cannot be sent"},
+      "line_guide.send_error_body": {th: "ลองส่งข้อความธรรมดาก่อน ตรวจอินเทอร์เน็ตและ Proxy ของบัญชี แล้วเปิดเมนู Log เพื่อดูข้อความผิดพลาดแบบเต็ม โดยเฉพาะ SSL, session expired หรือ media upload failed", en: "Try plain text first, check the server connection and account proxy, then open Logs for the full error, especially SSL, session expired, or media upload failed errors."},
+      "line_guide.scope_title": {th: "ข้อมูลไม่ข้ามบัญชี", en: "Data stays account-scoped"},
+      "line_guide.scope_body": {th: "เมื่อเปลี่ยนบัญชี LINE รายชื่อ แชท บอท API และ Log จะเปลี่ยนตามบัญชีที่เลือก และไม่ไปแก้ข้อมูลของบัญชีอื่น", en: "Switching LINE accounts changes contacts, chat, bots, APIs, and logs to the selected account without modifying another account."},
       "ai.title": {th: "ตั้งค่า AI สร้างรูป", en: "AI image settings"},
       "ai.status_on": {th: "ตั้งค่าแล้ว", en: "Configured"},
       "ai.status_off": {th: "ยังไม่ได้ตั้งค่า", en: "Not configured"},
@@ -4573,6 +4956,26 @@ INDEX_HTML = r"""<!doctype html>
       "settings.subtitle_accounts": {th: "จัดการบัญชี", en: "Account Management"},
       "settings.subtitle_line_accounts": {th: "เพิ่ม แก้ไข หรือลบบัญชี LINE", en: "Add, edit, or delete LINE accounts."},
       "settings.subtitle_users": {th: "จัดการผู้ใช้ บทบาท และบัญชี LINE ที่เข้าถึงได้", en: "Manage users, roles, and LINE account access."},
+      "settings.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
+      "settings.subtitle_guide": {th: "วิธีใช้รหัสผ่าน บัญชี LINE และสิทธิ์ผู้ใช้", en: "How to manage passwords, LINE accounts, and user access."},
+      "settings.guide_title": {th: "วิธีใช้เมนูตั้งค่า", en: "How to use Settings"},
+      "settings.guide_subtitle": {th: "จัดการรหัสผ่าน บัญชี LINE และสิทธิ์ผู้ใช้โดยไม่ทำข้อมูลข้ามกัน", en: "Manage passwords, LINE accounts, and user access while keeping workspaces isolated."},
+      "settings.guide_password_title": {th: "เปลี่ยนรหัสผ่านเว็บ", en: "Change the web password"},
+      "settings.guide_password_body": {th: "ใส่รหัสปัจจุบัน รหัสใหม่ 8-128 ตัวอักษร และยืนยันรหัสใหม่ให้ตรงกัน รหัสนี้ใช้เข้า LinePassport ไม่ใช่รหัสผ่าน LINE", en: "Enter the current password, a new password of 8-128 characters, and the same confirmation. This password signs in to LinePassport; it is not the LINE password."},
+      "settings.guide_account_title": {th: "เพิ่มบัญชี LINE", en: "Add a LINE account"},
+      "settings.guide_account_body": {th: "ไปที่ “จัดการบัญชี LINE” กด “เพิ่มบัญชี” แล้วทำ 4 ขั้นตอน: เริ่ม → สแกน QR → ยืนยัน PIN บนมือถือเมื่อ LINE ขอ → รอเสร็จสิ้น ระบบจะดึงชื่อที่แสดงจาก LINE ให้อัตโนมัติ", en: "Open LINE Accounts, select Add Account, and complete four steps: Start, scan QR, confirm the PIN on the phone when LINE asks, and wait for completion. The LINE display name is loaded automatically."},
+      "settings.guide_proxy_title": {th: "ใช้ Proxy เฉพาะเมื่อจำเป็น", en: "Use a proxy only when necessary"},
+      "settings.guide_proxy_body": {th: "เปิด Proxy ก่อนกดเริ่ม แล้วกรอกประเภท Host และ Port; Username/Password ใส่เมื่อผู้ให้บริการกำหนด Proxy จะผูกกับบัญชี LINE นี้เท่านั้น กรอกผิดจะทำให้ QR หรือการส่งข้อความล้มเหลว", en: "Enable Proxy before starting and enter its type, host, and port; add username and password only when required. It applies only to this LINE account, and incorrect values can break QR login or sending."},
+      "settings.guide_manage_account_title": {th: "แก้ชื่อหรือลบบัญชี", en: "Rename or remove an account"},
+      "settings.guide_manage_account_body": {th: "แก้ชื่อเพื่อช่วยแยกหลายบัญชีได้โดยไม่เปลี่ยนชื่อจริงใน LINE การลบบัญชีจะลบเซสชันออกจากพื้นที่ผู้ใช้นี้และพักงานตั้งเวลาของบัญชีนั้น ควรตรวจงานก่อนยืนยัน", en: "Rename an account to distinguish multiple sessions without changing the real LINE name. Removing it deletes the session from this workspace and pauses that account's schedules, so review jobs before confirming."},
+      "settings.guide_users_title": {th: "จัดการผู้ใช้และบทบาท", en: "Manage users and roles"},
+      "settings.guide_users_body": {th: "เมนูนี้แสดงเฉพาะผู้มีสิทธิ์ ผู้ใช้ใหม่มีพื้นที่ส่วนตัวแบบคลีนและต้องเพิ่ม LINE ของตนเอง กำหนดบทบาทตามงานที่ต้องทำ และปิดใช้งานบัญชีแทนการลบเมื่อยังต้องเก็บประวัติ", en: "This menu appears only with permission. New users receive a clean private workspace and add their own LINE account. Assign the least role needed and disable a user instead of deleting when history must be retained."},
+      "settings.guide_roles_title": {th: "เลือกบทบาทอย่างไร", en: "Choosing a role"},
+      "settings.guide_admin_body": {th: "เหมาะกับเจ้าของพื้นที่หรือผู้ดูแลที่ต้องตั้งค่าบัญชี ผู้ใช้ บอท API และ AI ภายในขอบเขตที่ระบบอนุญาต", en: "For workspace owners or administrators who configure accounts, users, bots, APIs, and AI within their permitted scope."},
+      "settings.guide_operator_body": {th: "เหมาะกับผู้ปฏิบัติงานที่ต้องอ่าน ส่งข้อความ และดูแลตารางส่ง แต่ไม่ควรเปลี่ยนการตั้งค่าระบบหรือจัดการสมาชิก", en: "For operators who read and send messages and manage schedules, without changing system settings or members."},
+      "settings.guide_viewer_body": {th: "เหมาะกับผู้ตรวจสอบที่ต้องดูข้อมูลและ Log โดยไม่แก้ไขหรือส่งข้อความ", en: "For reviewers who need read-only access to information and logs without editing or sending."},
+      "settings.guide_isolation_title": {th: "ข้อมูลของสมาชิกแยกจากกัน", en: "Member data is isolated"},
+      "settings.guide_isolation_body": {th: "บัญชี LINE, Pattern, ตารางส่ง, Incoming API, AI Settings และ Knowledge ของผู้ใช้หนึ่งจะไม่ถูกแชร์ให้อีกผู้ใช้โดยอัตโนมัติ God ใช้หน้าจัดการระบบเพื่อตรวจรายละเอียดได้", en: "One user's LINE accounts, patterns, schedules, Incoming APIs, AI settings, and knowledge are not automatically shared with another user. God can inspect details from system management."},
       "settings.back": {th: "ย้อนกลับ", en: "Back"},
       "password.title": {th: "เปลี่ยนรหัสผ่าน", en: "Change Password"},
       "password.current": {th: "รหัสผ่านปัจจุบัน", en: "Current password"},
@@ -4754,6 +5157,8 @@ INDEX_HTML = r"""<!doctype html>
       "bot.guide_step_4_body": {th: "เลือกส่งครั้งเดียวหรือส่งซ้ำ ระบุช่วงวันที่ ช่วงเวลารายวัน ระยะห่างเป็นนาที และจำนวนครั้งสูงสุดได้", en: "Choose one-time or repeated delivery, with a date range, daily time window, interval, and optional maximum sends."},
       "bot.guide_step_5_title": {th: "ทดสอบแล้วติดตามผล", en: "Test and monitor"},
       "bot.guide_step_5_body": {th: "ใช้ “ส่งเดี๋ยวนี้” ทดสอบก่อนเปิดงานซ้ำ จากนั้นตรวจสถานะและรายละเอียดทุก action ในหน้า Log", en: "Use Send now before enabling a repeated job, then review its status and every action in Logs."},
+      "bot.guide_step_6_title": {th: "ปล่อยให้บอททำงานบนเซิร์ฟเวอร์", en: "Let the bot run on the server"},
+      "bot.guide_step_6_body": {th: "เมื่อสถานะงานเป็น “ทำงานอยู่” สามารถปิดหน้าเว็บได้ ตัว Worker บนเซิร์ฟเวอร์จะตรวจเวลาและส่งต่อเอง แต่โปรแกรม LinePassport และเซสชัน LINE ต้องยังออนไลน์", en: "When a job is Running, you may close the web page. The server worker checks the schedule and sends it, but LinePassport and the LINE session must remain online."},
       "bot.guide_open_schedule": {th: "สร้างตารางส่ง", en: "Create schedule"},
       "bot.guide_open_patterns": {th: "จัดการแพทเทิร์น", en: "Manage patterns"},
       "bot.guide_open_logs": {th: "เปิด Log", en: "Open logs"},
@@ -4771,6 +5176,15 @@ INDEX_HTML = r"""<!doctype html>
       "bot.guide_repeat_title": {th: "ตัวอย่างงานส่งซ้ำ", en: "Repeated job example"},
       "bot.guide_repeat_hint": {th: "ระบบจะส่งเฉพาะวันที่และช่วงเวลาที่กำหนด", en: "Messages are sent only inside the configured dates and daily window."},
       "bot.guide_repeat_example": {th: "โหมด: ส่งซ้ำ\nช่วงวันที่: 01/08/2026 - 31/08/2026\nช่วงเวลารายวัน: 09:00 - 18:00\nเว้นระยะ: 30 นาที\nจำนวนสูงสุด: 20 ครั้ง", en: "Mode: Repeat\nDate range: 01/08/2026 - 31/08/2026\nDaily window: 09:00 - 18:00\nInterval: 30 minutes\nMaximum: 20 sends"},
+      "bot.guide_fields_title": {th: "ความหมายของเวลาส่ง", en: "Schedule field meanings"},
+      "bot.guide_once_title": {th: "ส่งครั้งเดียว", en: "Send once"},
+      "bot.guide_once_body": {th: "ส่งหนึ่งครั้งตามวันและเวลาที่กำหนด เมื่อส่งสำเร็จแล้วงานจะไม่ทำซ้ำ", en: "Sends once at the configured date and time. After a successful send, the job does not repeat."},
+      "bot.guide_repeat_mode_title": {th: "ส่งซ้ำ", en: "Repeat"},
+      "bot.guide_repeat_mode_body": {th: "ส่งหลายครั้งภายในช่วงวันที่ โดยจะส่งเฉพาะช่วงเวลาเริ่ม-สิ้นสุดของแต่ละวันและเว้นตามจำนวนนาทีที่กำหนด", en: "Sends repeatedly during the date range, only inside each day's start and end times, using the configured minute interval."},
+      "bot.guide_interval_title": {th: "เว้นระยะ", en: "Interval"},
+      "bot.guide_interval_body": {th: "เวลาระหว่างรอบ เช่น 30 นาที หมายถึงหลังส่งรอบหนึ่งแล้วจะรออย่างน้อย 30 นาทีก่อนรอบถัดไป", en: "The delay between runs. For example, 30 minutes means the bot waits at least 30 minutes after one run before the next."},
+      "bot.guide_limit_title": {th: "จำนวนสูงสุด", en: "Maximum sends"},
+      "bot.guide_limit_body": {th: "เพดานจำนวนครั้งของงาน ใช้ป้องกันส่งเกินที่ตั้งใจ หากไม่แน่ใจควรกำหนดไว้และตรวจผลก่อนเพิ่มจำนวน", en: "A safety cap for the job. Set one when unsure, review the results, and only then increase it."},
       "bot.guide_notes_title": {th: "ข้อควรรู้ก่อนเปิดใช้งาน", en: "Before enabling a job"},
       "bot.guide_account_title": {th: "แยกตามบัญชี LINE", en: "Isolated by LINE account"},
       "bot.guide_account_body": {th: "การเลือกบัญชีใหม่จะเปลี่ยนชุดงาน แพทเทิร์น และ Log โดยไม่ไปรบกวนบัญชีอื่น", en: "Switching accounts changes the jobs, patterns, and logs without affecting another LINE account."},
@@ -4778,6 +5192,12 @@ INDEX_HTML = r"""<!doctype html>
       "bot.guide_test_body": {th: "ตรวจปลายทาง ข้อความ รูปภาพ และการเข้ารหัสด้วย “ส่งเดี๋ยวนี้” ก่อนตั้งช่วงเวลายาว", en: "Verify targets, text, images, and encryption with Send now before scheduling a long period."},
       "bot.guide_error_title": {th: "เมื่อเกิดข้อผิดพลาด", en: "When an error occurs"},
       "bot.guide_error_body": {th: "หยุดงาน ตรวจรายละเอียดใน Log แล้วใช้ “เคลียร์งานค้าง” เฉพาะกรณีสถานะค้างหรือเกิด error", en: "Pause the job, review Logs, and use Clear stuck jobs only when a job remains stuck or errors."},
+      "bot.guide_paused_title": {th: "สถานะหยุดและทำต่อ", en: "Pause and resume"},
+      "bot.guide_paused_body": {th: "“หยุด” จะพักงานโดยไม่ลบการตั้งค่า กด “ทำต่อ” เพื่อให้คำนวณเวลารอบถัดไปใหม่ ส่วน “ลบ” จะลบงานถาวร", en: "Pause stops a job without deleting its settings. Resume recalculates the next run, while Delete permanently removes the job."},
+      "bot.guide_ai_prompt_title": {th: "Prompt สร้างรูปต้องสั่งให้สร้างรูปชัดเจน", en: "Make image prompts explicitly request an image"},
+      "bot.guide_ai_prompt_body": {th: "ระบุหัวข้อ ฉาก สไตล์ และสิ่งที่ไม่ต้องการให้ชัด ระบบจะส่งคำสั่งสร้างรูปพร้อม Prompt แบบเต็มและเก็บไว้ใน Log เพื่อใช้ตรวจสอบ", en: "Describe the subject, scene, style, and exclusions clearly. The system sends an image-generation instruction with the full prompt and stores it in Logs for review."},
+      "bot.guide_stuck_title": {th: "เคลียร์งานค้างใช้เมื่อจำเป็นเท่านั้น", en: "Clear stuck jobs only when necessary"},
+      "bot.guide_stuck_body": {th: "ปุ่มนี้ปลดสถานะรันที่ค้างหลังโปรเซสหยุดหรือเกิด error ไม่ได้ลบงานและไม่ควรกดระหว่างงานกำลังส่งจริง", en: "This releases a run left stuck after a process stop or error. It does not delete the job and should not be used while a real send is in progress."},
       "scheduler.jobs": {th: "{n} งาน", en: "{n} jobs"},
       "scheduler.new": {th: "+ ตั้งเวลาส่งใหม่", en: "+ New scheduled message"},
       "scheduler.name_ph": {th: "ชื่องาน", en: "Job name"},
@@ -4866,11 +5286,38 @@ INDEX_HTML = r"""<!doctype html>
       "scheduler.summary_max": {th: "หยุดหลังส่ง {n} ครั้ง", en: "Stops after {n} sends"},
       "tools.title": {th: "เครื่องมือ", en: "Tools"},
       "tools.selected_only": {th: "เฉพาะบัญชีที่เลือก", en: "Selected account only"},
+      "tools.nav_tools": {th: "เครื่องมือ", en: "Tools"},
+      "tools.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
       "tools.find_ph": {th: "LINE ID", en: "LINE ID"},
       "tools.find": {th: "ค้นหาผู้ใช้", en: "Find User"},
       "tools.endpoint_ph": {th: "ชื่อ Endpoint", en: "Endpoint key"},
       "tools.args_ph": {th: "อาร์กิวเมนต์แบบ JSON array", en: "JSON args array"},
       "tools.call": {th: "เรียก Endpoint", en: "Call Endpoint"},
+      "tools.guide_title": {th: "วิธีใช้เครื่องมือ", en: "How to use Tools"},
+      "tools.guide_subtitle": {th: "ค้นหาผู้ใช้ LINE และเรียก Endpoint สำหรับตรวจสอบทางเทคนิค โดยจำกัดอยู่ในบัญชีที่เลือก", en: "Find LINE users and call technical endpoints within the selected account."},
+      "tools.guide_step_1_title": {th: "เลือกบัญชี LINE ให้ถูกต้อง", en: "Select the correct LINE account"},
+      "tools.guide_step_1_body": {th: "ผลลัพธ์และการเรียก Endpoint ใช้เซสชันของบัญชีที่เลือกด้านบนเท่านั้น หากเปลี่ยนบัญชี ให้ตรวจชื่ออีกครั้งก่อนกดทำงาน", en: "Results and endpoint calls use only the account selected at the top. After switching accounts, verify the name before running a tool."},
+      "tools.guide_step_2_title": {th: "ค้นหาผู้ใช้จาก LINE ID", en: "Find a user by LINE ID"},
+      "tools.guide_step_2_body": {th: "กรอก LINE ID ที่ผู้ใช้ตั้งไว้ เช่น ton123 แล้วกด “ค้นหาผู้ใช้” ถ้าพบ ระบบจะแสดงข้อมูลดิบแบบ JSON ซึ่งอาจมี MID ชื่อที่แสดง และสถานะรูปโปรไฟล์", en: "Enter the user's public LINE ID, such as ton123, and select Find User. When found, raw JSON may include the MID, display name, and profile image status."},
+      "tools.guide_step_3_title": {th: "อ่านผลลัพธ์ในกล่อง JSON", en: "Read the JSON result"},
+      "tools.guide_step_3_body": {th: "ผลลัพธ์ที่สำเร็จมักเป็น object หรือ array ส่วนข้อผิดพลาดจะแสดงข้อความจาก LINE โดยตรง ไม่ควรนำ MID, token หรือข้อมูลภายในไปเผยแพร่", en: "A successful result is usually an object or array; errors show the LINE response. Do not publish MIDs, tokens, or internal data."},
+      "tools.guide_step_4_title": {th: "เรียก Endpoint เฉพาะเมื่อทราบคำสั่ง", en: "Call an endpoint only when you know the command"},
+      "tools.guide_step_4_body": {th: "ใส่ชื่อ Endpoint และอาร์กิวเมนต์เป็น JSON array ที่ถูกต้อง เช่น [] หรือ [\"Uxxxxxxxx\"] ฟังก์ชันนี้ส่งคำสั่งระดับต่ำไปยัง LINE ควรใช้เพื่อทดสอบหรือแก้ปัญหาโดยผู้ดูแลเท่านั้น", en: "Enter the endpoint key and a valid JSON array such as [] or [\"Uxxxxxxxx\"]. This sends a low-level LINE command and should be used only by an administrator for testing or troubleshooting."},
+      "tools.guide_open": {th: "เปิดหน้าเครื่องมือ", en: "Open Tools"},
+      "tools.guide_terms_title": {th: "ตัวอย่างและความหมาย", en: "Examples and terminology"},
+      "tools.guide_line_id_title": {th: "LINE ID", en: "LINE ID"},
+      "tools.guide_line_id_body": {th: "ชื่อที่ผู้ใช้ตั้งเพื่อให้ค้นหาได้ ไม่ใช่ชื่อที่แสดง และไม่ใช่ MID ภายใน", en: "A public ID configured by the user for search. It is not the display name or the internal MID."},
+      "tools.guide_mid_title": {th: "MID", en: "MID"},
+      "tools.guide_mid_body": {th: "รหัสภายในของ LINE มักขึ้นต้นด้วย U สำหรับผู้ใช้, C สำหรับกลุ่ม หรือ R สำหรับห้องแชท", en: "LINE's internal identifier, usually starting with U for a user, C for a group, or R for a chat room."},
+      "tools.guide_args_title": {th: "JSON array", en: "JSON array"},
+      "tools.guide_args_body": {th: "รายการอาร์กิวเมนต์ต้องใช้วงเล็บเหลี่ยมและเครื่องหมายคำพูดแบบ JSON เช่น [\"U123\", 20] ห้ามใช้ข้อความธรรมดาที่ไม่ใช่ JSON", en: "Arguments must use JSON brackets and quotes, for example [\"U123\", 20]. Plain text that is not valid JSON is rejected."},
+      "tools.guide_troubleshoot_title": {th: "เมื่อค้นหาหรือเรียก Endpoint ไม่ได้", en: "When search or endpoint calls fail"},
+      "tools.guide_not_found_title": {th: "ค้นหาไม่พบ", en: "User not found"},
+      "tools.guide_not_found_body": {th: "ตรวจตัวพิมพ์เล็ก-ใหญ่และเว้นวรรคของ LINE ID ผู้ใช้บางคนปิดการค้นหาด้วย ID หรือไม่ได้ตั้ง LINE ID จึงอาจค้นหาไม่ได้", en: "Check capitalization and spaces. Some users disable search by ID or have no LINE ID, so they cannot be found this way."},
+      "tools.guide_invalid_json_title": {th: "JSON ไม่ถูกต้อง", en: "Invalid JSON"},
+      "tools.guide_invalid_json_body": {th: "ตรวจวงเล็บ เครื่องหมายคำพูด และเครื่องหมายจุลภาค แล้วเริ่มทดสอบจาก [] ก่อน", en: "Check brackets, quotes, and commas, and start by testing with [] first."},
+      "tools.guide_permission_title": {th: "ปุ่มกดไม่ได้", en: "Buttons are disabled"},
+      "tools.guide_permission_body": {th: "ต้องเลือกบัญชี LINE และผู้ใช้ต้องมีสิทธิ์เครื่องมือ หากไม่มีสิทธิ์ให้ Admin หรือ God ปรับบทบาทให้", en: "A LINE account must be selected and your user must have the Tools permission. Ask an Admin or God to change the role when necessary."},
       "common.confirm": {th: "ยืนยัน", en: "Confirm"},
       "common.back": {th: "กลับ", en: "Back"},
       "common.next": {th: "ถัดไป", en: "Next"},
@@ -4882,11 +5329,20 @@ INDEX_HTML = r"""<!doctype html>
       "incoming_api.guide_subtitle": {th: "เลือกลิงก์เพื่อรับตัวอย่างคำขอที่นำไปใช้ได้ทันที", en: "Choose a link to get ready-to-use request examples."},
       "incoming_api.guide_choose_link": {th: "ลิงก์ API ที่ใช้ในตัวอย่าง", en: "API link used in the examples"},
       "incoming_api.guide_example_link": {th: "ตัวอย่าง — ยังไม่ได้เลือกลิงก์", en: "Example — no link selected"},
-      "incoming_api.guide_start_title": {th: "ก่อนเรียก API", en: "Before calling the API"},
-      "incoming_api.guide_start_1": {th: "สร้างลิงก์ เลือกบัญชี LINE และเลือกรายชื่อหรือกลุ่มอย่างน้อยหนึ่งปลายทาง", en: "Create a link, choose the LINE account and one or more contacts or groups."},
-      "incoming_api.guide_start_2": {th: "เปิดสถานะลิงก์ไว้ และเปิดการเข้ารหัส LINE เมื่อต้องการส่งข้อความแบบเข้ารหัส", en: "Keep the link status on. Turn on LINE encryption when encrypted text is required."},
-      "incoming_api.guide_start_3": {th: "ส่งคำขอ GET หรือ POST ไปยัง Endpoint URL ที่สร้าง ระบบไม่ต้องใช้ cookie เข้าสู่ระบบหรือ header เพิ่มเติม", en: "Send a GET or POST request to the generated Endpoint URL. No login cookie or extra header is required."},
+      "incoming_api.guide_start_title": {th: "สร้างลิงก์ API ทีละขั้น", en: "Create an API link step by step"},
+      "incoming_api.guide_start_1": {th: "เลือกบัญชี LINE ด้านบน กด “สร้างลิงก์ API” ตั้งชื่อที่บอกแหล่งที่มา เช่น แจ้งเตือนคำสั่งซื้อ และเปิดสถานะไว้", en: "Select the LINE account at the top, choose Create API link, give it a descriptive source name such as Order notification, and leave its status on."},
+      "incoming_api.guide_start_2": {th: "เลือกรายชื่อหรือกลุ่มอย่างน้อยหนึ่งปลายทาง แต่ไม่เกิน 20 ปลายทาง ทุกคำขอหนึ่งครั้งจะส่งเนื้อหาเดียวกันไปยังทุกปลายทางที่เลือก", en: "Choose at least one contact or group, up to 20 targets. One request sends the same content to every selected target."},
+      "incoming_api.guide_start_3": {th: "ตรวจรูปแบบคำขอ: GET ใช้ส่งข้อความอย่างเดียว ส่วน POST ส่งข้อความ รูปจาก URL หรือรูป Base64 ได้ เปิดการเข้ารหัสเมื่อปลายทางรองรับและต้องการเท่านั้น", en: "Review request formats: GET sends text only, while POST can send text, an image URL, or a Base64 image. Enable encryption only when it is required and supported by the target."},
+      "incoming_api.guide_start_4": {th: "ตรวจสรุปแล้วกดสร้าง จากนั้นคัดลอก Endpoint URL ไปเก็บในระบบภายนอก URL มี token ลับอยู่แล้วจึงไม่ต้องใช้ cookie เข้าสู่ระบบหรือ header เพิ่มเติม", en: "Review and create the link, then store the Endpoint URL in the external system. The URL already contains a secret token, so no login cookie or extra header is required."},
+      "incoming_api.guide_start_5": {th: "ทดสอบข้อความสั้นไปยังปลายทางทดสอบก่อนใช้งานจริง แล้วตรวจ HTTP status, JSON response และหน้า Log ว่าทุกปลายทางสำเร็จ", en: "Send a short message to a test target first, then check the HTTP status, JSON response, and Logs to confirm that every target succeeded."},
       "incoming_api.guide_secret": {th: "เก็บ Endpoint URL เหมือนรหัสผ่าน ผู้ที่มี URL สามารถส่งข้อความไปยังปลายทางที่ตั้งค่าไว้ได้", en: "Treat the Endpoint URL like a password. Anyone who has it can send to the configured targets."},
+      "incoming_api.guide_beginner_title": {th: "เริ่มทดสอบแบบง่ายที่สุด", en: "The easiest ways to test"},
+      "incoming_api.guide_browser_title": {th: "ทดสอบ GET จากเบราว์เซอร์", en: "Test GET in a browser"},
+      "incoming_api.guide_browser_body": {th: "คัดลอก Endpoint URL เติม ?text=ข้อความทดสอบ ต่อท้าย แล้วเปิด URL นั้นในเบราว์เซอร์ เหมาะกับการตรวจว่าลิงก์และปลายทางทำงานก่อนเขียนโปรแกรม", en: "Copy the Endpoint URL, append ?text=Test message, and open it in a browser. This confirms the link and targets before you write any code."},
+      "incoming_api.guide_postman_title": {th: "ทดสอบ POST ด้วย Postman หรือ cURL", en: "Test POST with Postman or cURL"},
+      "incoming_api.guide_postman_body": {th: "เลือกตัวอย่างด้านล่าง กดคัดลอก cURL แล้วเปลี่ยนข้อความหรือ URL รูปตามต้องการ สำหรับ Postman ให้เลือก Body → raw → JSON และตั้ง Content-Type เป็น application/json", en: "Choose an example below, copy its cURL, and replace the text or image URL. In Postman, use Body > raw > JSON and set Content-Type to application/json."},
+      "incoming_api.guide_same_content_title": {th: "หนึ่งคำขอส่งเนื้อหาเดียวกันทุกปลายทาง", en: "One request sends the same content to all targets"},
+      "incoming_api.guide_same_content_body": {th: "หากต้องการให้แต่ละรายชื่อได้รับข้อความต่างกัน ให้สร้างลิงก์แยก หรือเรียกคนละลิงก์พร้อมเนื้อหาที่ต้องการ", en: "To send different content to each contact, create separate links or call a different link with the content intended for that target."},
       "incoming_api.guide_get_hint": {th: "ส่งข้อความผ่าน query parameter ชื่อ text หรือ message และควรทำ URL encoding", en: "Use query parameter text or message. URL encoding is recommended."},
       "incoming_api.guide_post_text_hint": {th: "ส่ง JSON โดยใช้ฟิลด์ text หรือ message", en: "Send JSON with text or message."},
       "incoming_api.guide_image_url_title": {th: "POST — ส่งรูปจาก URL", en: "POST — send an image from a URL"},
@@ -4901,6 +5357,13 @@ INDEX_HTML = r"""<!doctype html>
       "incoming_api.guide_response_429": {th: "เรียกเกินขีดจำกัด 60 ครั้งต่อนาที", en: "The rate limit of 60 requests per minute was exceeded."},
       "incoming_api.guide_response_502": {th: "ส่งไม่สำเร็จทุกปลายทาง", en: "Sending failed for every target."},
       "incoming_api.guide_limits": {th: "ข้อความยาวได้สูงสุด 20,000 ตัวอักษร รูปมีขนาดได้สูงสุด 30 MB โดย GET รองรับเฉพาะข้อความ ส่วนรูปต้องใช้ POST", en: "Maximum text length is 20,000 characters and maximum image size is 30 MB. GET supports text only; images require POST."},
+      "incoming_api.guide_manage_title": {th: "จัดการและแก้ปัญหาลิงก์", en: "Manage and troubleshoot links"},
+      "incoming_api.guide_disable_title": {th: "ปิดใช้เมื่อต้องการหยุดชั่วคราว", en: "Disable a link to pause it"},
+      "incoming_api.guide_disable_body": {th: "ปุ่ม “ปิดใช้” ทำให้คำขอใหม่เข้าไม่ได้แต่ยังเก็บการตั้งค่าและสถิติไว้ เปิดกลับได้ภายหลัง", en: "Disable rejects new requests while preserving settings and statistics. The link can be enabled again later."},
+      "incoming_api.guide_rotate_title": {th: "สร้าง URL ใหม่เมื่อสงสัยว่ารั่ว", en: "Rotate a URL if it may be exposed"},
+      "incoming_api.guide_rotate_body": {th: "ปุ่ม “สร้าง URL ใหม่” จะยกเลิก URL เดิมทันที ต้องนำ URL ใหม่ไปเปลี่ยนในทุกระบบที่เรียกใช้งาน", en: "Rotate URL invalidates the old URL immediately. Replace it in every external system that calls the API."},
+      "incoming_api.guide_error_check_title": {th: "เมื่อ API ตอบ error", en: "When the API returns an error"},
+      "incoming_api.guide_error_check_body": {th: "ตรวจ HTTP status และ response body ก่อน จากนั้นดูหน้า Log หมวด API เพื่อแยกว่า request ไม่ถูกต้อง ลิงก์ถูกปิด เรียกถี่เกิน หรือ LINE ส่งไปยังบางปลายทางไม่สำเร็จ", en: "Check the HTTP status and response body, then review the API logs to distinguish an invalid request, disabled link, rate limit, or LINE delivery failure for individual targets."},
       "incoming_api.create": {th: "+ สร้างลิงก์ API", en: "+ Create API link"},
       "incoming_api.wizard_title": {th: "สร้างลิงก์ API", en: "Create API link"},
       "incoming_api.wizard_subtitle": {th: "ลิงก์จะใช้งานได้เฉพาะบัญชี LINE และปลายทางที่กำหนด", en: "The link is limited to the selected LINE account and targets."},
@@ -5027,12 +5490,59 @@ INDEX_HTML = r"""<!doctype html>
       "confirm.run_now": {th: "ส่งข้อความตอนนี้เลยหรือไม่?", en: "Send this message right now?"},
       "confirm.delete_schedule": {th: "ลบตารางเวลานี้?", en: "Delete this schedule?"},
       "confirm.delete_user": {th: "ลบผู้ใช้ {name}?", en: "Delete user {name}?"},
-      "confirm.clear_bot_logs": {th: "ล้าง log บอทของบัญชีนี้?", en: "Clear bot logs for this account?"},
-      "botlog.title": {th: "บันทึกบอท", en: "Bot Log"},
+      "confirm.clear_bot_logs": {th: "ล้าง Log ทั้งหมดของบัญชีนี้?", en: "Clear all logs for this account?"},
+      "botlog.title": {th: "Log ทั้งหมด", en: "Activity Log"},
+      "botlog.subtitle": {th: "รวมทุก action จากบอท API AI และการตอบกลับอัตโนมัติของบัญชี LINE ที่เลือก", en: "All Bot, API, AI, and automatic reply activity for the selected LINE account."},
+      "botlog.nav_logs": {th: "รายการ Log", en: "Log entries"},
+      "botlog.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
+      "botlog.guide_title": {th: "วิธีอ่าน Log", en: "How to read Logs"},
+      "botlog.guide_subtitle": {th: "ใช้ Log เพื่อตรวจว่าระบบรับงาน ทำขั้นตอนไหนสำเร็จ และหยุดที่จุดใด", en: "Use Logs to see whether work was accepted, which steps succeeded, and where it stopped."},
+      "botlog.guide_step_1_title": {th: "เลือกบัญชี LINE ที่ต้องการตรวจ", en: "Select the LINE account to inspect"},
+      "botlog.guide_step_1_body": {th: "Log แยกตามบัญชี LINE เสมอ ถ้าไม่พบเหตุการณ์ ให้ตรวจชื่อบัญชีในเมนูด้านบนก่อน เพราะการเปลี่ยนบัญชีจะเปลี่ยนชุด Log ทันที", en: "Logs are always isolated by LINE account. If an event is missing, check the account selected at the top because switching accounts changes the log set immediately."},
+      "botlog.guide_step_2_title": {th: "เริ่มจากรายการล่าสุด", en: "Start with the newest entries"},
+      "botlog.guide_step_2_body": {th: "รายการใหม่อยู่ด้านบนและรีเฟรชเบื้องหลังอัตโนมัติขณะเปิดหน้านี้ ป้าย [OK] หมายถึงขั้นตอนสำเร็จ ส่วน [ERR] หมายถึงขั้นตอนนั้นผิดพลาด", en: "New entries appear first and refresh automatically while this page is open. [OK] means that step succeeded; [ERR] means it failed."},
+      "botlog.guide_step_3_title": {th: "กรองให้เหลือเหตุการณ์ที่เกี่ยวข้อง", en: "Filter to the relevant events"},
+      "botlog.guide_step_3_body": {th: "พิมพ์ชื่องาน ชื่อปลายทาง หรือข้อความผิดพลาดในช่องค้นหา แล้วเลือกหมวดหมู่ Bot, AI, API หรือ System และเลือกดูเฉพาะ Success หรือ Error ได้", en: "Search by job, target, or error text, then filter by Bot, AI, API, or System and by Success or Error."},
+      "botlog.guide_step_4_title": {th: "เปิดรายละเอียดและอ่านตามเวลา", en: "Open details and follow the timeline"},
+      "botlog.guide_step_4_body": {th: "งานหนึ่งครั้งอาจมีหลายบรรทัด เช่น รับงาน → เตรียมเนื้อหา → ส่งรายการ → สำเร็จหรือผิดพลาด ให้เทียบเวลา ชื่องาน และปลายทางเดียวกันเพื่อดูเส้นทางทั้งหมด", en: "One run may have several entries, such as accepted, content prepared, item sent, and success or error. Match time, job, and target to follow the full path."},
+      "botlog.guide_step_5_title": {th: "แก้สาเหตุก่อนลองใหม่", en: "Fix the cause before retrying"},
+      "botlog.guide_step_5_body": {th: "อ่านข้อความผิดพลาดแบบเต็ม แก้การเชื่อมต่อ เซสชัน API Key Prompt หรือข้อมูลปลายทาง แล้วจึงกดส่งใหม่ การกด “ล้าง Log” ลบเฉพาะประวัติและไม่ได้แก้ข้อผิดพลาด", en: "Read the full error, fix the connection, session, API key, prompt, or target, and then retry. Clear Logs only removes history; it does not fix an error."},
+      "botlog.guide_open": {th: "เปิดรายการ Log", en: "Open log entries"},
+      "botlog.guide_categories_title": {th: "แต่ละหมวดบอกอะไร", en: "What each category contains"},
+      "botlog.guide_category_bot_title": {th: "Bot", en: "Bot"},
+      "botlog.guide_category_bot_body": {th: "การสร้าง แก้ไข หยุด และรันตารางส่ง รวมการเตรียมข้อความ รูป และการส่งแต่ละปลายทาง", en: "Creating, editing, pausing, and running schedules, including preparing content and sending to each target."},
+      "botlog.guide_category_ai_title": {th: "AI", en: "AI"},
+      "botlog.guide_category_ai_body": {th: "การสร้างรูปด้วย AI และการตอบ LINE อัตโนมัติ ตั้งแต่รับข้อความ สร้างคำตอบ จนส่งกลับสำเร็จ", en: "AI image generation and automatic LINE replies, from receiving a message to generating and sending the answer."},
+      "botlog.guide_category_api_title": {th: "API", en: "API"},
+      "botlog.guide_category_api_body": {th: "การสร้างหรือแก้ลิงก์ Incoming API คำขอที่เข้ามา และผลส่งข้อความหรือรูปไปยังแต่ละปลายทาง", en: "Creating or updating Incoming API links, received requests, and text or image delivery results for each target."},
+      "botlog.guide_category_system_title": {th: "System", en: "System"},
+      "botlog.guide_category_system_body": {th: "เหตุการณ์ทั่วไปของระบบที่ไม่อยู่ในสามหมวดข้างต้น เช่น การจัดการข้อมูลหรือการเชื่อมต่อ", en: "General system activity outside the other categories, such as data management or connection events."},
+      "botlog.guide_errors_title": {th: "ข้อผิดพลาดที่พบบ่อย", en: "Common errors"},
+      "botlog.guide_session_body": {th: "เซสชัน LINE หมดอายุ ให้เพิ่มบัญชี LINE ใหม่แล้วทดสอบส่งข้อความธรรมดาก่อน", en: "The LINE session expired. Add the LINE account again and test with plain text first."},
+      "botlog.guide_ssl_body": {th: "การเชื่อมต่ออัปโหลดสื่อถูกตัด ลองใหม่ ตรวจ Proxy, DNS และเครือข่ายของเซิร์ฟเวอร์ หรือทดสอบด้วยไฟล์ที่เล็กลง", en: "The media upload connection was interrupted. Retry, check the server proxy, DNS, and network, or test with a smaller file."},
+      "botlog.guide_auth_body": {th: "API Key หรือสิทธิ์ของบริการภายนอกไม่ถูกต้อง หมดอายุ หรือไม่มีเครดิต ให้ตรวจค่าที่หน้าตั้งค่าของฟังก์ชันนั้น", en: "The external API key or permission is invalid, expired, or out of credit. Check the settings for that feature."},
+      "botlog.guide_ai_error_body": {th: "โมเดล AI ไม่สามารถสร้างรูปจาก Prompt นี้ได้ ให้ตรวจว่าเลือกโมเดลภาพ ไม่มีไฟล์อ้างอิงที่หาย และปรับ Prompt ให้ชัดเจนและปลอดภัย", en: "The AI model could not create an image from the prompt. Confirm it is an image model, no referenced attachment is missing, and revise the prompt to be clear and safe."},
+      "botlog.guide_rate_body": {th: "เรียกบริการถี่เกินกำหนด ให้เว้นช่วง ลดจำนวนการส่ง หรือรอให้โควตากลับมาก่อนลองใหม่", en: "The service was called too frequently. Increase the interval, reduce sends, or wait for the quota to recover before retrying."},
       "botlog.entries": {th: "{n} รายการ", en: "{n} entries"},
+      "botlog.filtered_entries": {th: "แสดง {shown} จาก {total} รายการ", en: "Showing {shown} of {total}"},
       "botlog.refresh": {th: "รีเฟรช", en: "Refresh"},
       "botlog.clear": {th: "ล้าง log", en: "Clear"},
-      "botlog.none": {th: "ยังไม่มี log บอทสำหรับบัญชีนี้", en: "No bot log for this account yet"},
+      "botlog.none": {th: "ยังไม่มี Log สำหรับบัญชีนี้", en: "No activity log for this account yet"},
+      "botlog.no_results": {th: "ไม่พบ Log ที่ตรงกับตัวกรอง", en: "No logs match these filters"},
+      "botlog.search": {th: "ค้นหา", en: "Search"},
+      "botlog.search_ph": {th: "Action, ปลายทาง หรือรายละเอียด", en: "Action, target, or details"},
+      "botlog.category": {th: "หมวดหมู่", en: "Category"},
+      "botlog.category_all": {th: "ทุกหมวดหมู่", en: "All categories"},
+      "botlog.category_bot": {th: "บอท", en: "Bot"},
+      "botlog.category_ai": {th: "AI", en: "AI"},
+      "botlog.category_api": {th: "API", en: "API"},
+      "botlog.category_system": {th: "ระบบ", en: "System"},
+      "botlog.status": {th: "สถานะ", en: "Status"},
+      "botlog.status_all": {th: "ทุกสถานะ", en: "All statuses"},
+      "botlog.status_success": {th: "สำเร็จ", en: "Success"},
+      "botlog.status_error": {th: "ผิดพลาด", en: "Error"},
+      "botlog.success_count": {th: "สำเร็จ {n}", en: "Success {n}"},
+      "botlog.error_count": {th: "ผิดพลาด {n}", en: "Errors {n}"},
       "botlog.ok": {th: "สำเร็จ", en: "OK"},
       "botlog.fail": {th: "ผิดพลาด", en: "Failed"},
       "botlog.action.schedule.create": {th: "สร้างตารางเวลา", en: "Schedule created"},
@@ -5078,7 +5588,7 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.ai.auto_reply.sent": {th: "ส่งคำตอบ AI สำเร็จ", en: "AI reply sent"},
       "botlog.action.ai.auto_reply.rate_limit": {th: "หยุดตอบข้อความถี่เกินกำหนด", en: "Auto reply rate limited"},
       "botlog.action.ai.auto_reply.error": {th: "ตอบ LINE อัตโนมัติผิดพลาด", en: "Automatic LINE reply failed"},
-      "toast.bot_logs_cleared": {th: "ล้าง log บอทแล้ว", en: "Bot logs cleared"}
+      "toast.bot_logs_cleared": {th: "ล้าง Log ทั้งหมดแล้ว", en: "Activity logs cleared"}
     };
 
     const state = {
@@ -5093,6 +5603,9 @@ INDEX_HTML = r"""<!doctype html>
       scheduleLoading: false,
       botLogs: [],
       botLogLoading: false,
+      botLogCategory: "all",
+      botLogStatus: "all",
+      botLogSearch: "",
       conversationLoading: false,
       conversationSignature: "",
       conversationBaseline: new Map(),
@@ -5245,19 +5758,24 @@ INDEX_HTML = r"""<!doctype html>
       $("langToggle").textContent = t("menu.language") + ": " + (state.lang === "th" ? "EN" : "ไทย");
     }
 
-    // ---- top-level tabs (LINE / Tools / Bot / AI) ----------------------
-    const TABS = ["line", "assistant", "incoming-api", "tools", "bot"];
-    const BOT_PAGES = ["schedules", "schedule", "patterns", "pattern-categories", "logs", "ai-settings", "guide"];
+    // ---- top-level tabs -------------------------------------------------
+    const TABS = ["line", "assistant", "incoming-api", "tools", "bot", "logs"];
+    const BOT_PAGES = ["schedules", "schedule", "patterns", "pattern-categories", "ai-settings", "guide"];
     function setTab(tab) {
       if (!TABS.includes(tab)) tab = "line";
       if (tab === "incoming-api" && !hasPermission("manage_api")) tab = "line";
       state.tab = tab;
       localStorage.setItem("okline.tab", tab);
+      let activeTab = null;
       document.querySelectorAll(".tabbar .tab").forEach((btn) => {
         const on = btn.dataset.tab === tab;
         btn.classList.toggle("active", on);
         btn.setAttribute("aria-selected", String(on));
+        if (on) activeTab = btn;
       });
+      if (activeTab) {
+        requestAnimationFrame(() => activeTab.scrollIntoView({block: "nearest", inline: "nearest"}));
+      }
       document.querySelectorAll("[data-tab-panel]").forEach((p) => {
         p.classList.toggle("active", p.dataset.tabPanel === tab);
       });
@@ -5265,8 +5783,8 @@ INDEX_HTML = r"""<!doctype html>
         setBotPage(state.botPage || "schedules");
         loadPatterns();
         loadSchedules().catch(toastError);
-        loadBotLogs().catch(toastError);
       }
+      if (tab === "logs") loadBotLogs().catch(toastError);
       if (tab === "line") refreshConversationsInBackground();
       if (tab === "assistant") {
         loadAssistant().catch(toastError);
@@ -5290,8 +5808,41 @@ INDEX_HTML = r"""<!doctype html>
       if (page === "patterns") loadPatterns();
       if (page === "pattern-categories") loadPatterns();
       if (page === "schedules") loadSchedules().catch(toastError);
-      if (page === "logs") loadBotLogs().catch(toastError);
       if (page === "ai-settings") loadAiSettings();
+    }
+
+    function setLineGuideView(showGuide) {
+      const guideOpen = Boolean(showGuide);
+      $("tabPanelLine").classList.toggle("guide-active", guideOpen);
+      $("lineGuideView").classList.toggle("hidden", !guideOpen);
+      if (guideOpen) {
+        $("lineGuideView").scrollTop = 0;
+        $("lineGuideBackButton").focus({preventScroll: true});
+      } else {
+        $("lineGuideButton").focus({preventScroll: true});
+      }
+    }
+
+    function setToolsView(view) {
+      const guideOpen = view === "guide";
+      $("toolsMainView").classList.toggle("hidden", guideOpen);
+      $("toolsGuideView").classList.toggle("hidden", !guideOpen);
+      $("toolsMainViewButton").classList.toggle("active", !guideOpen);
+      $("toolsGuideViewButton").classList.toggle("active", guideOpen);
+      $("toolsMainViewButton").setAttribute("aria-selected", String(!guideOpen));
+      $("toolsGuideViewButton").setAttribute("aria-selected", String(guideOpen));
+      if (guideOpen) $("tabPanelTools").scrollTop = 0;
+    }
+
+    function setLogsView(view) {
+      const guideOpen = view === "guide";
+      $("logsMainView").classList.toggle("hidden", guideOpen);
+      $("logsGuideView").classList.toggle("hidden", !guideOpen);
+      $("logsMainViewButton").classList.toggle("active", !guideOpen);
+      $("logsGuideViewButton").classList.toggle("active", guideOpen);
+      $("logsMainViewButton").setAttribute("aria-selected", String(!guideOpen));
+      $("logsGuideViewButton").setAttribute("aria-selected", String(guideOpen));
+      if (guideOpen) $("tabPanelLogs").scrollTop = 0;
     }
 
     // ---- contacts sub-tabs (all / people / groups) ---------------------
@@ -5738,16 +6289,20 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function setSettingsPane(pane) {
-      if (!["password", "accounts", "users"].includes(pane)) pane = "accounts";
+      if (!["password", "accounts", "users", "guide"].includes(pane)) pane = "accounts";
       $("passwordPane").classList.toggle("active", pane === "password");
       $("accountsPane").classList.toggle("active", pane === "accounts");
       $("usersPane").classList.toggle("active", pane === "users");
+      $("settingsGuidePane").classList.toggle("active", pane === "guide");
       $("passwordTabButton").classList.toggle("active", pane === "password");
       $("accountsTabButton").classList.toggle("active", pane === "accounts");
       $("usersTabButton").classList.toggle("active", pane === "users");
+      $("settingsGuideTabButton").classList.toggle("active", pane === "guide");
       const subtitleKey = pane === "password"
         ? "settings.subtitle_password"
-        : (pane === "users" ? "settings.subtitle_users" : "settings.subtitle_line_accounts");
+        : (pane === "users"
+          ? "settings.subtitle_users"
+          : (pane === "guide" ? "settings.subtitle_guide" : "settings.subtitle_line_accounts"));
       $("settingsSubtitle").textContent = t(subtitleKey);
       if (pane === "accounts" || pane === "users") loadAccountManagement().catch(toastError);
     }
@@ -6250,6 +6805,7 @@ INDEX_HTML = r"""<!doctype html>
 
     async function selectAccount() {
       const accountId = selectedAccountId();
+      setLineGuideView(false);
       setTab("line");
       state.activeAccountId = accountId || null;
       clearLists();
@@ -6802,6 +7358,8 @@ INDEX_HTML = r"""<!doctype html>
       const accountId = selectedAccountId();
       if (!accountId || state.conversationLoading) return;
       if (!Array.isArray(state.contacts) && !Array.isArray(state.groups)) return;
+      const lineViewIsVisible = document.visibilityState === "visible" && state.tab === "line";
+      if (!state.notificationsEnabled && !lineViewIsVisible) return;
       state.conversationLoading = true;
       try {
         const data = await api(`/api/conversations?${accountQuery(accountId)}&limit=1000`);
@@ -8344,16 +8902,60 @@ INDEX_HTML = r"""<!doctype html>
       return text.slice(0, head) + "..." + text.slice(-tail);
     }
 
+    function botLogCategory(log) {
+      const action = String(log?.action || "");
+      if (action.startsWith("incoming_api.") || action.startsWith("content.api.")) return "api";
+      if (action.startsWith("ai.auto_reply.") || action.startsWith("content.ai.")) return "ai";
+      if (["schedule.", "send.", "content.", "pattern."].some((prefix) => action.startsWith(prefix))) return "bot";
+      return "system";
+    }
+
+    function botLogCategoryLabel(category) {
+      const key = "botlog.category_" + category;
+      return I18N[key] ? t(key) : category;
+    }
+
+    function botLogSearchText(log) {
+      let data = "";
+      try { data = JSON.stringify(log?.data || {}); } catch (_) { data = ""; }
+      return [
+        log?.action,
+        botActionLabel(log?.action),
+        log?.scheduleName,
+        log?.target,
+        log?.detail,
+        data
+      ].filter(Boolean).join(" ").toLocaleLowerCase();
+    }
+
     function renderBotLogs({preserveScroll = false} = {}) {
-      const count = (state.botLogs || []).length;
-      $("botLogCount").textContent = t("botlog.entries", {n: count});
+      const logs = state.botLogs || [];
+      const category = state.botLogCategory || "all";
+      const statusFilter = state.botLogStatus || "all";
+      const search = String(state.botLogSearch || "").trim().toLocaleLowerCase();
+      const filteredLogs = logs.filter((log) => {
+        if (category !== "all" && botLogCategory(log) !== category) return false;
+        if (statusFilter === "success" && log.ok === false) return false;
+        if (statusFilter === "error" && log.ok !== false) return false;
+        return !search || botLogSearchText(log).includes(search);
+      });
+      const filtersActive = category !== "all" || statusFilter !== "all" || Boolean(search);
+      const count = $("botLogCount");
+      if (count) {
+        count.textContent = filtersActive
+          ? t("botlog.filtered_entries", {shown: filteredLogs.length, total: logs.length})
+          : t("botlog.entries", {n: logs.length});
+      }
+      const successCount = logs.filter((log) => log.ok !== false).length;
+      if ($("botLogSuccessCount")) $("botLogSuccessCount").textContent = t("botlog.success_count", {n: successCount});
+      if ($("botLogErrorCount")) $("botLogErrorCount").textContent = t("botlog.error_count", {n: logs.length - successCount});
       const list = $("botLogList");
       if (!list) return;
       const previousTop = list.scrollTop;
       const previousHeight = list.scrollHeight;
       const wasAtTop = previousTop < 24;
       list.replaceChildren();
-      for (const log of state.botLogs || []) {
+      for (const log of filteredLogs) {
         const item = document.createElement("div");
         item.className = "bot-log-item";
         item.setAttribute("role", "listitem");
@@ -8370,6 +8972,11 @@ INDEX_HTML = r"""<!doctype html>
         const status = document.createElement("span");
         status.className = "log-status " + (log.ok === false ? "warn" : "ok");
         status.textContent = log.ok === false ? "[ERR]" : "[OK]";
+        const categoryName = botLogCategory(log);
+        const categoryChip = document.createElement("span");
+        categoryChip.className = "log-category";
+        categoryChip.dataset.category = categoryName;
+        categoryChip.textContent = botLogCategoryLabel(categoryName);
         const title = document.createElement("strong");
         title.className = "log-action";
         title.textContent = botActionLabel(log.action);
@@ -8380,7 +8987,7 @@ INDEX_HTML = r"""<!doctype html>
         if (log.target) parts.push(compactLogValue(log.target, 22));
         meta.textContent = parts.length ? "-- " + parts.filter(Boolean).join(" / ") : "";
         meta.title = parts.filter(Boolean).join(" / ");
-        line.append(time, status, title);
+        line.append(time, status, categoryChip, title);
         if (parts.length) line.appendChild(meta);
         main.appendChild(line);
         const promptDetail = ["content.ai.start", "content.ai.request"].includes(log.action) && log.data
@@ -8399,7 +9006,9 @@ INDEX_HTML = r"""<!doctype html>
         item.appendChild(main);
         list.appendChild(item);
       }
-      if (!list.children.length) list.appendChild(textSpan(t("botlog.none"), "terminal-empty"));
+      if (!list.children.length) {
+        list.appendChild(textSpan(t(logs.length ? "botlog.no_results" : "botlog.none"), "terminal-empty"));
+      }
       if (preserveScroll) {
         const heightChange = list.scrollHeight - previousHeight;
         list.scrollTop = wasAtTop ? 0 : Math.max(0, previousTop + heightChange);
@@ -8416,7 +9025,7 @@ INDEX_HTML = r"""<!doctype html>
       if (state.botLogLoading) return;
       state.botLogLoading = true;
       try {
-        const data = await api(`/api/bot/logs?${accountQuery(accountId)}&limit=200`);
+        const data = await api(`/api/logs?${accountQuery(accountId)}&limit=500`);
         const logs = data.logs || [];
         const logsChanged = !sameData(state.botLogs, logs);
         state.botLogs = logs;
@@ -8429,7 +9038,7 @@ INDEX_HTML = r"""<!doctype html>
     async function clearBotLogs() {
       const accountId = requireAccount();
       if (!accountId || !confirm(t("confirm.clear_bot_logs"))) return;
-      const data = await post("/api/bot/logs/clear", {accountId});
+      const data = await post("/api/logs/clear", {accountId});
       state.botLogs = data.logs || [];
       renderBotLogs();
       toast(t("toast.bot_logs_cleared"));
@@ -9581,6 +10190,11 @@ INDEX_HTML = r"""<!doctype html>
       setAssistantView("chat");
       $("assistantQuestion").focus();
     });
+    $("assistantGuideAutoReplyButton").addEventListener("click", () => setAssistantView("auto-reply"));
+    $("assistantGuideLogsButton").addEventListener("click", () => {
+      setLogsView("logs");
+      setTab("logs");
+    });
     $("assistantKnowledgeSaveButton").addEventListener("click", () => saveAssistantKnowledge().catch(toastError));
     $("assistantKnowledgeReindexButton").addEventListener("click", () => reindexAssistantKnowledge().catch(toastError));
     $("assistantSourceSaveButton").addEventListener("click", () => saveAssistantSource().catch(toastError));
@@ -9638,6 +10252,7 @@ INDEX_HTML = r"""<!doctype html>
     $("passwordTabButton").addEventListener("click", () => setSettingsPane("password"));
     $("accountsTabButton").addEventListener("click", () => setSettingsPane("accounts"));
     $("usersTabButton").addEventListener("click", () => setSettingsPane("users"));
+    $("settingsGuideTabButton").addEventListener("click", () => setSettingsPane("guide"));
     $("changePasswordButton").addEventListener("click", () => changePassword().catch(toastError));
     $("secureButton").addEventListener("click", () => secureWithPassword().catch(toastError));
     $("createUserButton").addEventListener("click", () => createUser().catch(toastError));
@@ -9666,6 +10281,10 @@ INDEX_HTML = r"""<!doctype html>
     $("loadMessagesButton").addEventListener("click", () => loadMessages().catch(toastError));
     $("reloadMessagesButton").addEventListener("click", () => loadMessages().catch(toastError));
     $("notificationButton").addEventListener("click", () => toggleNotifications().catch(toastError));
+    $("lineGuideButton").addEventListener("click", () => setLineGuideView(true));
+    $("lineGuideBackButton").addEventListener("click", () => setLineGuideView(false));
+    $("lineGuideOpenChatButton").addEventListener("click", () => setLineGuideView(false));
+    $("lineGuideNotificationButton").addEventListener("click", () => toggleNotifications().catch(toastError));
     $("profileDetailsToggle").addEventListener("click", toggleProfileDetails);
     $("imageViewerClose").addEventListener("click", closeImageViewer);
     $("imageViewerOriginal").addEventListener("click", () => {
@@ -9711,11 +10330,23 @@ INDEX_HTML = r"""<!doctype html>
       });
     });
     $("scheduleFormToggle").addEventListener("click", openScheduleCreatePage);
-    $("openBotLogsButton").addEventListener("click", () => setBotPage("logs"));
+    $("openBotLogsButton").addEventListener("click", () => {
+      setLogsView("logs");
+      setTab("logs");
+    });
     $("botGuideScheduleButton").addEventListener("click", openScheduleCreatePage);
     $("botGuidePatternsButton").addEventListener("click", () => setBotPage("patterns"));
-    $("botGuideLogsButton").addEventListener("click", () => setBotPage("logs"));
+    $("botGuideLogsButton").addEventListener("click", () => {
+      setLogsView("logs");
+      setTab("logs");
+    });
     $("botGuideAiButton").addEventListener("click", () => setBotPage("ai-settings"));
+    $("toolsMainViewButton").addEventListener("click", () => setToolsView("tools"));
+    $("toolsGuideViewButton").addEventListener("click", () => setToolsView("guide"));
+    $("toolsGuideOpenButton").addEventListener("click", () => setToolsView("tools"));
+    $("logsMainViewButton").addEventListener("click", () => setLogsView("logs"));
+    $("logsGuideViewButton").addEventListener("click", () => setLogsView("guide"));
+    $("logsGuideOpenButton").addEventListener("click", () => setLogsView("logs"));
     $("cancelScheduleFormButton").addEventListener("click", () => {
       state.editingScheduleId = null;
       $("createScheduleButton").textContent = t("scheduler.create");
@@ -9752,6 +10383,18 @@ INDEX_HTML = r"""<!doctype html>
     });
     $("botLogRefreshButton").addEventListener("click", () => loadBotLogs().catch(toastError));
     $("botLogClearButton").addEventListener("click", () => clearBotLogs().catch(toastError));
+    $("botLogSearch").addEventListener("input", () => {
+      state.botLogSearch = $("botLogSearch").value;
+      renderBotLogs();
+    });
+    $("botLogCategoryFilter").addEventListener("change", () => {
+      state.botLogCategory = $("botLogCategoryFilter").value || "all";
+      renderBotLogs();
+    });
+    $("botLogStatusFilter").addEventListener("change", () => {
+      state.botLogStatus = $("botLogStatusFilter").value || "all";
+      renderBotLogs();
+    });
     $("patternTextHelp").addEventListener("click", (ev) => {
       const chip = ev.target.closest(".ph-chip");
       if (!chip) return;
@@ -9803,22 +10446,20 @@ INDEX_HTML = r"""<!doctype html>
       loadMessages({silent: true}).catch(() => {});
     }, 10000);
 
-    function refreshBotInBackground() {
+    function refreshWorkspaceInBackground() {
       if (document.visibilityState !== "visible") return;
-      if (state.tab !== "bot" || !selectedAccountId()) return;
-      Promise.allSettled([
-        loadSchedules({background: true}),
-        loadBotLogs({background: true})
-      ]);
+      if (!selectedAccountId()) return;
+      if (state.tab === "bot") loadSchedules({background: true}).catch(() => {});
+      if (state.tab === "logs") loadBotLogs({background: true}).catch(() => {});
     }
 
-    // Keep both Bot lists live without showing an overlay or disturbing scroll.
-    setInterval(refreshBotInBackground, BOT_BACKGROUND_REFRESH_MS);
+    // Keep the visible operational view live without disturbing its scroll position.
+    setInterval(refreshWorkspaceInBackground, BOT_BACKGROUND_REFRESH_MS);
     setInterval(refreshConversationsInBackground, CONVERSATION_BACKGROUND_REFRESH_MS);
     document.addEventListener("visibilitychange", () => {
       refreshConversationsInBackground();
       if (document.visibilityState !== "visible") return;
-      refreshBotInBackground();
+      refreshWorkspaceInBackground();
     });
 
     state.lang = localStorage.getItem("okline.lang") === "en" ? "en" : "th";
@@ -10127,6 +10768,16 @@ GOD_HTML = r"""<!doctype html>
     .answer-editor { min-height: 92px; margin-top: 12px; }
     .empty-panel { padding: 54px 20px; text-align: center; color: var(--muted); }
     .empty { padding: 58px 20px; text-align: center; color: var(--muted); }
+    .god-guide-steps { margin: 0; padding: 0; list-style: none; }
+    .god-guide-step { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 14px; padding: 17px 0; border-bottom: 1px solid var(--line); }
+    .god-guide-step:last-child { border-bottom: 0; }
+    .god-guide-number { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; color: #076e50; background: var(--accent-soft); border: 1px solid #b9dfd1; font-weight: 800; }
+    .god-guide-step strong { display: block; margin-bottom: 4px; }
+    .god-guide-step p { margin: 0; color: var(--muted); }
+    .god-guide-note { padding: 13px 0; border-bottom: 1px solid var(--line); }
+    .god-guide-note:last-child { border-bottom: 0; }
+    .god-guide-note strong, .god-guide-note span { display: block; }
+    .god-guide-note span { margin-top: 3px; color: var(--muted); }
     .detail-panel {
       position: fixed;
       inset: 0 0 0 auto;
@@ -10169,6 +10820,8 @@ GOD_HTML = r"""<!doctype html>
       .action-button { width: 100%; padding-inline: 8px; }
       .two-col, .settings-grid, .source-form { grid-template-columns: 1fr; }
       .settings-grid .wide, .source-form .wide { grid-column: auto; }
+      .god-guide-step { grid-template-columns: 32px minmax(0, 1fr); gap: 11px; }
+      .god-guide-number { width: 32px; height: 32px; }
     }
   </style>
 </head>
@@ -10194,6 +10847,7 @@ GOD_HTML = r"""<!doctype html>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="ai-settings">Ollama</button>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="knowledge">Knowledge / RAG</button>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="unanswered">ตอบไม่ได้ <span class="nav-count" id="godUnansweredCount"></span></button>
+      <button type="button" role="tab" aria-selected="false" data-god-page-target="guide">วิธีใช้</button>
     </nav>
     <main class="page">
       <section class="god-page" data-god-page="members">
@@ -10273,6 +10927,33 @@ GOD_HTML = r"""<!doctype html>
           <button class="secondary" type="button" id="refreshUnansweredButton">รีเฟรช</button>
         </div>
         <div class="question-list" id="godUnansweredList"><div class="empty-panel">กำลังโหลด...</div></div>
+      </section>
+
+      <section class="god-page hidden" data-god-page="guide">
+        <div class="page-head">
+          <div><h2>วิธีใช้ LinePassport God</h2><span class="muted">ตั้งค่าระบบส่วนกลางและดูแลสมาชิกตามลำดับที่ปลอดภัย</span></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>เริ่มตั้งค่าระบบ</h3></div>
+          <div class="panel-body">
+            <ol class="god-guide-steps">
+              <li class="god-guide-step"><span class="god-guide-number">1</span><div><strong>ตรวจและจัดการสมาชิก</strong><p>หน้า “สมาชิก” ใช้ค้นหาด้วยอีเมลหรือชื่อ กด “รายละเอียด” เพื่อดูบัญชี LINE, Pattern, งานบอท และ AI ที่สมาชิกใช้ กด “แก้ไข” เพื่อเปลี่ยนอีเมล ชื่อ บทบาท รหัสผ่าน หรือสถานะบัญชี ควรปิดใช้งานก่อนลบเมื่อยังต้องเก็บข้อมูล</p></div></li>
+              <li class="god-guide-step"><span class="god-guide-number">2</span><div><strong>เชื่อม Ollama และเลือกโมเดล</strong><p>เปิดหน้า “Ollama” ใส่ Base URL แล้วกด “ทดสอบและโหลดโมเดล” เลือก Chat model และ Embedding model ตั้งค่า Top K, Temperature และ Timeout จากนั้นเปิด AI สนทนาและกดบันทึก สถานะต้องขึ้นพร้อมใช้งานก่อนให้สมาชิกทดสอบ</p></div></li>
+              <li class="god-guide-step"><span class="god-guide-number">3</span><div><strong>ใส่ Knowledge ส่วนกลาง</strong><p>หน้า “Knowledge / RAG” ใช้ข้อมูลที่สมาชิกทุกคนอ้างอิงร่วมกัน เขียนหัวข้อและข้อเท็จจริงใน knowledge.md แล้วกด “บันทึกและ Index” หากดึงข้อมูลจาก API ให้ใส่ URL, JSON path และ Bearer token แล้วกดดึงข้อมูลให้สำเร็จ</p></div></li>
+              <li class="god-guide-step"><span class="god-guide-number">4</span><div><strong>ทดสอบจากบัญชีสมาชิก</strong><p>เข้าสู่หน้าปกติด้วยสมาชิกทดสอบ เปิด AI Chat Bot และถามหลายรูปแบบ ตรวจว่าแหล่งข้อมูลถูกต้องก่อนเปิดตอบ LINE อัตโนมัติ การแก้ Knowledge ต้อง Index ใหม่ทุกครั้งก่อนทดสอบซ้ำ</p></div></li>
+              <li class="god-guide-step"><span class="god-guide-number">5</span><div><strong>ตอบคำถามที่ AI ตอบไม่ได้</strong><p>หน้า “ตอบไม่ได้” รวมคำถามที่ AI หาแหล่งข้อมูลไม่พอ อ่านคำถามและเจ้าของให้ครบ ใส่คำตอบที่ตรวจสอบแล้วและบันทึก คำตอบจะถูกเพิ่มเข้า Knowledge ของเจ้าของคำถามเพื่อใช้ครั้งต่อไป</p></div></li>
+            </ol>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>ข้อควรระวัง</h3></div>
+          <div class="panel-body">
+            <div class="god-guide-note"><strong>God แยกจาก Login สมาชิก</strong><span>ใช้หน้า /god สำหรับจัดการระบบเท่านั้น อย่าแชร์รหัส God และอย่าใช้บัญชีนี้ทำงานประจำวันแทนสมาชิก</span></div>
+            <div class="god-guide-note"><strong>Global Knowledge กับ Knowledge สมาชิกไม่เหมือนกัน</strong><span>Global Knowledge ใช้ร่วมกันทุกคน ส่วน Knowledge ใน AI Chat Bot เป็นข้อมูลส่วนตัวของผู้ใช้นั้น เลือกตำแหน่งเก็บข้อมูลให้ตรงกับผู้ที่ควรเห็น</span></div>
+            <div class="god-guide-note"><strong>Strict Knowledge</strong><span>เมื่อเปิด AI จะตอบเฉพาะข้อมูลที่ค้นพบใน Knowledge และส่งคำถามที่ตอบไม่ได้เข้าคิว เหมาะกับข้อมูลธุรกิจที่ต้องการลดการเดา</span></div>
+            <div class="god-guide-note"><strong>ก่อนลบสมาชิก</strong><span>การลบจะลบบัญชี LINE, Pattern, งานบอท, Log และค่า AI ของสมาชิกทั้งหมด ควรตรวจรายละเอียดและสำรองข้อมูลที่จำเป็นก่อนยืนยัน</span></div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
@@ -10426,7 +11107,7 @@ GOD_HTML = r"""<!doctype html>
     }
 
     async function setGodPage(page) {
-      const allowed = ["members", "ai-settings", "knowledge", "unanswered"];
+      const allowed = ["members", "ai-settings", "knowledge", "unanswered", "guide"];
       state.page = allowed.includes(page) ? page : "members";
       document.querySelectorAll("[data-god-page-target]").forEach((button) => {
         const active = button.dataset.godPageTarget === state.page;
@@ -11010,6 +11691,9 @@ MAX_PROXY_USERNAME_LENGTH = 255
 MAX_PROXY_PASSWORD_LENGTH = 1024
 AI_AUTO_REPLY_POLL_SECONDS = 5.0
 MAX_AI_AUTO_REPLY_CHATS = 500
+INBOX_SNAPSHOT_TTL_SECONDS = AI_AUTO_REPLY_POLL_SECONDS
+INBOX_SNAPSHOT_CHAT_LIMIT = 1000
+INBOX_SNAPSHOT_MESSAGES_PER_BOX = 10
 MAX_AI_AUTO_REPLIES_PER_ACCOUNT_PER_MINUTE = 20
 MAX_AI_AUTO_REPLIES_PER_CHAT_PER_MINUTE = 6
 AI_AUTO_REPLY_FALLBACK = (
@@ -12846,6 +13530,8 @@ class WebState:
         _ensure_private_directory(config.accounts_dir)
         self.lock = threading.RLock()
         self.api_locks: dict[str, threading.RLock] = {}
+        self.inbox_snapshot_lock = threading.RLock()
+        self.inbox_snapshots: dict[str, tuple[float, dict[str, Any]]] = {}
         self.api_rate_lock = threading.RLock()
         self.api_rate_events: dict[tuple[str, ...], list[float]] = {}
         self.store = _make_state_store(config)
@@ -13182,6 +13868,60 @@ class WebState:
         with self.lock:
             return self.api_locks.setdefault(account_id, threading.RLock())
 
+    def invalidate_inbox_snapshot(self, account_id: str) -> None:
+        with self.inbox_snapshot_lock:
+            self.inbox_snapshots.pop(account_id, None)
+
+    def inbox_message_boxes(
+        self,
+        account_id: str,
+        api: OkLine,
+        *,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        def fresh_snapshot() -> dict[str, Any] | None:
+            with self.inbox_snapshot_lock:
+                cached = self.inbox_snapshots.get(account_id)
+                if cached is None:
+                    return None
+                fetched_at, payload = cached
+                if time.monotonic() - fetched_at >= INBOX_SNAPSHOT_TTL_SECONDS:
+                    return None
+                return payload
+
+        if not force:
+            cached = fresh_snapshot()
+            if cached is not None:
+                return cached
+
+        with self.api_lock_for(account_id):
+            if not force:
+                cached = fresh_snapshot()
+                if cached is not None:
+                    return cached
+            payload = api.get_message_boxes(
+                limit=INBOX_SNAPSHOT_CHAT_LIMIT,
+                last_messages_per_box=INBOX_SNAPSHOT_MESSAGES_PER_BOX,
+            )
+            if not isinstance(payload, dict):
+                raise RuntimeError("LINE returned an invalid inbox response")
+            with self.inbox_snapshot_lock:
+                self.inbox_snapshots[account_id] = (time.monotonic(), payload)
+            return payload
+
+    def chat_summary_map(
+        self, account_id: str, api: OkLine, limit: int = INBOX_SNAPSHOT_CHAT_LIMIT
+    ) -> dict[str, dict[str, Any]]:
+        try:
+            message_boxes = self.inbox_message_boxes(account_id, api)
+        except Exception:
+            return {}
+        return _chat_summary_map(
+            api,
+            limit,
+            message_boxes=message_boxes,
+        )
+
     @property
     def login(self) -> dict[str, Any]:
         """Compatibility view for the anonymous/local login slot."""
@@ -13327,6 +14067,7 @@ class WebState:
         return api
 
     def replace_api(self, account_id: str, api: OkLine) -> None:
+        self.invalidate_inbox_snapshot(account_id)
         with self.lock:
             old = self.apis.get(account_id)
             self.apis[account_id] = api
@@ -13334,6 +14075,7 @@ class WebState:
             old.close()
 
     def close_api(self, account_id: str) -> None:
+        self.invalidate_inbox_snapshot(account_id)
         with self.lock:
             api = self.apis.pop(account_id, None)
         if api is not None:
@@ -16068,9 +16810,10 @@ class WebState:
 
     @staticmethod
     def _ai_auto_reply_chat_type(chat_mid: str) -> str:
-        if chat_mid.startswith("u"):
+        prefix = chat_mid[:1].lower()
+        if prefix == "u":
             return "contact"
-        if chat_mid.startswith(("c", "r")):
+        if prefix in {"c", "r"}:
             return "group"
         return ""
 
@@ -16251,10 +16994,7 @@ class WebState:
         enabled_at_ms = _coerce_int(record.get("enabledAtMs"))
         api = self.get_api(account_id)
         with self.api_lock_for(account_id):
-            boxes = api.get_message_boxes(
-                limit=MAX_AI_AUTO_REPLY_CHATS,
-                last_messages_per_box=10,
-            )
+            boxes = self.inbox_message_boxes(account_id, api)
             own_mid = str(account.get("mid") or "")
             if not own_mid:
                 profile = api.get_profile()
@@ -16263,7 +17003,11 @@ class WebState:
             if not own_mid:
                 raise RuntimeError("Cannot identify the selected LINE account")
 
-            raw_boxes = boxes.get("messageBoxes", []) if isinstance(boxes, dict) else []
+            raw_boxes = (
+                boxes.get("messageBoxes", [])[:MAX_AI_AUTO_REPLY_CHATS]
+                if isinstance(boxes, dict)
+                else []
+            )
             cursor_updates: dict[str, dict[str, Any]] = {}
             candidates: list[dict[str, Any]] = []
             last_seen_raw = record.get("lastSeen")
@@ -17445,13 +18189,13 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             if account_id:
                 self._require_account_access(account_id)
             return self.state.update_pattern_category(body, self.current_user)
-        if method == "GET" and path == "/api/bot/logs":
+        if method == "GET" and path in {"/api/logs", "/api/bot/logs"}:
             self._require_permission("read")
             account_id = _required_account_id(_query_one(query, "accountId", ""))
             self._require_account_access(account_id)
             limit = _query_int(query, "limit", 200, minimum=1, maximum=500)
             return self.state.list_bot_logs(account_id, self.current_user, limit=limit)
-        if method == "POST" and path == "/api/bot/logs/clear":
+        if method == "POST" and path in {"/api/logs/clear", "/api/bot/logs/clear"}:
             self._require_permission("schedule")
             body = self._read_json()
             account_id = _required_account_id(str(body.get("accountId") or ""))
@@ -17568,7 +18312,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
     def _contacts(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
         search = _query_one(query, "search", "").lower()
         limit = _query_int(query, "limit", 250, minimum=1, maximum=1000)
-        chat_summaries = _chat_summary_map(api)
+        chat_summaries = self._conversation_summaries(api, query)
         recency = _chat_recency_from_summaries(chat_summaries)
         rows = []
         for _mid, contact in _contact_rows(api):
@@ -17589,7 +18333,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         mids = list(chat_mids.get("memberChatMids", []) or [])
         invited = set(chat_mids.get("invitedChatMids", []) or [])
         mids.extend([m for m in invited if m not in mids])
-        chat_summaries = _chat_summary_map(api)
+        chat_summaries = self._conversation_summaries(api, query)
         recency = _chat_recency_from_summaries(chat_summaries)
         groups = []
         for raw in api.get_chats(mids).get("chats", []) if mids else []:
@@ -17608,7 +18352,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
 
     def _conversations(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
         limit = _query_int(query, "limit", 1000, minimum=1, maximum=1000)
-        summaries = _chat_summary_map(api, limit)
+        summaries = self._conversation_summaries(api, query, limit)
         conversations = []
         for mid, summary in summaries.items():
             item = {"mid": mid, "rank": _coerce_int(summary.get("rank"))}
@@ -17623,6 +18367,19 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             )
         )
         return {"conversations": conversations, "count": len(conversations)}
+
+    def _conversation_summaries(
+        self,
+        api: OkLine,
+        query: dict[str, list[str]],
+        limit: int = INBOX_SNAPSHOT_CHAT_LIMIT,
+    ) -> dict[str, dict[str, Any]]:
+        account_id = _query_one(query, "accountId", "").strip()
+        server = getattr(self, "server", None)
+        state = getattr(server, "state", None)
+        if account_id and state is not None:
+            return state.chat_summary_map(account_id, api, limit)
+        return _chat_summary_map(api, limit)
 
     def _boxes(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
         limit = _query_int(query, "limit", 20, minimum=1, maximum=100)
@@ -20045,19 +20802,26 @@ def _message_box_unread_count(box: dict[str, Any]) -> int:
     return 0
 
 
-def _chat_summary_map(api: OkLine, limit: int = 1000) -> dict[str, dict[str, Any]]:
-    try:
-        boxes = api.get_message_boxes(limit=limit, last_messages_per_box=1)
-    except TypeError:
+def _chat_summary_map(
+    api: OkLine,
+    limit: int = 1000,
+    *,
+    message_boxes: dict[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    boxes = message_boxes
+    if boxes is None:
         try:
-            boxes = api.get_message_boxes(limit=limit)
+            boxes = api.get_message_boxes(limit=limit, last_messages_per_box=1)
+        except TypeError:
+            try:
+                boxes = api.get_message_boxes(limit=limit)
+            except Exception:
+                return {}
         except Exception:
             return {}
-    except Exception:
-        return {}
-    message_boxes = boxes.get("messageBoxes", []) if isinstance(boxes, dict) else []
+    raw_boxes = boxes.get("messageBoxes", []) if isinstance(boxes, dict) else []
     summaries: dict[str, dict[str, Any]] = {}
-    for rank, box in enumerate(message_boxes):
+    for rank, box in enumerate(raw_boxes[:limit]):
         if not isinstance(box, dict):
             continue
         mid = _message_box_id(box)

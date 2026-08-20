@@ -570,19 +570,31 @@ def test_web_ui_has_pattern_edit_and_delete_actions():
     assert '"botlog.action.pattern.update"' in INDEX_HTML
 
 
-def test_web_ui_has_bot_log_panel():
+def test_web_ui_has_account_scoped_activity_log_panel():
+    assert 'id="tabLogs"' in INDEX_HTML
+    assert 'id="tabLogs" type="button" role="tab" aria-selected="false" aria-controls="tabPanelLogs" data-tab="logs" data-requires-permission="read"' in INDEX_HTML
+    assert 'id="tabPanelLogs"' in INDEX_HTML
+    assert 'data-tab-panel="logs"' in INDEX_HTML
+    assert 'id="botNavLogs"' not in INDEX_HTML
     assert 'id="botLogList"' in INDEX_HTML
     assert 'id="botLogRefreshButton"' in INDEX_HTML
     assert 'id="botLogClearButton"' in INDEX_HTML
+    assert 'id="botLogSearch"' in INDEX_HTML
+    assert 'id="botLogCategoryFilter"' in INDEX_HTML
+    assert 'id="botLogStatusFilter"' in INDEX_HTML
+    assert 'id="botLogSuccessCount"' in INDEX_HTML
+    assert 'id="botLogErrorCount"' in INDEX_HTML
     assert "compactLogValue" in INDEX_HTML
     assert "log-detail" in INDEX_HTML
     assert 'class="bot-terminal"' in INDEX_HTML
     assert 'role="log"' in INDEX_HTML
-    assert "linepassport/bot.log" in INDEX_HTML
+    assert "linepassport/activity.log" in INDEX_HTML
     assert 'status.textContent = log.ok === false ? "[ERR]" : "[OK]";' in INDEX_HTML
     assert ".bot-log-list {\n      display: block;" in INDEX_HTML
     assert "-webkit-line-clamp" not in INDEX_HTML
-    assert "/api/bot/logs" in INDEX_HTML
+    assert "/api/logs" in INDEX_HTML
+    assert 'setTab("logs")' in INDEX_HTML
+    assert 'activeTab.scrollIntoView({block: "nearest", inline: "nearest"})' in INDEX_HTML
 
     # Language lives inside the Settings menu; Advanced is always enabled and
     # no longer appears as a menu toggle.
@@ -647,6 +659,7 @@ def test_web_ui_tab_panels_are_siblings():
                 "tabPanelAssistant",
                 "tabPanelTools",
                 "tabPanelBot",
+                "tabPanelLogs",
             }:
                 self.parents[node_id] = [
                     n_id or ".".join(n_classes) or n_tag
@@ -665,6 +678,7 @@ def test_web_ui_tab_panels_are_siblings():
     assert parser.parents["tabPanelLine"][-2] == "tab-panels"
     assert parser.parents["tabPanelAssistant"][-2] == "tab-panels"
     assert parser.parents["tabPanelBot"][-2] == "tab-panels"
+    assert parser.parents["tabPanelLogs"][-2] == "tab-panels"
     assert parser.parents["tabPanelTools"][-2] == "tab-panels"
     assert 'id="authModeToggle"' in INDEX_HTML
     assert '"/api/auth/register"' in INDEX_HTML
@@ -1404,8 +1418,10 @@ def test_legacy_web_session_migration_preserves_e2ee(web_state, tmp_path, monkey
 class _RecentChatFakeApi:
     def __init__(self):
         self.checked = None
+        self.message_box_calls = 0
 
     def get_message_boxes(self, *, limit=100, last_messages_per_box=5):
+        self.message_box_calls += 1
         return {
             "messageBoxes": [
                 {"id": "u_old", "unreadCount": 0, "lastMessages": [{"createdTime": "1000"}]},
@@ -1509,6 +1525,19 @@ def test_contacts_and_groups_sort_by_recent_chat():
     ]
 
 
+def test_contacts_groups_and_notifications_share_one_inbox_snapshot(web_state):
+    handler = OkLineWebHandler.__new__(OkLineWebHandler)
+    handler.server = type("Server", (), {"state": web_state})()
+    api = _RecentChatFakeApi()
+    query = {"accountId": ["account-1"], "limit": ["10"]}
+
+    handler._contacts(api, query)
+    handler._groups(api, query)
+    handler._conversations(api, query)
+
+    assert api.message_box_calls == 1
+
+
 def test_mark_messages_read_sends_line_read_receipt():
     handler = OkLineWebHandler.__new__(OkLineWebHandler)
     api = _RecentChatFakeApi()
@@ -1607,6 +1636,7 @@ def test_web_ui_notifies_only_after_conversation_baseline_is_ready():
     assert "state.notificationAccountId !== accountId" in INDEX_HTML
     assert "!state.conversationBaselineReady" in INDEX_HTML
     assert "processNewMessageNotifications(accountId, conversations);" in INDEX_HTML
+    assert "if (!state.notificationsEnabled && !lineViewIsVisible) return;" in INDEX_HTML
     assert (
         'document.title = unread ? `(${count}) LinePassport` : "LinePassport";' in INDEX_HTML
     )
@@ -2910,6 +2940,41 @@ def test_assistant_has_an_in_app_usage_guide():
     assert 'assistant.guide_step_4_body' in INDEX_HTML
 
 
+def test_every_primary_menu_and_settings_has_a_detailed_usage_guide():
+    assert 'id="lineGuideView"' in INDEX_HTML
+    assert 'id="lineGuideButton"' in INDEX_HTML
+    assert 'line_guide.step_5_body' in INDEX_HTML
+
+    assert 'id="assistantGuideAutoReplyButton"' in INDEX_HTML
+    assert 'assistant.guide_step_6_body' in INDEX_HTML
+    assert 'assistant.guide_knowledge_rules_title' in INDEX_HTML
+
+    assert 'id="incomingApiGuidePage"' in INDEX_HTML
+    assert 'incoming_api.guide_start_5' in INDEX_HTML
+    assert 'incoming_api.guide_manage_title' in INDEX_HTML
+
+    assert 'id="toolsGuideView"' in INDEX_HTML
+    assert 'id="toolsGuideViewButton"' in INDEX_HTML
+    assert 'tools.guide_step_4_body' in INDEX_HTML
+
+    assert 'data-bot-page="guide"' in INDEX_HTML
+    assert 'bot.guide_step_6_body' in INDEX_HTML
+    assert 'bot.guide_fields_title' in INDEX_HTML
+
+    assert 'id="logsGuideView"' in INDEX_HTML
+    assert 'id="logsGuideViewButton"' in INDEX_HTML
+    assert 'botlog.guide_step_5_body' in INDEX_HTML
+    assert 'botlog.guide_errors_title' in INDEX_HTML
+
+    assert 'id="settingsGuidePane"' in INDEX_HTML
+    assert 'id="settingsGuideTabButton"' in INDEX_HTML
+    assert 'settings.guide_isolation_body' in INDEX_HTML
+
+    assert 'data-god-page-target="guide"' in GOD_HTML
+    assert 'data-god-page="guide"' in GOD_HTML
+    assert '"unanswered", "guide"' in GOD_HTML
+
+
 def test_assistant_general_knowledge_mode_is_the_default(web_state):
     assert 'id="ollamaStrictKnowledge" type="checkbox" checked' not in GOD_HTML
     assert 'Boolean(config.strictKnowledge)' in GOD_HTML
@@ -2927,10 +2992,13 @@ class _ImmediateExecutor:
 
 class _AutoReplyFakeApi:
     def __init__(self):
-        self.boxes = {"u-contact": [], "c-group": []}
+        self.boxes = {"U-contact": [], "C-group": []}
         self.sent = []
+        self.sent_event = threading.Event()
+        self.message_box_calls = 0
 
     def get_message_boxes(self, *, limit=100, last_messages_per_box=5):
+        self.message_box_calls += 1
         return {
             "messageBoxes": [
                 {
@@ -2942,10 +3010,11 @@ class _AutoReplyFakeApi:
         }
 
     def get_profile(self):
-        return {"mid": "u-me", "displayName": "Owner"}
+        return {"mid": "U-me", "displayName": "Owner"}
 
     def send_text(self, mid, text):
         self.sent.append((mid, text))
+        self.sent_event.set()
         return {"id": f"reply-{len(self.sent)}"}
 
 
@@ -2954,7 +3023,7 @@ def _auto_reply_owner(web_state):
     owner = web_state.web_auth.current_user(WebAuth.cookie_header(token))
     assert owner
     _seed_account(web_state, "auto-account")
-    web_state.account_store.data["accounts"][0]["mid"] = "u-me"
+    web_state.account_store.data["accounts"][0]["mid"] = "U-me"
     web_state.account_store.save()
     web_state.web_auth.grant_account_access(owner["id"], "auto-account")
     owner = web_state.web_auth._find_user(owner["id"])
@@ -2992,33 +3061,36 @@ def test_ai_auto_reply_separates_contacts_groups_and_skips_own_messages(web_stat
     assert settings["contactsEnabled"] is True
     assert settings["groupsEnabled"] is False
 
-    fake.boxes["u-contact"].append(
-        {"id": "old-contact", "from": "u-contact", "text": "old", "contentType": 0, "createdTime": enabled_at - 1000}
+    fake.boxes["U-contact"].append(
+        {"id": "old-contact", "from": "U-contact", "text": "old", "contentType": 0, "createdTime": enabled_at - 1000}
     )
-    fake.boxes["c-group"].append(
-        {"id": "old-group", "from": "u-member", "text": "old group", "contentType": 0, "createdTime": enabled_at - 1000}
+    fake.boxes["C-group"].append(
+        {"id": "old-group", "from": "U-member", "text": "old group", "contentType": 0, "createdTime": enabled_at - 1000}
     )
+    web_state.invalidate_inbox_snapshot("auto-account")
     web_state.poll_ai_auto_replies()
     assert fake.sent == []
 
-    fake.boxes["u-contact"].append(
-        {"id": "new-contact", "from": "u-contact", "text": "hello", "contentType": 0, "createdTime": enabled_at + 1000}
+    fake.boxes["U-contact"].append(
+        {"id": "new-contact", "from": "U-contact", "text": "hello", "contentType": 0, "createdTime": enabled_at + 1000}
     )
-    fake.boxes["c-group"].append(
-        {"id": "new-group-disabled", "from": "u-member", "text": "group ignored", "contentType": 0, "createdTime": enabled_at + 1000}
+    fake.boxes["C-group"].append(
+        {"id": "new-group-disabled", "from": "U-member", "text": "group ignored", "contentType": 0, "createdTime": enabled_at + 1000}
     )
+    web_state.invalidate_inbox_snapshot("auto-account")
     web_state.poll_ai_auto_replies()
-    assert fake.sent == [("u-contact", "AI: hello")]
+    assert fake.sent == [("U-contact", "AI: hello")]
     assert asked[0][1] == {
         "source": "line_auto_reply",
         "account_id": "auto-account",
-        "chat_mid": "u-contact",
+        "chat_mid": "U-contact",
         "chat_type": "contact",
     }
 
-    fake.boxes["u-contact"].append(
-        {"id": "own-message", "from": "u-me", "text": "manual reply", "contentType": 0, "createdTime": enabled_at + 2000}
+    fake.boxes["U-contact"].append(
+        {"id": "own-message", "from": "U-me", "text": "manual reply", "contentType": 0, "createdTime": enabled_at + 2000}
     )
+    web_state.invalidate_inbox_snapshot("auto-account")
     web_state.poll_ai_auto_replies()
     assert len(fake.sent) == 1
 
@@ -3027,16 +3099,111 @@ def test_ai_auto_reply_separates_contacts_groups_and_skips_own_messages(web_stat
         {"enabled": True, "contactsEnabled": True, "groupsEnabled": True},
         owner,
     )
-    fake.boxes["c-group"].append(
-        {"id": "new-group", "from": "u-member", "text": "group hello", "contentType": 0, "createdTime": enabled_at + 3000}
+    fake.boxes["C-group"].append(
+        {"id": "new-group", "from": "U-member", "text": "group hello", "contentType": 0, "createdTime": enabled_at + 3000}
     )
+    web_state.invalidate_inbox_snapshot("auto-account")
     web_state.poll_ai_auto_replies()
-    assert fake.sent[-1] == ("c-group", "AI: group hello")
-    assert [entry[0] for entry in fake.sent] == ["u-contact", "c-group"]
+    assert fake.sent[-1] == ("C-group", "AI: group hello")
+    assert [entry[0] for entry in fake.sent] == ["U-contact", "C-group"]
 
     logs = web_state.list_bot_logs("auto-account", owner)["logs"]
     assert any(log["action"] == "ai.auto_reply.received" for log in logs)
     assert any(log["action"] == "ai.auto_reply.sent" for log in logs)
+
+
+def test_inbox_snapshot_is_shared_by_auto_reply_and_conversation_summaries(web_state):
+    fake = _AutoReplyFakeApi()
+    fake.boxes["U-contact"].append(
+        {
+            "id": "message-1",
+            "from": "U-contact",
+            "text": "hello",
+            "contentType": 0,
+            "createdTime": 1000,
+        }
+    )
+
+    first = web_state.inbox_message_boxes("auto-account", fake)
+    summaries = web_state.chat_summary_map("auto-account", fake)
+
+    assert first["messageBoxes"]
+    assert summaries["U-contact"]["lastMessage"]["text"] == "hello"
+    assert fake.message_box_calls == 1
+
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.chat_summary_map("auto-account", fake)
+    assert fake.message_box_calls == 2
+
+
+def test_inbox_snapshot_coalesces_concurrent_line_reads(web_state):
+    class SlowInboxApi(_AutoReplyFakeApi):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def get_message_boxes(self, *, limit=100, last_messages_per_box=5):
+            self.message_box_calls += 1
+            self.started.set()
+            assert self.release.wait(timeout=2)
+            return {"messageBoxes": []}
+
+    fake = SlowInboxApi()
+    results = []
+
+    def read_inbox():
+        results.append(web_state.inbox_message_boxes("auto-account", fake))
+
+    first = threading.Thread(target=read_inbox)
+    second = threading.Thread(target=read_inbox)
+    first.start()
+    assert fake.started.wait(timeout=2)
+    second.start()
+    fake.release.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert results == [{"messageBoxes": []}, {"messageBoxes": []}]
+    assert fake.message_box_calls == 1
+
+
+def test_ai_auto_reply_worker_runs_without_browser_requests(web_state, monkeypatch):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    web_state.ask_global_ai = lambda question, user, **metadata: {
+        "ok": True,
+        "question": {"answer": f"AI: {question}", "model": "test-model"},
+    }
+    web_state.save_ai_auto_reply_settings(
+        "auto-account",
+        {"enabled": True, "contactsEnabled": True, "groupsEnabled": False},
+        owner,
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    fake.boxes["U-contact"].append(
+        {
+            "id": "background-message",
+            "from": "U-contact",
+            "text": "still there?",
+            "contentType": 0,
+            "createdTime": enabled_at + 1,
+        }
+    )
+    monkeypatch.setattr(webapp_module, "AI_AUTO_REPLY_POLL_SECONDS", 0.01)
+
+    web_state.ai_auto_reply_engine = webapp_module.AiAutoReplyEngine(web_state)
+    assert fake.sent_event.wait(timeout=2)
+    web_state.ai_auto_reply_engine.close()
+
+    assert fake.sent == [("U-contact", "AI: still there?")]
+    assert fake.message_box_calls == 1
 
 
 def test_ai_auto_reply_requires_configured_ai(web_state):
@@ -3089,11 +3256,13 @@ def test_web_ui_bot_dates_display_dd_mm_yyyy():
     assert "function isoToDmy" in INDEX_HTML
 
 
-def test_web_ui_background_refreshes_bot_schedules_and_logs():
+def test_web_ui_background_refreshes_visible_schedules_or_logs():
     assert "const BOT_BACKGROUND_REFRESH_MS = 3000" in INDEX_HTML
     assert "loadSchedules({background: true})" in INDEX_HTML
     assert "loadBotLogs({background: true})" in INDEX_HTML
-    assert "setInterval(refreshBotInBackground, BOT_BACKGROUND_REFRESH_MS)" in INDEX_HTML
+    assert 'if (state.tab === "bot") loadSchedules({background: true})' in INDEX_HTML
+    assert 'if (state.tab === "logs") loadBotLogs({background: true})' in INDEX_HTML
+    assert "setInterval(refreshWorkspaceInBackground, BOT_BACKGROUND_REFRESH_MS)" in INDEX_HTML
     assert 'document.addEventListener("visibilitychange"' in INDEX_HTML
     assert "renderBotLogs({preserveScroll: background})" in INDEX_HTML
 
