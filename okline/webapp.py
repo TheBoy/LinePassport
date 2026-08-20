@@ -1161,6 +1161,97 @@ INDEX_HTML = r"""<!doctype html>
     .assistant-source-row { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); background: #f7f9f8; }
     .assistant-source-row-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
     .assistant-source-row .mono { overflow-wrap: anywhere; }
+    .assistant-auto-reply-overview {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .assistant-auto-reply-account { display: grid; gap: 3px; min-width: 0; }
+    .assistant-auto-reply-account strong { font-size: 17px; overflow-wrap: anywhere; }
+    .assistant-auto-reply-settings { display: grid; }
+    .assistant-auto-reply-row {
+      min-height: 78px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 22px;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--line);
+      cursor: pointer;
+    }
+    .assistant-auto-reply-row:last-child { border-bottom: 0; }
+    .assistant-auto-reply-copy { display: grid; gap: 3px; min-width: 0; }
+    .assistant-auto-reply-copy strong { color: var(--ink); font-size: 15px; }
+    .assistant-auto-reply-toggle {
+      position: relative;
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .assistant-auto-reply-toggle input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .assistant-auto-reply-track {
+      position: relative;
+      width: 48px;
+      height: 28px;
+      border: 1px solid #aab6b2;
+      border-radius: 999px;
+      background: #dfe5e2;
+      transition: background-color .18s ease, border-color .18s ease;
+    }
+    .assistant-auto-reply-track::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(15, 35, 26, .25);
+      transition: transform .18s ease;
+    }
+    .assistant-auto-reply-toggle input:checked + .assistant-auto-reply-track {
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+    .assistant-auto-reply-toggle input:checked + .assistant-auto-reply-track::after {
+      transform: translateX(20px);
+    }
+    .assistant-auto-reply-toggle input:focus-visible + .assistant-auto-reply-track {
+      outline: 3px solid rgba(6, 199, 85, .24);
+      outline-offset: 2px;
+    }
+    .assistant-auto-reply-toggle input:disabled + .assistant-auto-reply-track {
+      opacity: .5;
+    }
+    .assistant-auto-reply-state {
+      min-width: 30px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .assistant-auto-reply-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px 24px;
+      margin-top: 18px;
+    }
+    .assistant-auto-reply-meta > div { display: grid; gap: 3px; }
+    .assistant-auto-reply-error {
+      grid-column: 1 / -1;
+      color: var(--danger);
+      overflow-wrap: anywhere;
+    }
     .usage-guide-intro { max-width: 68ch; }
     .usage-guide-steps { margin: 0; padding: 0; list-style: none; }
     .usage-guide-step {
@@ -1205,6 +1296,10 @@ INDEX_HTML = r"""<!doctype html>
     @media (max-width: 720px) {
       .assistant-knowledge-grid { grid-template-columns: 1fr; }
       .assistant-knowledge-grid .wide { grid-column: auto; }
+      .assistant-auto-reply-overview,
+      .assistant-auto-reply-row { align-items: flex-start; }
+      .assistant-auto-reply-meta { grid-template-columns: 1fr; }
+      .assistant-auto-reply-error { grid-column: auto; }
       .usage-guide-actions { display: grid; }
       .usage-guide-actions button { width: 100%; }
     }
@@ -3334,6 +3429,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="tab-panel-inner assistant-panel-inner">
               <div class="subtabs assistant-view-nav" role="tablist" aria-label="AI Chat Bot">
                 <button id="assistantChatViewButton" class="subtab active" type="button" role="tab" aria-selected="true" data-assistant-view-target="chat" data-i18n="assistant.nav_chat">Chat</button>
+                <button id="assistantAutoReplyViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="auto-reply" data-i18n="assistant.nav_auto_reply">LINE Auto Reply</button>
                 <button id="assistantKnowledgeViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="knowledge" data-i18n="assistant.nav_knowledge">Knowledge / RAG</button>
                 <button id="assistantGuideViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="guide" data-i18n="assistant.nav_guide">Usage guide</button>
               </div>
@@ -3376,6 +3472,70 @@ INDEX_HTML = r"""<!doctype html>
                 </div>
                 <div class="section-body assistant-queue" id="assistantUnansweredList"></div>
               </section>
+              </div>
+
+              <div id="assistantAutoReplyView" class="hidden" data-assistant-view="auto-reply">
+                <section class="section">
+                  <div class="section-head">
+                    <div>
+                      <h2 data-i18n="assistant.auto_reply_title">ตอบ LINE อัตโนมัติ</h2>
+                      <span class="muted" data-i18n="assistant.auto_reply_hint">ใช้ AI และ Knowledge / RAG ของคุณตอบเฉพาะข้อความใหม่ในบัญชี LINE ที่เลือก</span>
+                    </div>
+                    <div class="row compact">
+                      <span class="pill" id="assistantAutoReplyStatus" data-i18n="assistant.auto_reply_off">ปิดอยู่</span>
+                      <button id="assistantAutoReplyRefreshButton" type="button" data-requires-account data-requires-permission="ask_ai" data-i18n="common.refresh">รีเฟรช</button>
+                    </div>
+                  </div>
+                  <div class="section-body">
+                    <div class="assistant-auto-reply-overview">
+                      <div class="assistant-auto-reply-account">
+                        <span class="muted" data-i18n="assistant.auto_reply_account">บัญชี LINE</span>
+                        <strong id="assistantAutoReplyAccount">-</strong>
+                      </div>
+                      <span class="pill" id="assistantAutoReplyAiStatus" data-i18n="assistant.checking">กำลังตรวจสอบ</span>
+                    </div>
+                    <div class="assistant-auto-reply-settings">
+                      <label class="assistant-auto-reply-row">
+                        <span class="assistant-auto-reply-copy">
+                          <strong data-i18n="assistant.auto_reply_master">เปิดระบบตอบอัตโนมัติ</strong>
+                          <span class="muted" data-i18n="assistant.auto_reply_master_hint">เมื่อปิด ระบบจะไม่อ่านข้อความเพื่อส่งคำตอบ AI</span>
+                        </span>
+                        <span class="assistant-auto-reply-toggle">
+                          <input id="assistantAutoReplyEnabled" type="checkbox" data-requires-account data-requires-permission="ask_ai">
+                          <span class="assistant-auto-reply-track" aria-hidden="true"></span>
+                          <span class="assistant-auto-reply-state" id="assistantAutoReplyEnabledState">ปิด</span>
+                        </span>
+                      </label>
+                      <label class="assistant-auto-reply-row">
+                        <span class="assistant-auto-reply-copy">
+                          <strong data-i18n="assistant.auto_reply_contacts">Contact</strong>
+                          <span class="muted" data-i18n="assistant.auto_reply_contacts_hint">ตอบข้อความส่วนตัวจากรายชื่อผู้ติดต่อ</span>
+                        </span>
+                        <span class="assistant-auto-reply-toggle">
+                          <input id="assistantAutoReplyContacts" type="checkbox" data-requires-account data-requires-permission="ask_ai">
+                          <span class="assistant-auto-reply-track" aria-hidden="true"></span>
+                          <span class="assistant-auto-reply-state" id="assistantAutoReplyContactsState">เปิด</span>
+                        </span>
+                      </label>
+                      <label class="assistant-auto-reply-row">
+                        <span class="assistant-auto-reply-copy">
+                          <strong data-i18n="assistant.auto_reply_groups">Group</strong>
+                          <span class="muted" data-i18n="assistant.auto_reply_groups_hint">ตอบข้อความใหม่ภายในกลุ่ม LINE</span>
+                        </span>
+                        <span class="assistant-auto-reply-toggle">
+                          <input id="assistantAutoReplyGroups" type="checkbox" data-requires-account data-requires-permission="ask_ai">
+                          <span class="assistant-auto-reply-track" aria-hidden="true"></span>
+                          <span class="assistant-auto-reply-state" id="assistantAutoReplyGroupsState">เปิด</span>
+                        </span>
+                      </label>
+                    </div>
+                    <div class="assistant-auto-reply-meta">
+                      <div><span class="muted" data-i18n="assistant.auto_reply_last_poll">ตรวจข้อความล่าสุด</span><strong id="assistantAutoReplyLastPoll">-</strong></div>
+                      <div><span class="muted" data-i18n="assistant.auto_reply_last_reply">ตอบล่าสุด</span><strong id="assistantAutoReplyLastReply">-</strong></div>
+                      <div id="assistantAutoReplyErrorRow" class="assistant-auto-reply-error hidden"><span data-i18n="assistant.auto_reply_error">ข้อผิดพลาด</span><strong id="assistantAutoReplyError"></strong></div>
+                    </div>
+                  </div>
+                </section>
               </div>
 
               <div id="assistantKnowledgeView" class="hidden" data-assistant-view="knowledge">
@@ -4259,8 +4419,30 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.not_configured": {th: "ยังไม่ได้ตั้งค่า", en: "Not configured"},
       "assistant.asking": {th: "กำลังถาม Ollama...", en: "Asking Ollama..."},
       "assistant.nav_chat": {th: "แชท", en: "Chat"},
+      "assistant.nav_auto_reply": {th: "ตอบ LINE อัตโนมัติ", en: "LINE Auto Reply"},
       "assistant.nav_knowledge": {th: "Knowledge / RAG", en: "Knowledge / RAG"},
       "assistant.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
+      "assistant.auto_reply_title": {th: "ตอบ LINE อัตโนมัติ", en: "Automatic LINE replies"},
+      "assistant.auto_reply_hint": {th: "ใช้ AI และ Knowledge / RAG ของคุณตอบเฉพาะข้อความใหม่ในบัญชี LINE ที่เลือก", en: "Use your AI and Knowledge / RAG to answer only new messages for the selected LINE account."},
+      "assistant.auto_reply_account": {th: "บัญชี LINE", en: "LINE account"},
+      "assistant.auto_reply_master": {th: "เปิดระบบตอบอัตโนมัติ", en: "Enable automatic replies"},
+      "assistant.auto_reply_master_hint": {th: "เมื่อปิด ระบบจะไม่อ่านข้อความเพื่อส่งคำตอบ AI", en: "When off, incoming messages are not processed for AI replies."},
+      "assistant.auto_reply_contacts": {th: "Contact", en: "Contacts"},
+      "assistant.auto_reply_contacts_hint": {th: "ตอบข้อความส่วนตัวจากรายชื่อผู้ติดต่อ", en: "Reply to direct messages from contacts."},
+      "assistant.auto_reply_groups": {th: "Group", en: "Groups"},
+      "assistant.auto_reply_groups_hint": {th: "ตอบข้อความใหม่ภายในกลุ่ม LINE", en: "Reply to new messages in LINE groups."},
+      "assistant.auto_reply_on": {th: "เปิด", en: "On"},
+      "assistant.auto_reply_off": {th: "ปิด", en: "Off"},
+      "assistant.auto_reply_starting": {th: "กำลังเริ่ม", en: "Starting"},
+      "assistant.auto_reply_running": {th: "กำลังทำงาน", en: "Running"},
+      "assistant.auto_reply_idle": {th: "รอเปิด Contact หรือ Group", en: "Waiting for Contacts or Groups"},
+      "assistant.auto_reply_error_state": {th: "ทำงานผิดพลาด", en: "Error"},
+      "assistant.auto_reply_ai_ready": {th: "AI พร้อม", en: "AI ready"},
+      "assistant.auto_reply_ai_missing": {th: "ยังไม่ได้ตั้งค่า AI", en: "AI not configured"},
+      "assistant.auto_reply_last_poll": {th: "ตรวจข้อความล่าสุด", en: "Last checked"},
+      "assistant.auto_reply_last_reply": {th: "ตอบล่าสุด", en: "Last reply"},
+      "assistant.auto_reply_error": {th: "ข้อผิดพลาด", en: "Error"},
+      "assistant.auto_reply_saved": {th: "บันทึกการตั้งค่าตอบ LINE อัตโนมัติแล้ว", en: "Automatic LINE reply settings saved."},
       "assistant.guide_title": {th: "เริ่มใช้งาน AI Chat Bot", en: "Get started with AI Chat Bot"},
       "assistant.guide_subtitle": {th: "เตรียม Knowledge แล้วถาม AI จากข้อมูลของคุณตาม 4 ขั้นตอน", en: "Prepare your knowledge and start asking questions in four steps."},
       "assistant.guide_step_1_title": {th: "ตรวจสอบว่า AI พร้อมใช้งาน", en: "Check that AI is ready"},
@@ -4802,6 +4984,8 @@ INDEX_HTML = r"""<!doctype html>
       "errors.ai_quota": {th: "โควต้า Google Gemini หมด — รุ่นฟรีมักสร้างรูปไม่ได้ (โควต้า = 0) ต้องเปิดการเรียกเก็บเงิน (billing) บนคีย์ Google หรือรอสักครู่แล้วลองใหม่", en: "Google Gemini quota exceeded — the free tier often can't generate images (quota 0). Enable billing on your Google API key, or try again later."},
       "errors.fal_quota": {th: "เครดิตหรือโควต้า fal.ai ไม่เพียงพอ โปรดตรวจสอบ Billing และยอดคงเหลือของบัญชี fal.ai", en: "fal.ai credit or quota is insufficient. Check billing and the available balance on your fal.ai account."},
       "errors.ai_key_rejected": {th: "API Key ถูกปฏิเสธหรือไม่มีสิทธิ์ใช้งาน — ตรวจสอบคีย์และสิทธิ์การใช้งานของผู้ให้บริการ", en: "The API key was rejected or lacks access — check the key and your provider access."},
+      "errors.assistant_not_configured": {th: "ยังไม่ได้ตั้งค่า Ollama และโมเดล AI ที่หน้า God", en: "Ollama and an AI model have not been configured on the God page."},
+      "errors.invalid_auto_reply_setting": {th: "ค่าตั้งตอบ LINE อัตโนมัติไม่ถูกต้อง", en: "Automatic LINE reply settings are invalid."},
       "errors.email_invalid": {th: "กรอกอีเมลให้ถูกต้อง", en: "Enter a valid email address."},
       "errors.email_exists": {th: "อีเมลนี้มีบัญชีอยู่แล้ว", en: "An account with this email already exists."},
       "errors.account_already_owned": {th: "บัญชี LINE นี้มีเจ้าของแล้วและไม่สามารถแชร์ข้ามสมาชิกได้", en: "This LINE account already belongs to another user and cannot be shared."},
@@ -4887,6 +5071,13 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.incoming_api.request": {th: "รับคำขอจาก API", en: "Incoming API request"},
       "botlog.action.incoming_api.send.success": {th: "API ส่งเนื้อหาสำเร็จ", en: "API content sent"},
       "botlog.action.incoming_api.send.error": {th: "API ส่งเนื้อหาผิดพลาด", en: "API content failed"},
+      "botlog.action.ai.auto_reply.settings": {th: "ตั้งค่าตอบ LINE อัตโนมัติ", en: "Auto reply settings changed"},
+      "botlog.action.ai.auto_reply.received": {th: "รับข้อความสำหรับ AI", en: "Message received for AI"},
+      "botlog.action.ai.auto_reply.answered": {th: "AI สร้างคำตอบสำเร็จ", en: "AI answer generated"},
+      "botlog.action.ai.auto_reply.unanswered": {th: "AI ตอบไม่ได้", en: "AI could not answer"},
+      "botlog.action.ai.auto_reply.sent": {th: "ส่งคำตอบ AI สำเร็จ", en: "AI reply sent"},
+      "botlog.action.ai.auto_reply.rate_limit": {th: "หยุดตอบข้อความถี่เกินกำหนด", en: "Auto reply rate limited"},
+      "botlog.action.ai.auto_reply.error": {th: "ตอบ LINE อัตโนมัติผิดพลาด", en: "Automatic LINE reply failed"},
       "toast.bot_logs_cleared": {th: "ล้าง log บอทแล้ว", en: "Bot logs cleared"}
     };
 
@@ -4931,6 +5122,9 @@ INDEX_HTML = r"""<!doctype html>
       patternCategoryFilter: "all",
       editingPatternId: null,
       assistantKnowledge: null,
+      assistantView: "chat",
+      assistantAutoReply: null,
+      assistantAutoReplySaving: false,
       incomingApiLinks: [],
       incomingApiContacts: [],
       incomingApiGroups: [],
@@ -5021,6 +5215,7 @@ INDEX_HTML = r"""<!doctype html>
       renderBotLogs();
       renderIncomingApiLinks();
       renderIncomingApiReview();
+      if (state.assistantAutoReply) renderAssistantAutoReply(state.assistantAutoReply);
       syncIncomingApiStatus();
       syncIncomingApiEncrypt();
       syncPatternFormMode();
@@ -5073,7 +5268,10 @@ INDEX_HTML = r"""<!doctype html>
         loadBotLogs().catch(toastError);
       }
       if (tab === "line") refreshConversationsInBackground();
-      if (tab === "assistant") loadAssistant().catch(toastError);
+      if (tab === "assistant") {
+        loadAssistant().catch(toastError);
+        if (state.assistantView === "auto-reply") loadAssistantAutoReply().catch(toastError);
+      }
       if (tab === "incoming-api") loadIncomingApiLinks().catch(toastError);
     }
 
@@ -8624,8 +8822,111 @@ INDEX_HTML = r"""<!doctype html>
       finally { button.disabled = false; $("assistantAskState").textContent = ""; }
     }
 
+    function assistantAutoReplyDate(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString(state.lang === "th" ? "th-TH" : "en-US", {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+    }
+
+    function assistantAutoReplyRuntimeLabel(runtimeState) {
+      const key = {
+        off: "assistant.auto_reply_off",
+        starting: "assistant.auto_reply_starting",
+        running: "assistant.auto_reply_running",
+        idle: "assistant.auto_reply_idle",
+        error: "assistant.auto_reply_error_state"
+      }[runtimeState] || "assistant.auto_reply_off";
+      return t(key);
+    }
+
+    function syncAssistantAutoReplySwitch(inputId, stateId) {
+      const input = $(inputId);
+      $(stateId).textContent = t(input.checked ? "assistant.auto_reply_on" : "assistant.auto_reply_off");
+    }
+
+    function setAssistantAutoReplyBusy(busy) {
+      state.assistantAutoReplySaving = Boolean(busy);
+      const enabled = Boolean(selectedAccountId()) && hasPermission("ask_ai") && !busy;
+      ["assistantAutoReplyEnabled", "assistantAutoReplyContacts", "assistantAutoReplyGroups", "assistantAutoReplyRefreshButton"].forEach((id) => {
+        $(id).disabled = !enabled;
+      });
+    }
+
+    function renderAssistantAutoReply(data) {
+      state.assistantAutoReply = data || null;
+      const enabled = Boolean(data && data.enabled);
+      const contactsEnabled = data ? data.contactsEnabled !== false : true;
+      const groupsEnabled = data ? data.groupsEnabled !== false : true;
+      $("assistantAutoReplyEnabled").checked = enabled;
+      $("assistantAutoReplyContacts").checked = contactsEnabled;
+      $("assistantAutoReplyGroups").checked = groupsEnabled;
+      syncAssistantAutoReplySwitch("assistantAutoReplyEnabled", "assistantAutoReplyEnabledState");
+      syncAssistantAutoReplySwitch("assistantAutoReplyContacts", "assistantAutoReplyContactsState");
+      syncAssistantAutoReplySwitch("assistantAutoReplyGroups", "assistantAutoReplyGroupsState");
+      $("assistantAutoReplyAccount").textContent = (data && data.accountLabel) || accountLabel(selectedAccountId()) || "-";
+      const runtime = (data && data.runtime) || {state: "off"};
+      const runtimeState = String(runtime.state || (enabled ? "starting" : "off"));
+      setPill(
+        "assistantAutoReplyStatus",
+        assistantAutoReplyRuntimeLabel(runtimeState),
+        runtimeState === "error" ? "warn" : (enabled ? "ok" : "")
+      );
+      setPill(
+        "assistantAutoReplyAiStatus",
+        data && data.aiConfigured ? t("assistant.auto_reply_ai_ready") : t("assistant.auto_reply_ai_missing"),
+        data && data.aiConfigured ? "ok" : "warn"
+      );
+      $("assistantAutoReplyLastPoll").textContent = assistantAutoReplyDate(runtime.lastPollAt);
+      $("assistantAutoReplyLastReply").textContent = assistantAutoReplyDate(runtime.lastReplyAt);
+      const error = String(runtime.lastError || "");
+      $("assistantAutoReplyError").textContent = error;
+      $("assistantAutoReplyErrorRow").classList.toggle("hidden", !error);
+      setAssistantAutoReplyBusy(false);
+    }
+
+    async function loadAssistantAutoReply() {
+      const accountId = selectedAccountId();
+      if (!accountId || !hasPermission("ask_ai")) {
+        renderAssistantAutoReply(null);
+        return;
+      }
+      const data = await api(`/api/assistant/auto-reply?${accountQuery(accountId)}`);
+      if (accountId !== selectedAccountId()) return;
+      renderAssistantAutoReply(data);
+    }
+
+    async function saveAssistantAutoReply() {
+      const accountId = requireAccount();
+      if (!accountId || state.assistantAutoReplySaving) return;
+      setAssistantAutoReplyBusy(true);
+      try {
+        const data = await post("/api/assistant/auto-reply", {
+          accountId,
+          enabled: $("assistantAutoReplyEnabled").checked,
+          contactsEnabled: $("assistantAutoReplyContacts").checked,
+          groupsEnabled: $("assistantAutoReplyGroups").checked
+        });
+        if (accountId !== selectedAccountId()) return;
+        renderAssistantAutoReply(data);
+        toast(t("assistant.auto_reply_saved"));
+      } catch (err) {
+        await loadAssistantAutoReply().catch(() => {});
+        throw err;
+      } finally {
+        setAssistantAutoReplyBusy(false);
+      }
+    }
+
     function setAssistantView(view) {
-      const selected = ["chat", "knowledge", "guide"].includes(view) ? view : "chat";
+      const selected = ["chat", "auto-reply", "knowledge", "guide"].includes(view) ? view : "chat";
+      state.assistantView = selected;
       document.querySelectorAll("[data-assistant-view]").forEach((panel) => {
         panel.classList.toggle("hidden", panel.dataset.assistantView !== selected);
       });
@@ -8635,6 +8936,7 @@ INDEX_HTML = r"""<!doctype html>
         button.setAttribute("aria-selected", String(active));
       });
       if (selected === "knowledge") loadAssistantKnowledge().catch(toastError);
+      if (selected === "auto-reply") loadAssistantAutoReply().catch(toastError);
     }
 
     function assistantIndexModeLabel(mode) {
@@ -9264,6 +9566,13 @@ INDEX_HTML = r"""<!doctype html>
     $("refreshAllButton").addEventListener("click", () => refreshStatus(true));
     $("assistantForm").addEventListener("submit", (ev) => { ev.preventDefault(); askAssistant().catch(toastError); });
     $("assistantRefreshButton").addEventListener("click", () => loadAssistant().catch(toastError));
+    $("assistantAutoReplyRefreshButton").addEventListener("click", () => loadAssistantAutoReply().catch(toastError));
+    ["assistantAutoReplyEnabled", "assistantAutoReplyContacts", "assistantAutoReplyGroups"].forEach((id) => {
+      $(id).addEventListener("change", () => {
+        syncAssistantAutoReplySwitch(id, id + "State");
+        saveAssistantAutoReply().catch(toastError);
+      });
+    });
     document.querySelectorAll("[data-assistant-view-target]").forEach((button) => {
       button.addEventListener("click", () => setAssistantView(button.dataset.assistantViewTarget));
     });
@@ -9920,7 +10229,7 @@ GOD_HTML = r"""<!doctype html>
               <label>Top K<input id="ollamaTopK" type="number" min="1" max="12" value="5"></label>
               <label>Temperature<input id="ollamaTemperature" type="number" min="0" max="2" step="0.1" value="0.2"></label>
               <label>Timeout (วินาที)<input id="ollamaTimeout" type="number" min="5" max="600" value="120"></label>
-              <label class="switch-row"><input id="ollamaStrictKnowledge" type="checkbox" checked> ตอบจาก Knowledge เท่านั้น</label>
+              <label class="switch-row"><input id="ollamaStrictKnowledge" type="checkbox"> ตอบจาก Knowledge เท่านั้น</label>
               <label class="wide">System prompt<textarea id="ollamaSystemPrompt" rows="5"></textarea></label>
             </div>
             <div class="connection-state" id="ollamaConnectionState">ยังไม่ได้ทดสอบการเชื่อมต่อ</div>
@@ -10163,7 +10472,7 @@ GOD_HTML = r"""<!doctype html>
       $("ollamaTopK").value = config.topK || 5;
       $("ollamaTemperature").value = config.temperature ?? 0.2;
       $("ollamaTimeout").value = config.timeout || 120;
-      $("ollamaStrictKnowledge").checked = config.strictKnowledge !== false;
+      $("ollamaStrictKnowledge").checked = Boolean(config.strictKnowledge);
       $("ollamaSystemPrompt").value = config.systemPrompt || "";
       $("globalAiStatus").textContent = config.configured ? "พร้อมใช้งาน" : "ยังไม่ได้ตั้งค่า";
       $("globalAiStatus").className = `badge ${config.configured ? "active" : "inactive"}`;
@@ -10677,6 +10986,8 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("POST", "/api/send-media"): (8, 30.0),
     ("POST", "/api/call"): (20, 10.0),
     ("POST", "/api/ai/generate"): (8, 60.0),
+    ("GET", "/api/assistant/auto-reply"): (20, 30.0),
+    ("POST", "/api/assistant/auto-reply"): (10, 30.0),
 }
 MAX_USERS = 1000
 MAX_ACCOUNTS_PER_USER = 20
@@ -10697,6 +11008,14 @@ MAX_PROXY_URL_LENGTH = 2048
 MAX_PROXY_HOST_LENGTH = 253
 MAX_PROXY_USERNAME_LENGTH = 255
 MAX_PROXY_PASSWORD_LENGTH = 1024
+AI_AUTO_REPLY_POLL_SECONDS = 5.0
+MAX_AI_AUTO_REPLY_CHATS = 500
+MAX_AI_AUTO_REPLIES_PER_ACCOUNT_PER_MINUTE = 20
+MAX_AI_AUTO_REPLIES_PER_CHAT_PER_MINUTE = 6
+AI_AUTO_REPLY_FALLBACK = (
+    "ขออภัย ระบบยังไม่มีข้อมูลเพียงพอสำหรับคำถามนี้ "
+    "ทีมงานจะเข้ามาตอบเพิ่มเติม"
+)
 PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
@@ -11232,6 +11551,9 @@ class FileStateStore(StateStore):
             "global_ai": str(Path(config.schedules_file).parent / "global_ai.json"),
             "bot_logs": str(Path(config.schedules_file).parent / "bot_logs.json"),
             "incoming_api": str(Path(config.schedules_file).parent / "incoming_api.json"),
+            "ai_auto_reply": str(
+                Path(config.schedules_file).parent / "ai_auto_reply.json"
+            ),
         }
 
     def get(self, key: str, default: Any) -> Any:
@@ -11347,6 +11669,10 @@ class PostgresStateStore(StateStore):
             "incoming_api": (
                 str(Path(config.schedules_file).parent / "incoming_api.json"),
                 {"links": []},
+            ),
+            "ai_auto_reply": (
+                str(Path(config.schedules_file).parent / "ai_auto_reply.json"),
+                {"accounts": {}},
             ),
         }
         for key, (path, default) in legacy.items():
@@ -12492,6 +12818,27 @@ class ScheduleEngine:
                 traceback.print_exc()
 
 
+class AiAutoReplyEngine:
+    def __init__(self, state: WebState) -> None:
+        self.state = state
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(
+            target=self._run, name="linepassport-ai-auto-reply", daemon=True
+        )
+        self.thread.start()
+
+    def close(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        while not self.stop_event.wait(AI_AUTO_REPLY_POLL_SECONDS):
+            try:
+                self.state.poll_ai_auto_replies()
+            except Exception:
+                traceback.print_exc()
+
+
 class WebState:
     def __init__(self, config: WebConfig) -> None:
         self.config = config
@@ -12511,13 +12858,21 @@ class WebState:
         self.logins: dict[str, dict[str, Any]] = {"": {"state": "idle"}}
         self.schedule_lock = threading.RLock()
         self.incoming_api_lock = threading.RLock()
+        self.ai_auto_reply_lock = threading.RLock()
         self.incoming_api_rate: dict[str, list[float]] = {}
+        self.ai_auto_reply_inflight: set[tuple[str, str]] = set()
+        self.ai_auto_reply_runtime: dict[str, dict[str, Any]] = {}
+        self.ai_auto_reply_rate_events: dict[tuple[str, ...], list[float]] = {}
         self.schedules: list[dict[str, Any]] = self._load_schedules()
         self.schedule_inflight: set[str] = set()
         self.schedule_executor = ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="linepassport-schedule"
         )
+        self.ai_auto_reply_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="linepassport-ai-reply"
+        )
         self.scheduler = ScheduleEngine(self)
+        self.ai_auto_reply_engine = AiAutoReplyEngine(self)
 
     def _consume_api_rate_limit(
         self,
@@ -12812,7 +13167,9 @@ class WebState:
             self.store.set("schedules", {"schedules": schedules})
 
     def close(self) -> None:
+        self.ai_auto_reply_engine.close()
         self.scheduler.close()
+        self.ai_auto_reply_executor.shutdown(wait=False, cancel_futures=True)
         self.schedule_executor.shutdown(wait=False, cancel_futures=True)
         with self.lock:
             apis = list(self.apis.values())
@@ -13289,6 +13646,7 @@ class WebState:
             self.account_store.lock,
             self.schedule_lock,
             self.incoming_api_lock,
+            self.ai_auto_reply_lock,
         ):
             account_data, removed = self.account_store.data_after_remove(account_id)
             auth_data = copy.deepcopy(self.web_auth.data)
@@ -13318,17 +13676,33 @@ class WebState:
                 for link in incoming_data.get("links", [])
                 if not isinstance(link, dict) or link.get("accountId") != account_id
             ]
+            raw_auto_reply = self.store.get("ai_auto_reply", {"accounts": {}})
+            auto_reply_data = (
+                copy.deepcopy(raw_auto_reply)
+                if isinstance(raw_auto_reply, dict)
+                else {"accounts": {}}
+            )
+            auto_reply_accounts = auto_reply_data.get("accounts")
+            if not isinstance(auto_reply_accounts, dict):
+                auto_reply_accounts = {}
+                auto_reply_data["accounts"] = auto_reply_accounts
+            auto_reply_accounts.pop(account_id, None)
             self.store.set_many(
                 {
                     "accounts": account_data,
                     "auth": auth_data,
                     "schedules": {"schedules": schedules},
                     "incoming_api": incoming_data,
+                    "ai_auto_reply": auto_reply_data,
                 }
             )
             self.account_store.data = account_data
             self.web_auth.data = auth_data
             self.schedules = schedules
+            self.ai_auto_reply_runtime.pop(account_id, None)
+            self.ai_auto_reply_inflight = {
+                key for key in self.ai_auto_reply_inflight if key[0] != account_id
+            }
         token_file = str(removed.get("tokenFile") or "")
         if token_file and os.path.exists(token_file):
             try:
@@ -14964,7 +15338,7 @@ class WebState:
             "systemPrompt": str(
                 settings.get("systemPrompt") or DEFAULT_ASSISTANT_SYSTEM_PROMPT
             ).strip(),
-            "strictKnowledge": bool(settings.get("strictKnowledge", True)),
+            "strictKnowledge": bool(settings.get("strictKnowledge", False)),
             "topK": top_k,
             "temperature": temperature,
             "timeout": timeout,
@@ -15542,6 +15916,553 @@ class WebState:
             self.store.set("global_ai", data)
         return self.global_ai_knowledge()
 
+    # -- LINE AI auto reply -----------------------------------------------
+    def _ai_auto_reply_all(self) -> dict[str, Any]:
+        raw = self.store.get("ai_auto_reply", {"accounts": {}})
+        data = raw if isinstance(raw, dict) else {"accounts": {}}
+        if not isinstance(data.get("accounts"), dict):
+            data["accounts"] = {}
+        return data
+
+    @staticmethod
+    def _ai_auto_reply_defaults(account_id: str) -> dict[str, Any]:
+        return {
+            "accountId": account_id,
+            "ownerId": "",
+            "enabled": False,
+            "contactsEnabled": True,
+            "groupsEnabled": True,
+            "enabledAtMs": 0,
+            "lastSeen": {},
+            "updatedAt": "",
+        }
+
+    def _ai_auto_reply_record(self, account_id: str) -> dict[str, Any]:
+        data = self._ai_auto_reply_all()
+        raw = data["accounts"].get(account_id)
+        record = self._ai_auto_reply_defaults(account_id)
+        if isinstance(raw, dict):
+            record.update(raw)
+        if not isinstance(record.get("lastSeen"), dict):
+            record["lastSeen"] = {}
+        return record
+
+    def ai_auto_reply_settings(
+        self, account_id: str, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(account_id)
+        if not self.web_auth.can_access_account(user, account_id):
+            raise WebError(
+                HTTPStatus.FORBIDDEN, "Permission denied for this LINE account."
+            )
+        account = self.account_store.get(account_id)
+        if account is None:
+            raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
+        record = self._ai_auto_reply_record(account_id)
+        with self.ai_auto_reply_lock:
+            runtime = dict(self.ai_auto_reply_runtime.get(account_id) or {})
+        enabled = bool(record.get("enabled"))
+        if not enabled:
+            runtime["state"] = "off"
+        elif not record.get("contactsEnabled") and not record.get("groupsEnabled"):
+            runtime["state"] = "idle"
+        elif not runtime.get("state"):
+            runtime["state"] = "starting"
+        settings = self.global_ai_settings()
+        return {
+            "ok": True,
+            "accountId": account_id,
+            "accountLabel": str(account.get("label") or account_id),
+            "enabled": enabled,
+            "contactsEnabled": bool(record.get("contactsEnabled", True)),
+            "groupsEnabled": bool(record.get("groupsEnabled", True)),
+            "updatedAt": str(record.get("updatedAt") or ""),
+            "aiConfigured": bool(settings.get("configured")),
+            "runtime": {
+                "state": str(runtime.get("state") or "off"),
+                "lastPollAt": str(runtime.get("lastPollAt") or ""),
+                "lastReplyAt": str(runtime.get("lastReplyAt") or ""),
+                "lastError": str(runtime.get("lastError") or ""),
+                "replyCount": int(runtime.get("replyCount") or 0),
+            },
+        }
+
+    def save_ai_auto_reply_settings(
+        self,
+        account_id: str,
+        body: dict[str, Any],
+        user: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(account_id)
+        if not self.web_auth.can_access_account(user, account_id):
+            raise WebError(
+                HTTPStatus.FORBIDDEN, "Permission denied for this LINE account."
+            )
+        account = self.account_store.get(account_id)
+        if account is None:
+            raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
+
+        current = self._ai_auto_reply_record(account_id)
+
+        def boolean_value(key: str) -> bool:
+            value = body.get(key, current.get(key))
+            if not isinstance(value, bool):
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    f"{key} must be true or false.",
+                    "invalid_auto_reply_setting",
+                )
+            return value
+
+        enabled = boolean_value("enabled")
+        contacts_enabled = boolean_value("contactsEnabled")
+        groups_enabled = boolean_value("groupsEnabled")
+        if enabled and not self.global_ai_settings().get("configured"):
+            raise WebError(
+                HTTPStatus.CONFLICT,
+                "AI assistant is not configured by God.",
+                "assistant_not_configured",
+            )
+        now = _now_iso()
+        owner = self.web_auth.user_for_account(account_id) or user or {}
+        updated = dict(current)
+        updated.update(
+            {
+                "accountId": account_id,
+                "ownerId": str(
+                    account.get("ownerId") or owner.get("id") or (user or {}).get("id") or ""
+                ),
+                "enabled": enabled,
+                "contactsEnabled": contacts_enabled,
+                "groupsEnabled": groups_enabled,
+                "updatedAt": now,
+            }
+        )
+        if enabled and not bool(current.get("enabled")):
+            updated["enabledAtMs"] = int(time.time() * 1000)
+            updated["lastSeen"] = {}
+        with self.ai_auto_reply_lock:
+            data = self._ai_auto_reply_all()
+            data["accounts"][account_id] = updated
+            self.store.set("ai_auto_reply", data)
+            runtime = self.ai_auto_reply_runtime.setdefault(account_id, {})
+            runtime["state"] = (
+                "starting"
+                if enabled and (contacts_enabled or groups_enabled)
+                else ("idle" if enabled else "off")
+            )
+            runtime["lastError"] = ""
+        self.append_bot_log(
+            "ai.auto_reply.settings",
+            account_id=account_id,
+            detail=(
+                f"enabled={enabled}, contacts={contacts_enabled}, groups={groups_enabled}"
+            ),
+            data={
+                "enabled": enabled,
+                "contactsEnabled": contacts_enabled,
+                "groupsEnabled": groups_enabled,
+            },
+        )
+        return self.ai_auto_reply_settings(account_id, user)
+
+    @staticmethod
+    def _ai_auto_reply_chat_type(chat_mid: str) -> str:
+        if chat_mid.startswith("u"):
+            return "contact"
+        if chat_mid.startswith(("c", "r")):
+            return "group"
+        return ""
+
+    @staticmethod
+    def _ai_auto_reply_message_key(message: dict[str, Any]) -> str:
+        message_id = str(message.get("id") or "")
+        if message_id:
+            return message_id
+        raw = "\x1f".join(
+            [
+                str(message.get("from") or ""),
+                str(message.get("createdTime") or ""),
+                str(message.get("contentType") or ""),
+                str(message.get("text") or ""),
+            ]
+        )
+        return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]
+
+    @classmethod
+    def _ai_auto_reply_cursor(cls, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        latest_time = max((_message_time(message) for message in messages), default=0)
+        ids = [
+            cls._ai_auto_reply_message_key(message)
+            for message in messages
+            if _message_time(message) == latest_time
+        ]
+        return {"time": latest_time, "ids": ids[-20:]}
+
+    @classmethod
+    def _ai_auto_reply_unseen(
+        cls,
+        messages: list[dict[str, Any]],
+        cursor: dict[str, Any] | None,
+        enabled_at_ms: int,
+    ) -> list[dict[str, Any]]:
+        cursor = cursor if isinstance(cursor, dict) else {}
+        cursor_time = _coerce_int(cursor.get("time"))
+        cursor_ids = {str(value) for value in cursor.get("ids", []) if value}
+        threshold = cursor_time if cursor_time else max(0, int(enabled_at_ms or 0))
+        unseen = []
+        for message in messages:
+            message_time = _message_time(message)
+            if message_time < threshold or not message_time:
+                continue
+            key = cls._ai_auto_reply_message_key(message)
+            if message_time == cursor_time and key in cursor_ids:
+                continue
+            if not cursor_time and message_time <= threshold:
+                continue
+            unseen.append(message)
+        return unseen
+
+    def _save_ai_auto_reply_cursors(
+        self,
+        account_id: str,
+        enabled_at_ms: int,
+        cursors: dict[str, dict[str, Any]],
+    ) -> None:
+        if not cursors:
+            return
+        with self.ai_auto_reply_lock:
+            data = self._ai_auto_reply_all()
+            record = data["accounts"].get(account_id)
+            if (
+                not isinstance(record, dict)
+                or not record.get("enabled")
+                or _coerce_int(record.get("enabledAtMs")) != enabled_at_ms
+            ):
+                return
+            last_seen = record.get("lastSeen")
+            if not isinstance(last_seen, dict):
+                last_seen = {}
+                record["lastSeen"] = last_seen
+            last_seen.update(cursors)
+            if len(last_seen) > MAX_AI_AUTO_REPLY_CHATS:
+                ordered = sorted(
+                    last_seen.items(),
+                    key=lambda item: _coerce_int((item[1] or {}).get("time")),
+                    reverse=True,
+                )
+                record["lastSeen"] = dict(ordered[:MAX_AI_AUTO_REPLY_CHATS])
+            self.store.set("ai_auto_reply", data)
+
+    def _ai_auto_reply_enabled(
+        self, account_id: str, enabled_at_ms: int, chat_type: str
+    ) -> bool:
+        record = self._ai_auto_reply_record(account_id)
+        if (
+            not record.get("enabled")
+            or _coerce_int(record.get("enabledAtMs")) != enabled_at_ms
+        ):
+            return False
+        key = "contactsEnabled" if chat_type == "contact" else "groupsEnabled"
+        return bool(record.get(key))
+
+    def _consume_ai_auto_reply_rate(self, account_id: str, chat_mid: str) -> bool:
+        now = time.monotonic()
+        cutoff = now - 60.0
+        with self.ai_auto_reply_lock:
+            account_key = ("account", account_id)
+            chat_key = ("chat", account_id, chat_mid)
+            account_events = [
+                stamp
+                for stamp in self.ai_auto_reply_rate_events.get(account_key, [])
+                if stamp > cutoff
+            ]
+            chat_events = [
+                stamp
+                for stamp in self.ai_auto_reply_rate_events.get(chat_key, [])
+                if stamp > cutoff
+            ]
+            if (
+                len(account_events) >= MAX_AI_AUTO_REPLIES_PER_ACCOUNT_PER_MINUTE
+                or len(chat_events) >= MAX_AI_AUTO_REPLIES_PER_CHAT_PER_MINUTE
+            ):
+                self.ai_auto_reply_rate_events[account_key] = account_events
+                self.ai_auto_reply_rate_events[chat_key] = chat_events
+                return False
+            account_events.append(now)
+            chat_events.append(now)
+            self.ai_auto_reply_rate_events[account_key] = account_events
+            self.ai_auto_reply_rate_events[chat_key] = chat_events
+            return True
+
+    def _set_ai_auto_reply_runtime(
+        self, account_id: str, **values: Any
+    ) -> dict[str, Any]:
+        with self.ai_auto_reply_lock:
+            runtime = self.ai_auto_reply_runtime.setdefault(account_id, {})
+            runtime.update(values)
+            return dict(runtime)
+
+    def _ai_auto_reply_poll_error(self, account_id: str, exc: Exception) -> None:
+        detail = _safe_log_detail(exc, 1000)
+        runtime = self._set_ai_auto_reply_runtime(
+            account_id, state="error", lastError=detail, lastPollAt=_now_iso()
+        )
+        now = time.monotonic()
+        if (
+            runtime.get("loggedError") != detail
+            or now - float(runtime.get("loggedErrorAt") or 0) >= 60.0
+        ):
+            self._set_ai_auto_reply_runtime(
+                account_id, loggedError=detail, loggedErrorAt=now
+            )
+            self.append_bot_log(
+                "ai.auto_reply.error",
+                account_id=account_id,
+                ok=False,
+                detail=detail,
+            )
+
+    def poll_ai_auto_replies(self) -> None:
+        data = self._ai_auto_reply_all()
+        records = [
+            dict(record)
+            for record in data["accounts"].values()
+            if isinstance(record, dict) and record.get("enabled")
+        ]
+        for record in records:
+            account_id = str(record.get("accountId") or "")
+            if not account_id:
+                continue
+            try:
+                self._poll_ai_auto_reply_account(account_id, record)
+            except Exception as exc:
+                self._ai_auto_reply_poll_error(account_id, exc)
+
+    def _poll_ai_auto_reply_account(
+        self, account_id: str, record: dict[str, Any]
+    ) -> None:
+        account = self.account_store.get(account_id)
+        if account is None:
+            raise RuntimeError("LINE account no longer exists")
+        owner = self.web_auth.user_for_account(account_id)
+        if owner is None or not owner.get("active", True):
+            raise RuntimeError("LINE account owner is unavailable")
+        enabled_at_ms = _coerce_int(record.get("enabledAtMs"))
+        api = self.get_api(account_id)
+        with self.api_lock_for(account_id):
+            boxes = api.get_message_boxes(
+                limit=MAX_AI_AUTO_REPLY_CHATS,
+                last_messages_per_box=10,
+            )
+            own_mid = str(account.get("mid") or "")
+            if not own_mid:
+                profile = api.get_profile()
+                if isinstance(profile, dict):
+                    own_mid = str(profile.get("mid") or "")
+            if not own_mid:
+                raise RuntimeError("Cannot identify the selected LINE account")
+
+            raw_boxes = boxes.get("messageBoxes", []) if isinstance(boxes, dict) else []
+            cursor_updates: dict[str, dict[str, Any]] = {}
+            candidates: list[dict[str, Any]] = []
+            last_seen_raw = record.get("lastSeen")
+            last_seen: dict[str, Any] = (
+                last_seen_raw if isinstance(last_seen_raw, dict) else {}
+            )
+            for box in raw_boxes:
+                if not isinstance(box, dict):
+                    continue
+                chat_mid = _message_box_id(box)
+                chat_type = self._ai_auto_reply_chat_type(chat_mid)
+                if not chat_mid or not chat_type:
+                    continue
+                messages = _message_box_messages(box)
+                if not messages:
+                    continue
+                messages.sort(
+                    key=lambda message: (
+                        _message_time(message),
+                        self._ai_auto_reply_message_key(message),
+                    )
+                )
+                cursor = self._ai_auto_reply_cursor(messages)
+                inflight_key = (account_id, chat_mid)
+                with self.ai_auto_reply_lock:
+                    if inflight_key in self.ai_auto_reply_inflight:
+                        continue
+                unseen = self._ai_auto_reply_unseen(
+                    messages,
+                    last_seen.get(chat_mid) if isinstance(last_seen, dict) else None,
+                    enabled_at_ms,
+                )
+                if not unseen:
+                    if chat_mid not in last_seen:
+                        cursor_updates[chat_mid] = cursor
+                    continue
+                latest = unseen[-1]
+                direction_incoming = str(latest.get("from") or "") not in {"", own_mid}
+                type_enabled = bool(
+                    record.get(
+                        "contactsEnabled" if chat_type == "contact" else "groupsEnabled"
+                    )
+                )
+                try:
+                    content_type = int(str(latest.get("contentType")))
+                except (TypeError, ValueError):
+                    content_type = -1
+                if not type_enabled or not direction_incoming or content_type != 0:
+                    cursor_updates[chat_mid] = cursor
+                    continue
+                summary = _message_summary(api, latest, {})
+                question = str(summary.get("text") or "").strip()
+                if not question or question == "[encrypted]":
+                    cursor_updates[chat_mid] = cursor
+                    continue
+                if not self._consume_ai_auto_reply_rate(account_id, chat_mid):
+                    cursor_updates[chat_mid] = cursor
+                    self.append_bot_log(
+                        "ai.auto_reply.rate_limit",
+                        account_id=account_id,
+                        ok=False,
+                        detail=f"{chat_type}:{chat_mid}",
+                        data={"chatMid": chat_mid, "chatType": chat_type},
+                    )
+                    continue
+                with self.ai_auto_reply_lock:
+                    self.ai_auto_reply_inflight.add(inflight_key)
+                candidates.append(
+                    {
+                        "accountId": account_id,
+                        "chatMid": chat_mid,
+                        "chatType": chat_type,
+                        "question": question[:MAX_ASSISTANT_QUESTION_LENGTH],
+                        "senderMid": str(latest.get("from") or ""),
+                        "messageId": self._ai_auto_reply_message_key(latest),
+                        "cursor": cursor,
+                        "enabledAtMs": enabled_at_ms,
+                        "ownerId": str(owner.get("id") or ""),
+                    }
+                )
+
+        self._save_ai_auto_reply_cursors(account_id, enabled_at_ms, cursor_updates)
+        self._set_ai_auto_reply_runtime(
+            account_id, state="running", lastPollAt=_now_iso(), lastError=""
+        )
+        for candidate in candidates:
+            try:
+                self.ai_auto_reply_executor.submit(
+                    self._process_ai_auto_reply, candidate
+                )
+            except RuntimeError:
+                with self.ai_auto_reply_lock:
+                    self.ai_auto_reply_inflight.discard(
+                        (account_id, str(candidate.get("chatMid") or ""))
+                    )
+                raise
+
+    def _process_ai_auto_reply(self, candidate: dict[str, Any]) -> None:
+        account_id = str(candidate.get("accountId") or "")
+        chat_mid = str(candidate.get("chatMid") or "")
+        chat_type = str(candidate.get("chatType") or "")
+        enabled_at_ms = _coerce_int(candidate.get("enabledAtMs"))
+        question = str(candidate.get("question") or "")
+        inflight_key = (account_id, chat_mid)
+        try:
+            if not self._ai_auto_reply_enabled(account_id, enabled_at_ms, chat_type):
+                return
+            owner = self.web_auth.user_for_account(account_id)
+            if (
+                owner is None
+                or str(owner.get("id") or "") != str(candidate.get("ownerId") or "")
+                or not owner.get("active", True)
+            ):
+                raise RuntimeError("LINE account owner is unavailable")
+            self.append_bot_log(
+                "ai.auto_reply.received",
+                account_id=account_id,
+                detail=question,
+                data={
+                    "question": question,
+                    "chatMid": chat_mid,
+                    "chatType": chat_type,
+                    "messageId": candidate.get("messageId"),
+                    "senderMid": candidate.get("senderMid"),
+                },
+            )
+            generated = self.ask_global_ai(
+                question,
+                owner,
+                source="line_auto_reply",
+                account_id=account_id,
+                chat_mid=chat_mid,
+                chat_type=chat_type,
+            )
+            question_record = generated.get("question", {})
+            answer = str(question_record.get("answer") or "").strip()
+            can_answer = bool(answer)
+            outbound = answer if can_answer else AI_AUTO_REPLY_FALLBACK
+            self.append_bot_log(
+                "ai.auto_reply.answered" if can_answer else "ai.auto_reply.unanswered",
+                account_id=account_id,
+                ok=can_answer,
+                detail=outbound,
+                data={
+                    "question": question,
+                    "answer": outbound,
+                    "chatMid": chat_mid,
+                    "chatType": chat_type,
+                    "model": question_record.get("model"),
+                },
+            )
+            if not self._ai_auto_reply_enabled(account_id, enabled_at_ms, chat_type):
+                return
+            api = self.get_api(account_id)
+            with self.api_lock_for(account_id):
+                result = api.send_text(chat_mid, outbound)
+            message_id = result.get("id") if isinstance(result, dict) else result
+            self.append_bot_log(
+                "ai.auto_reply.sent",
+                account_id=account_id,
+                detail=outbound,
+                data={
+                    "answer": outbound,
+                    "chatMid": chat_mid,
+                    "chatType": chat_type,
+                    "messageId": message_id,
+                },
+            )
+            with self.ai_auto_reply_lock:
+                runtime = self.ai_auto_reply_runtime.setdefault(account_id, {})
+                runtime["state"] = "running"
+                runtime["lastReplyAt"] = _now_iso()
+                runtime["lastError"] = ""
+                runtime["replyCount"] = int(runtime.get("replyCount") or 0) + 1
+        except Exception as exc:
+            detail = _safe_log_detail(exc, 2000)
+            self._set_ai_auto_reply_runtime(
+                account_id, state="error", lastError=detail
+            )
+            self.append_bot_log(
+                "ai.auto_reply.error",
+                account_id=account_id,
+                ok=False,
+                detail=detail,
+                data={
+                    "question": question,
+                    "chatMid": chat_mid,
+                    "chatType": chat_type,
+                },
+            )
+        finally:
+            cursor = candidate.get("cursor")
+            if isinstance(cursor, dict):
+                self._save_ai_auto_reply_cursors(
+                    account_id, enabled_at_ms, {chat_mid: cursor}
+                )
+            with self.ai_auto_reply_lock:
+                self.ai_auto_reply_inflight.discard(inflight_key)
+
     @staticmethod
     def _public_assistant_question(item: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -15557,9 +16478,22 @@ class WebState:
             "createdAt": str(item.get("createdAt") or ""),
             "updatedAt": str(item.get("updatedAt") or ""),
             "resolvedBy": str(item.get("resolvedBy") or ""),
+            "source": str(item.get("source") or "web"),
+            "accountId": str(item.get("accountId") or ""),
+            "chatMid": str(item.get("chatMid") or ""),
+            "chatType": str(item.get("chatType") or ""),
         }
 
-    def ask_global_ai(self, question: str, user: dict[str, Any] | None) -> dict[str, Any]:
+    def ask_global_ai(
+        self,
+        question: str,
+        user: dict[str, Any] | None,
+        *,
+        source: str = "web",
+        account_id: str = "",
+        chat_mid: str = "",
+        chat_type: str = "",
+    ) -> dict[str, Any]:
         question = question.strip()
         if not question:
             raise WebError(HTTPStatus.BAD_REQUEST, "Question is required.")
@@ -15643,6 +16577,10 @@ class WebState:
             "model": str(result.get("model") or settings["chatModel"]),
             "createdAt": now,
             "updatedAt": now,
+            "source": str(source or "web")[:40],
+            "accountId": str(account_id or "")[:120],
+            "chatMid": str(chat_mid or "")[:120],
+            "chatType": str(chat_type or "")[:20],
         }
         with self.lock:
             latest = self._global_ai_all()
@@ -16322,6 +17260,17 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             self._require_permission("ask_ai")
             body = self._read_json()
             return self.state.ask_global_ai(str(body.get("question") or ""), self.current_user)
+        if method == "GET" and path == "/api/assistant/auto-reply":
+            self._require_permission("ask_ai")
+            return self.state.ai_auto_reply_settings(
+                _query_one(query, "accountId", ""), self.current_user
+            )
+        if method == "POST" and path == "/api/assistant/auto-reply":
+            self._require_permission("ask_ai")
+            body = self._read_json()
+            return self.state.save_ai_auto_reply_settings(
+                str(body.get("accountId") or ""), body, self.current_user
+            )
         if method == "GET" and path == "/api/assistant/knowledge":
             self._require_permission("ask_ai")
             return self.state.assistant_knowledge(self.current_user)
@@ -17261,8 +18210,8 @@ def _safe_log_detail(value: Any, limit: int = 220) -> str:
 
 def _bot_log_detail(action: Any, value: Any) -> str:
     action_name = str(action or "")
-    if action_name == "content.ai.start":
-        return str(value or "").strip()
+    if action_name == "content.ai.start" or action_name.startswith("ai.auto_reply."):
+        return str(value or "").strip()[:MAX_TEXT_LENGTH]
     if action_name == "content.ai.error":
         return _safe_log_detail(value, MAX_TEXT_LENGTH)
     return _safe_log_detail(value)

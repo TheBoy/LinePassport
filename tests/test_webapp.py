@@ -2910,6 +2910,163 @@ def test_assistant_has_an_in_app_usage_guide():
     assert 'assistant.guide_step_4_body' in INDEX_HTML
 
 
+def test_assistant_general_knowledge_mode_is_the_default(web_state):
+    assert 'id="ollamaStrictKnowledge" type="checkbox" checked' not in GOD_HTML
+    assert 'Boolean(config.strictKnowledge)' in GOD_HTML
+    assert web_state.global_ai_settings()["strictKnowledge"] is False
+
+
+class _ImmediateExecutor:
+    def submit(self, fn, *args, **kwargs):
+        fn(*args, **kwargs)
+        return None
+
+    def shutdown(self, **kwargs):
+        return None
+
+
+class _AutoReplyFakeApi:
+    def __init__(self):
+        self.boxes = {"u-contact": [], "c-group": []}
+        self.sent = []
+
+    def get_message_boxes(self, *, limit=100, last_messages_per_box=5):
+        return {
+            "messageBoxes": [
+                {
+                    "id": mid,
+                    "lastMessages": list(messages[-last_messages_per_box:]),
+                }
+                for mid, messages in list(self.boxes.items())[:limit]
+            ]
+        }
+
+    def get_profile(self):
+        return {"mid": "u-me", "displayName": "Owner"}
+
+    def send_text(self, mid, text):
+        self.sent.append((mid, text))
+        return {"id": f"reply-{len(self.sent)}"}
+
+
+def _auto_reply_owner(web_state):
+    token = web_state.web_auth.setup("owner@example.com", "owner-pass")
+    owner = web_state.web_auth.current_user(WebAuth.cookie_header(token))
+    assert owner
+    _seed_account(web_state, "auto-account")
+    web_state.account_store.data["accounts"][0]["mid"] = "u-me"
+    web_state.account_store.save()
+    web_state.web_auth.grant_account_access(owner["id"], "auto-account")
+    owner = web_state.web_auth._find_user(owner["id"])
+    assert owner
+    global_ai = web_state._global_ai_all()
+    global_ai["settings"] = {"enabled": True, "chatModel": "test-model"}
+    web_state.store.set("global_ai", global_ai)
+    return owner
+
+
+def test_ai_auto_reply_separates_contacts_groups_and_skips_own_messages(web_state):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    asked = []
+
+    def ask(question, user, **metadata):
+        asked.append((question, metadata))
+        return {
+            "ok": True,
+            "question": {"answer": f"AI: {question}", "model": "test-model"},
+        }
+
+    web_state.ask_global_ai = ask
+    settings = web_state.save_ai_auto_reply_settings(
+        "auto-account",
+        {"enabled": True, "contactsEnabled": True, "groupsEnabled": False},
+        owner,
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    assert settings["enabled"] is True
+    assert settings["contactsEnabled"] is True
+    assert settings["groupsEnabled"] is False
+
+    fake.boxes["u-contact"].append(
+        {"id": "old-contact", "from": "u-contact", "text": "old", "contentType": 0, "createdTime": enabled_at - 1000}
+    )
+    fake.boxes["c-group"].append(
+        {"id": "old-group", "from": "u-member", "text": "old group", "contentType": 0, "createdTime": enabled_at - 1000}
+    )
+    web_state.poll_ai_auto_replies()
+    assert fake.sent == []
+
+    fake.boxes["u-contact"].append(
+        {"id": "new-contact", "from": "u-contact", "text": "hello", "contentType": 0, "createdTime": enabled_at + 1000}
+    )
+    fake.boxes["c-group"].append(
+        {"id": "new-group-disabled", "from": "u-member", "text": "group ignored", "contentType": 0, "createdTime": enabled_at + 1000}
+    )
+    web_state.poll_ai_auto_replies()
+    assert fake.sent == [("u-contact", "AI: hello")]
+    assert asked[0][1] == {
+        "source": "line_auto_reply",
+        "account_id": "auto-account",
+        "chat_mid": "u-contact",
+        "chat_type": "contact",
+    }
+
+    fake.boxes["u-contact"].append(
+        {"id": "own-message", "from": "u-me", "text": "manual reply", "contentType": 0, "createdTime": enabled_at + 2000}
+    )
+    web_state.poll_ai_auto_replies()
+    assert len(fake.sent) == 1
+
+    web_state.save_ai_auto_reply_settings(
+        "auto-account",
+        {"enabled": True, "contactsEnabled": True, "groupsEnabled": True},
+        owner,
+    )
+    fake.boxes["c-group"].append(
+        {"id": "new-group", "from": "u-member", "text": "group hello", "contentType": 0, "createdTime": enabled_at + 3000}
+    )
+    web_state.poll_ai_auto_replies()
+    assert fake.sent[-1] == ("c-group", "AI: group hello")
+    assert [entry[0] for entry in fake.sent] == ["u-contact", "c-group"]
+
+    logs = web_state.list_bot_logs("auto-account", owner)["logs"]
+    assert any(log["action"] == "ai.auto_reply.received" for log in logs)
+    assert any(log["action"] == "ai.auto_reply.sent" for log in logs)
+
+
+def test_ai_auto_reply_requires_configured_ai(web_state):
+    owner = _auto_reply_owner(web_state)
+    global_ai = web_state._global_ai_all()
+    global_ai["settings"] = {"enabled": False, "chatModel": ""}
+    web_state.store.set("global_ai", global_ai)
+
+    with pytest.raises(WebError) as exc:
+        web_state.save_ai_auto_reply_settings(
+            "auto-account",
+            {"enabled": True, "contactsEnabled": True, "groupsEnabled": True},
+            owner,
+        )
+
+    assert exc.value.status == HTTPStatus.CONFLICT
+    assert exc.value.code == "assistant_not_configured"
+
+
+def test_assistant_has_account_scoped_line_auto_reply_controls():
+    assert 'data-assistant-view-target="auto-reply"' in INDEX_HTML
+    assert 'data-assistant-view="auto-reply"' in INDEX_HTML
+    assert 'id="assistantAutoReplyEnabled" type="checkbox"' in INDEX_HTML
+    assert 'id="assistantAutoReplyContacts" type="checkbox"' in INDEX_HTML
+    assert 'id="assistantAutoReplyGroups" type="checkbox"' in INDEX_HTML
+    assert '"/api/assistant/auto-reply"' in INDEX_HTML
+    assert "contactsEnabled: $(\"assistantAutoReplyContacts\").checked" in INDEX_HTML
+    assert "groupsEnabled: $(\"assistantAutoReplyGroups\").checked" in INDEX_HTML
+
+
 def test_bot_has_an_in_app_usage_guide():
     assert 'data-bot-page-target="guide"' in INDEX_HTML
     assert 'data-bot-page="guide"' in INDEX_HTML
