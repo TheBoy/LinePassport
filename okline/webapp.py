@@ -1212,6 +1212,17 @@ INDEX_HTML = r"""<!doctype html>
     .assistant-empty { padding: 48px 20px; color: var(--muted); text-align: center; }
     .assistant-view-nav { margin-bottom: 12px; }
     .assistant-knowledge-editor { min-height: 320px; font-family: Consolas, "Courier New", monospace; line-height: 1.55; resize: vertical; }
+    .assistant-knowledge-starter {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding-bottom: 18px;
+      margin-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .assistant-knowledge-starter-copy { display: grid; gap: 4px; min-width: 0; max-width: 72ch; }
+    .assistant-knowledge-starter button { flex: 0 0 auto; min-height: 44px; }
     .assistant-knowledge-grid { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; }
     .assistant-knowledge-grid .wide { grid-column: 1 / -1; }
     .assistant-knowledge-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -1386,6 +1397,8 @@ INDEX_HTML = r"""<!doctype html>
     @media (max-width: 720px) {
       .assistant-knowledge-grid { grid-template-columns: 1fr; }
       .assistant-knowledge-grid .wide { grid-column: auto; }
+      .assistant-knowledge-starter { align-items: stretch; flex-direction: column; }
+      .assistant-knowledge-starter button { width: 100%; }
       .assistant-auto-reply-overview,
       .assistant-auto-reply-row { align-items: flex-start; }
       .assistant-auto-reply-meta { grid-template-columns: 1fr; }
@@ -3594,12 +3607,12 @@ INDEX_HTML = r"""<!doctype html>
           <div class="tab-panel" data-tab-panel="assistant" id="tabPanelAssistant" role="tabpanel" aria-labelledby="tabAssistant">
             <div class="tab-panel-inner assistant-panel-inner">
               <div class="subtabs assistant-view-nav" role="tablist" aria-label="AI Chat Bot">
-                <button id="assistantChatViewButton" class="subtab active" type="button" role="tab" aria-selected="true" data-assistant-view-target="chat" data-i18n="assistant.nav_chat">Chat</button>
-                <button id="assistantAutoReplyViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="auto-reply" data-i18n="assistant.nav_auto_reply">LINE Auto Reply</button>
+                <button id="assistantAutoReplyViewButton" class="subtab active" type="button" role="tab" aria-selected="true" data-assistant-view-target="auto-reply" data-i18n="assistant.nav_auto_reply">LINE Auto Reply</button>
+                <button id="assistantChatViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="chat" data-i18n="assistant.nav_chat">Chat</button>
                 <button id="assistantKnowledgeViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="knowledge" data-i18n="assistant.nav_knowledge">Knowledge / RAG</button>
                 <button id="assistantGuideViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="guide" data-i18n="assistant.nav_guide">Usage guide</button>
               </div>
-              <div id="assistantChatView" data-assistant-view="chat">
+              <div id="assistantChatView" class="hidden" data-assistant-view="chat">
               <section class="section">
                 <div class="section-head">
                   <div>
@@ -3640,7 +3653,7 @@ INDEX_HTML = r"""<!doctype html>
               </section>
               </div>
 
-              <div id="assistantAutoReplyView" class="hidden" data-assistant-view="auto-reply">
+              <div id="assistantAutoReplyView" data-assistant-view="auto-reply">
                 <section class="section">
                   <div class="section-head">
                     <div>
@@ -3717,6 +3730,13 @@ INDEX_HTML = r"""<!doctype html>
                     </div>
                   </div>
                   <div class="section-body">
+                    <div class="assistant-knowledge-starter">
+                      <div class="assistant-knowledge-starter-copy">
+                        <strong data-i18n="assistant.knowledge_generate_title">Knowledge เริ่มต้น</strong>
+                        <span class="muted" data-i18n="assistant.knowledge_generate_hint">สร้างแนวทางตอบคำทักทาย ขอบคุณ ลาก่อน และคำถามทั่วไป โดยไม่เดาข้อมูลธุรกิจ</span>
+                      </div>
+                      <button id="assistantKnowledgeGenerateButton" type="button" data-requires-permission="ask_ai" data-i18n="assistant.knowledge_generate">Generate Knowledge / RAG</button>
+                    </div>
                     <label>
                       <span>knowledge.md</span>
                       <textarea id="assistantKnowledgeMarkdown" class="assistant-knowledge-editor" spellcheck="false" maxlength="750000" data-i18n-ph="assistant.knowledge_ph" placeholder="# Knowledge"></textarea>
@@ -3771,7 +3791,7 @@ INDEX_HTML = r"""<!doctype html>
                       </li>
                       <li class="usage-guide-step">
                         <span class="usage-guide-number" aria-hidden="true">2</span>
-                        <div><strong data-i18n="assistant.guide_step_2_title">เพิ่ม Knowledge / RAG ของคุณ</strong><p data-i18n="assistant.guide_step_2_body">ใส่ข้อมูลใน knowledge.md แล้วกด “บันทึกและสร้างดัชนี” ข้อมูลส่วนนี้แยกตามผู้ใช้และไม่แชร์กับสมาชิกคนอื่น</p></div>
+                        <div><strong data-i18n="assistant.guide_step_2_title">เพิ่ม Knowledge / RAG ของคุณ</strong><p data-i18n="assistant.guide_step_2_body">กด “Generate Knowledge / RAG” เพื่อสร้างคำทักทายและแนวทางตอบคำถามทั่วไป ตรวจแก้ฉบับร่าง แล้วกด “บันทึกและสร้างดัชนี” ข้อมูลส่วนนี้แยกตามผู้ใช้</p></div>
                       </li>
                       <li class="usage-guide-step">
                         <span class="usage-guide-number" aria-hidden="true">3</span>
@@ -4783,7 +4803,7 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.guide_step_1_title": {th: "ตรวจสอบว่า AI พร้อมใช้งาน", en: "Check that AI is ready"},
       "assistant.guide_step_1_body": {th: "สถานะในหน้าแชทต้องเป็น “พร้อมใช้งาน” หากยังไม่ได้ตั้งค่า ให้ God เปิด Ollama และเลือกโมเดลที่หน้า /god", en: "The Chat page must show Ready. If it is not configured, ask God to enable Ollama and select a model at /god."},
       "assistant.guide_step_2_title": {th: "เพิ่ม Knowledge / RAG ของคุณ", en: "Add your Knowledge / RAG"},
-      "assistant.guide_step_2_body": {th: "ใส่ข้อมูลใน knowledge.md แล้วกด “บันทึกและสร้างดัชนี” ข้อมูลส่วนนี้แยกตามผู้ใช้และไม่แชร์กับสมาชิกคนอื่น", en: "Add information to knowledge.md, then select Save and index. This data is isolated per user and is not shared with other members."},
+      "assistant.guide_step_2_body": {th: "กด “Generate Knowledge / RAG” เพื่อสร้างคำทักทายและแนวทางตอบคำถามทั่วไป ตรวจแก้ฉบับร่าง แล้วกด “บันทึกและสร้างดัชนี” ข้อมูลส่วนนี้แยกตามผู้ใช้", en: "Select Generate Knowledge / RAG to draft greetings and general-question guidance. Review the draft, then select Save and index. This data is isolated per user."},
       "assistant.guide_step_3_title": {th: "เชื่อม Knowledge API เมื่อต้องการ", en: "Connect a Knowledge API when needed"},
       "assistant.guide_step_3_body": {th: "เพิ่ม URL แบบ GET ระบุ JSON path และ Bearer token ได้ จากนั้นกด “ดึงข้อมูล” เพื่ออัปเดตและสร้างดัชนี", en: "Add a GET URL with an optional JSON path and Bearer token, then select Sync to update and index the data."},
       "assistant.guide_step_4_title": {th: "ถามให้ชัดเจนแล้วตรวจแหล่งข้อมูล", en: "Ask clearly and review the sources"},
@@ -4821,6 +4841,11 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.guide_error_body": {th: "ตรวจว่าสวิตช์หลักและ Contact/Group เปิดอยู่ สถานะ AI ขึ้นพร้อมใช้งาน เวลา “ตรวจข้อความล่าสุด” เดินต่อ และไม่มี error ในหน้า Log หมวด AI", en: "Check that the main switch and Contacts/Groups are enabled, AI shows Ready, Last checked keeps updating, and no error appears in the AI logs."},
       "assistant.knowledge_title": {th: "Knowledge / RAG ของฉัน", en: "My Knowledge / RAG"},
       "assistant.knowledge_hint": {th: "ข้อมูลนี้เป็นของบัญชีผู้ใช้คุณและไม่แชร์กับสมาชิกคนอื่น", en: "This knowledge belongs to your user account and is not shared with other members."},
+      "assistant.knowledge_generate_title": {th: "Knowledge เริ่มต้น", en: "Starter knowledge"},
+      "assistant.knowledge_generate_hint": {th: "สร้างแนวทางตอบคำทักทาย ขอบคุณ ลาก่อน และคำถามทั่วไป โดยไม่เดาข้อมูลธุรกิจ", en: "Draft guidance for greetings, thanks, farewells, and general questions without inventing business facts."},
+      "assistant.knowledge_generate": {th: "Generate Knowledge / RAG", en: "Generate Knowledge / RAG"},
+      "assistant.knowledge_generated": {th: "สร้างฉบับร่างแล้ว ตรวจแก้และกดบันทึกและสร้างดัชนี", en: "Draft created. Review it, then select Save and index."},
+      "assistant.knowledge_already_generated": {th: "มี Knowledge สำหรับคำทักทายและคำถามทั่วไปอยู่แล้ว", en: "Starter knowledge for greetings and general questions already exists."},
       "assistant.knowledge_ph": {th: "# Knowledge\n\nใส่ข้อมูลที่ต้องการให้ AI ใช้ตอบคำถาม", en: "# Knowledge\n\nAdd information for the AI to use when answering."},
       "assistant.knowledge_save": {th: "บันทึกและสร้างดัชนี", en: "Save and index"},
       "assistant.knowledge_reindex": {th: "สร้างดัชนีใหม่", en: "Reindex"},
@@ -5647,7 +5672,7 @@ INDEX_HTML = r"""<!doctype html>
       patternCategoryFilter: "all",
       editingPatternId: null,
       assistantKnowledge: null,
-      assistantView: "chat",
+      assistantView: "auto-reply",
       assistantAutoReply: null,
       assistantAutoReplySaving: false,
       incomingApiLinks: [],
@@ -5799,8 +5824,9 @@ INDEX_HTML = r"""<!doctype html>
       if (tab === "logs") loadBotLogs().catch(toastError);
       if (tab === "line") refreshConversationsInBackground();
       if (tab === "assistant") {
-        loadAssistant().catch(toastError);
         if (state.assistantView === "auto-reply") loadAssistantAutoReply().catch(toastError);
+        else if (state.assistantView === "knowledge") loadAssistantKnowledge().catch(toastError);
+        else if (state.assistantView === "chat") loadAssistant().catch(toastError);
       }
       if (tab === "incoming-api") loadIncomingApiLinks().catch(toastError);
     }
@@ -9603,7 +9629,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function setAssistantView(view) {
-      const selected = ["chat", "auto-reply", "knowledge", "guide"].includes(view) ? view : "chat";
+      const selected = ["chat", "auto-reply", "knowledge", "guide"].includes(view) ? view : "auto-reply";
       state.assistantView = selected;
       document.querySelectorAll("[data-assistant-view]").forEach((panel) => {
         panel.classList.toggle("hidden", panel.dataset.assistantView !== selected);
@@ -9692,9 +9718,103 @@ INDEX_HTML = r"""<!doctype html>
       renderAssistantSources(data.apiSources || []);
     }
 
+    const ASSISTANT_STARTER_KNOWLEDGE_MARKER = "<!-- linepassport:starter-general-v1 -->";
+
+    function assistantStarterKnowledge() {
+      if (state.lang === "en") {
+        return `${ASSISTANT_STARTER_KNOWLEDGE_MARKER}
+# Greetings and general questions
+
+## Response rules
+- Reply in the same language as the person asking.
+- Keep the answer concise, polite, and natural.
+- Introduce yourself as an automated assistant when appropriate.
+- Use only facts available in Knowledge for business-specific answers.
+- Never invent opening hours, prices, promotions, addresses, policies, or contact details.
+- If information is missing, ask one clear follow-up question or offer to hand the conversation to staff.
+
+## Greetings
+Common messages: hello, hi, hey, good morning, สวัสดี, หวัดดี
+Response guidance: Greet the person politely and ask what they would like help with.
+
+## Thanks
+Common messages: thank you, thanks, ขอบคุณ, ขอบใจ
+Response guidance: Acknowledge politely and say you are available to help further.
+
+## Farewells
+Common messages: goodbye, bye, see you, ลาก่อน, บ๊ายบาย
+Response guidance: Say goodbye politely and invite the person to return with more questions.
+
+## General questions
+- If a question is broad or unclear, ask one question to clarify what the person needs.
+- If Knowledge contains the answer, use that information directly.
+- If Knowledge does not contain the answer, say that there is not enough information and offer staff assistance.`;
+      }
+      return `${ASSISTANT_STARTER_KNOWLEDGE_MARKER}
+# การทักทายและคำถามทั่วไป
+
+## แนวทางการตอบ
+- ตอบด้วยภาษาเดียวกับผู้ถาม
+- ตอบสั้น กระชับ สุภาพ และเป็นธรรมชาติ
+- แนะนำตัวว่าเป็นผู้ช่วยอัตโนมัติเมื่อเหมาะสม
+- ใช้เฉพาะข้อเท็จจริงที่มีอยู่ใน Knowledge เมื่อตอบข้อมูลเกี่ยวกับธุรกิจ
+- ห้ามเดาเวลาเปิดบริการ ราคา โปรโมชั่น ที่อยู่ นโยบาย หรือข้อมูลติดต่อ
+- หากข้อมูลไม่พอ ให้ถามกลับหนึ่งคำถามที่ชัดเจน หรือเสนอส่งต่อให้เจ้าหน้าที่
+
+## การทักทาย
+คำที่พบบ่อย: สวัสดี, หวัดดี, ดีครับ, ดีค่ะ, hello, hi, hey
+แนวทางตอบ: ทักทายกลับอย่างสุภาพ แล้วถามว่าต้องการให้ช่วยเรื่องใด
+
+## ขอบคุณ
+คำที่พบบ่อย: ขอบคุณ, ขอบใจ, thank you, thanks
+แนวทางตอบ: ตอบรับอย่างสุภาพ และแจ้งว่ายินดีช่วยเพิ่มเติม
+
+## ลาก่อน
+คำที่พบบ่อย: ลาก่อน, บ๊ายบาย, ไว้คุยกัน, goodbye, bye
+แนวทางตอบ: กล่าวลาอย่างสุภาพ และเชิญให้กลับมาสอบถามได้
+
+## คำถามทั่วไป
+- หากคำถามกว้างหรือไม่ชัด ให้ถามกลับเพียงหนึ่งคำถามเพื่อขอรายละเอียด
+- หากมีข้อมูลตรงกับ Knowledge ให้ตอบโดยยึดข้อมูลนั้น
+- หากไม่มีข้อมูล ให้แจ้งตามตรงว่ามีข้อมูลไม่เพียงพอ และเสนอให้เจ้าหน้าที่ช่วยต่อ`;
+    }
+
+    async function generateAssistantStarterKnowledge() {
+      const button = $("assistantKnowledgeGenerateButton");
+      const editor = $("assistantKnowledgeMarkdown");
+      button.disabled = true;
+      try {
+        if (state.assistantKnowledge === null && !editor.value.trim()) {
+          await loadAssistantKnowledge();
+        }
+        const current = editor.value;
+        if (current.includes(ASSISTANT_STARTER_KNOWLEDGE_MARKER)) {
+          $("assistantKnowledgeState").textContent = t("assistant.knowledge_already_generated");
+          toast(t("assistant.knowledge_already_generated"));
+          return;
+        }
+        const starter = assistantStarterKnowledge();
+        editor.value = current.trim()
+          ? `${current.replace(/\s+$/, "")}\n\n---\n\n${starter}`
+          : starter;
+        $("assistantKnowledgeState").textContent = t("assistant.knowledge_generated");
+        editor.focus({preventScroll: true});
+        editor.setSelectionRange(editor.value.length, editor.value.length);
+        toast(t("assistant.knowledge_generated"));
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     async function loadAssistantKnowledge() {
       if (!hasPermission("ask_ai")) return;
-      renderAssistantKnowledge(await api("/api/assistant/knowledge"));
+      const generateButton = $("assistantKnowledgeGenerateButton");
+      generateButton.disabled = true;
+      try {
+        renderAssistantKnowledge(await api("/api/assistant/knowledge"));
+      } finally {
+        generateButton.disabled = false;
+      }
     }
 
     async function saveAssistantKnowledge() {
@@ -10266,6 +10386,7 @@ INDEX_HTML = r"""<!doctype html>
     });
     $("assistantKnowledgeSaveButton").addEventListener("click", () => saveAssistantKnowledge().catch(toastError));
     $("assistantKnowledgeReindexButton").addEventListener("click", () => reindexAssistantKnowledge().catch(toastError));
+    $("assistantKnowledgeGenerateButton").addEventListener("click", () => generateAssistantStarterKnowledge().catch(toastError));
     $("assistantSourceSaveButton").addEventListener("click", () => saveAssistantSource().catch(toastError));
     $("assistantSourceCancelButton").addEventListener("click", clearAssistantSourceForm);
     $("incomingApiGuideButton").addEventListener("click", openIncomingApiGuide);

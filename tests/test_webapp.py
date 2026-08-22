@@ -3424,6 +3424,29 @@ def test_assistant_has_account_scoped_line_auto_reply_controls():
     assert "groupsEnabled: $(\"assistantAutoReplyGroups\").checked" in INDEX_HTML
 
 
+def test_assistant_auto_reply_is_the_first_and_default_view():
+    auto_reply_tab = INDEX_HTML.index('id="assistantAutoReplyViewButton"')
+    chat_tab = INDEX_HTML.index('id="assistantChatViewButton"')
+    assert auto_reply_tab < chat_tab
+    assert 'id="assistantAutoReplyViewButton" class="subtab active"' in INDEX_HTML
+    assert 'id="assistantAutoReplyView" data-assistant-view="auto-reply"' in INDEX_HTML
+    assert 'id="assistantChatView" class="hidden" data-assistant-view="chat"' in INDEX_HTML
+    assert 'assistantView: "auto-reply"' in INDEX_HTML
+    assert '? view : "auto-reply"' in INDEX_HTML
+
+
+def test_assistant_can_generate_safe_starter_knowledge_without_overwriting():
+    assert 'id="assistantKnowledgeGenerateButton"' in INDEX_HTML
+    assert "function assistantStarterKnowledge()" in INDEX_HTML
+    assert "function generateAssistantStarterKnowledge()" in INDEX_HTML
+    assert "linepassport:starter-general-v1" in INDEX_HTML
+    assert 'current.includes(ASSISTANT_STARTER_KNOWLEDGE_MARKER)' in INDEX_HTML
+    assert '${current.replace(/\\s+$/, "")}\\n\\n---\\n\\n${starter}' in INDEX_HTML
+    start = INDEX_HTML.index("async function generateAssistantStarterKnowledge")
+    end = INDEX_HTML.index("async function loadAssistantKnowledge", start)
+    assert 'post("/api/assistant/knowledge"' not in INDEX_HTML[start:end]
+
+
 def test_bot_has_an_in_app_usage_guide():
     assert 'data-bot-page-target="guide"' in INDEX_HTML
     assert 'data-bot-page="guide"' in INDEX_HTML
