@@ -2,7 +2,8 @@
 
 This module owns everything that is independent of any individual Thrift
 method: the :class:`requests.Session`, the standard header set, token storage,
-automatic token refresh on ``401`` and the JSON encode/decode + error mapping.
+automatic token refresh on authentication failures and the JSON encode/decode
+and error mapping.
 
 Wire format recap (confirmed from ``static/js/main.js``)::
 
@@ -26,6 +27,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -65,6 +67,13 @@ from .exceptions import (
 )
 
 log = logging.getLogger("okline")
+
+# LINE frequently returns authentication failures inside a HTTP 200 envelope.
+# Code 119 explicitly asks the client to refresh its V3 token; the other codes
+# below describe an unusable or revoked authenticated session.
+AUTH_ERROR_CODES = frozenset({0, 1, 8, 13, 14, 17, 43, 44, 119})
+REFRESHABLE_AUTH_CODES = frozenset({1, 8, 13, 14, 17, 119})
+RELOGIN_REQUIRED_CODES = frozenset({1, 8, 13, 14, 17, 43, 44, 119})
 
 # Exact application descriptor the real extension sends.  The trailing tab is
 # intentional (LINE parses it as APP_TYPE \t APP_VER \t OS_NAME \t OS_VER).
@@ -145,6 +154,7 @@ class Transport:
         tokens: Tokens | None = None,
         session: requests.Session | None = None,
         signer: Any | None = None,
+        bridge: Any | None = None,
     ) -> None:
         self.config = config or LineConfig()
         self.tokens = tokens or Tokens()
@@ -154,9 +164,17 @@ class Transport:
         # Hook the caller can set to refresh credentials lazily; returns True
         # if new credentials were obtained and the request should be retried.
         self._refresh_hook: Callable[[], bool] | None = None
+        self._auth_failure_hook: Callable[[LineAuthError], None] | None = None
+        self._refresh_lock = threading.RLock()
         # X-Hmac signer (lazily started Node bridge running ltsm.wasm).
         self._signer = signer
         self._signer_init = signer is not None
+        # E2EE has process-local key handles, so it must not share the signer
+        # process that can be restarted after a poisoned WASM/HMAC operation.
+        # An explicitly injected signer remains shared for backwards-compatible
+        # tests and custom transports unless a distinct bridge is supplied.
+        self._bridge = bridge if bridge is not None else signer
+        self._bridge_init = self._bridge is not None
         # Optional recorder + per-exchange hooks (set by the client).
         self.recorder: Any | None = None
         self.hooks: list = []
@@ -178,19 +196,20 @@ class Transport:
 
     @property
     def bridge(self):
-        """The shared LTSM bridge (same object used for X-Hmac and E2EE).
+        """The E2EE LTSM bridge, isolated from the restartable HMAC signer.
 
-        Unlike :pyattr:`signer`, this starts the bridge even when
-        ``enable_hmac`` is False, because QR login needs the curve-key ops.
+        This starts even when ``enable_hmac`` is false because QR login needs
+        the curve-key operations. Explicitly injected legacy signers may still
+        be shared unless the caller supplies a separate ``bridge``.
         """
-        if self._signer is None:
+        if not self._bridge_init:
             from .hmac_signer import LtsmBridge
 
-            self._signer = LtsmBridge(
+            self._bridge = LtsmBridge(
                 node_path=self.config.node_path, origin=self.config.ltsm_origin
             )
-            self._signer_init = True
-        return self._signer
+            self._bridge_init = True
+        return self._bridge
 
     def _sign(self, headers: dict, path: str, body: str) -> None:
         if not self.config.enable_hmac:
@@ -198,7 +217,50 @@ class Transport:
         signer = self.signer
         if signer is None:
             return
-        headers["X-Hmac"] = signer.sign(self.tokens.access_token or "", path, body)
+        try:
+            signature = signer.sign(self.tokens.access_token or "", path, body)
+        except Exception as exc:
+            from .hmac_signer import HmacSignerError
+
+            if not isinstance(exc, HmacSignerError):
+                raise
+            restart = getattr(signer, "restart", None)
+            if not callable(restart):
+                raise
+            log.warning("LTSM HMAC bridge failed; restarting it once: %s", exc)
+            restart()
+            signature = signer.sign(self.tokens.access_token or "", path, body)
+        headers["X-Hmac"] = signature
+
+    def _refresh_credentials(self, failed_access_token: str | None) -> bool:
+        """Refresh once, coalescing concurrent failures for the same token."""
+        if self._refresh_hook is None:
+            return False
+        with self._refresh_lock:
+            current = self.tokens.access_token
+            if current and current != failed_access_token:
+                return True
+            return bool(self._refresh_hook())
+
+    @staticmethod
+    def _is_refreshable_auth_error(exc: LineAuthError) -> bool:
+        return bool(
+            exc.status in (401, 403)
+            or (exc.code is not None and exc.code in REFRESHABLE_AUTH_CODES)
+        )
+
+    def _notify_auth_failure(self, exc: LineAuthError) -> None:
+        if self._auth_failure_hook is None:
+            return
+        if not (
+            exc.status in (401, 403)
+            or (exc.code is not None and exc.code in RELOGIN_REQUIRED_CODES)
+        ):
+            return
+        try:
+            self._auth_failure_hook(exc)
+        except Exception:
+            log.exception("authentication failure hook failed")
 
     # -- header construction -------------------------------------------------
     def base_headers(self, *, with_access: bool = True) -> dict[str, str]:
@@ -260,6 +322,7 @@ class Transport:
         url = (base or self.config.gateway_base) + path
         headers = self.base_headers(with_access=require_auth)
         data = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+        failed_access_token = self.tokens.access_token
         # X-Hmac must be computed over the exact (path, body) we transmit, and
         # before any caller-supplied header overrides.
         if is_gateway:
@@ -271,8 +334,16 @@ class Transport:
         started = time.time()
         resp = self._send("POST", url, headers=headers, data=data.encode("utf-8"))
 
-        if resp.status_code == 401 and allow_refresh and self._refresh_hook:
-            if self._refresh_hook():
+        try:
+            result = self._decode(resp, path=path, endpoint_key=endpoint_key)
+        except LineAuthError as exc:
+            if (
+                require_auth
+                and is_gateway
+                and allow_refresh
+                and self._is_refreshable_auth_error(exc)
+                and self._refresh_credentials(failed_access_token)
+            ):
                 return self.post_json(
                     path,
                     body,
@@ -282,8 +353,12 @@ class Transport:
                     endpoint_key=endpoint_key,
                     base=base,
                 )
-        try:
-            result = self._decode(resp, path=path, endpoint_key=endpoint_key)
+            if require_auth and is_gateway:
+                self._notify_auth_failure(exc)
+            self._record_exchange(
+                "POST", url, path, endpoint_key, headers, body, resp, None, exc, t0, started
+            )
+            raise
         except LineError as exc:
             self._record_exchange(
                 "POST", url, path, endpoint_key, headers, body, resp, None, exc, t0, started
@@ -305,10 +380,12 @@ class Transport:
         timeout: float | None = None,
         base: str | None = None,
         sign: bool = True,
+        allow_refresh: bool = True,
     ) -> requests.Response:
         is_gateway = base is None or base == self.config.gateway_base
         url = (base or self.config.gateway_base) + path
         headers = self.base_headers(with_access=require_auth)
+        failed_access_token = self.tokens.access_token
         # axios signs GETs too; the signed path includes the query string, the
         # body is the empty string. Compute it once and reuse for signing+record.
         sig_path = path
@@ -325,6 +402,27 @@ class Transport:
         resp = self._send(
             "GET", url, headers=headers, params=params, stream=stream, timeout=timeout
         )
+        if require_auth and is_gateway and resp.status_code in (401, 403):
+            if allow_refresh and self._refresh_credentials(failed_access_token):
+                resp.close()
+                return self.get(
+                    path,
+                    params=params,
+                    require_auth=require_auth,
+                    stream=stream,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                    base=base,
+                    sign=sign,
+                    allow_refresh=False,
+                )
+            self._notify_auth_failure(
+                LineAuthError(
+                    f"HTTP {resp.status_code} for {path}",
+                    path=path,
+                    status=resp.status_code,
+                )
+            )
         if not stream:  # never consume a streamed (SSE) body
             self._record_exchange(
                 "GET",
@@ -472,15 +570,21 @@ class Transport:
                     return payload.get("data") if "data" in payload else payload
                 # non-OK envelope -> error
                 code, reason, meta = self._extract_error(payload, resp)
-                raise LineApiError(
-                    reason or str(message) or "request failed",
-                    code=code,
-                    reason=reason or message,
-                    metadata=meta,
-                    path=path,
-                    status=resp.status_code,
-                    raw=payload,
-                )
+                msg = reason or str(message) or "request failed"
+                kwargs = {
+                    "code": code,
+                    "reason": reason or message,
+                    "metadata": meta,
+                    "path": path,
+                    "status": resp.status_code,
+                    "raw": payload,
+                }
+                upgrade = (reason or "").upper().find("UPGRADE") >= 0
+                if upgrade or code == 86:
+                    raise LineMustUpgradeError(msg, **kwargs)
+                if code in AUTH_ERROR_CODES:
+                    raise LineAuthError(msg, **kwargs)
+                raise LineApiError(msg, **kwargs)
             return self._unwrap(payload)
 
         # --- error path -----------------------------------------------------
@@ -498,9 +602,20 @@ class Transport:
         upgrade = (reason or "").upper().find("UPGRADE") >= 0
         if upgrade or code == 86:
             raise LineMustUpgradeError(msg, **kwargs)
-        if resp.status_code in (401, 403) or code in (0, 8, 1):
+        if resp.status_code in (401, 403) or code in AUTH_ERROR_CODES:
             raise LineAuthError(msg, **kwargs)
         raise LineApiError(msg, **kwargs)
+
+    def close(self) -> None:
+        """Close the independent HMAC and E2EE bridge processes once each."""
+        seen: set[int] = set()
+        for bridge in (self._signer, self._bridge):
+            if bridge is None or id(bridge) in seen:
+                continue
+            seen.add(id(bridge))
+            close = getattr(bridge, "close", None)
+            if callable(close):
+                close()
 
     @staticmethod
     def _unwrap(payload: Any) -> Any:
@@ -548,4 +663,9 @@ class Transport:
             )
             if hv and hv.isdigit():
                 code = int(hv)
+        elif isinstance(code, str):
+            try:
+                code = int(code)
+            except ValueError:
+                code = None
         return code, reason, meta

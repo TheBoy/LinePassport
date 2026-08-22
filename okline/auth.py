@@ -230,7 +230,7 @@ class AuthFlows:
         an error after scanning).  ``on_pin(pin)`` receives the PIN to display.
         Both callbacks block while we long-poll for confirmation.
         """
-        bridge = self._t.bridge  # shared LTSM WASM bridge (also signs X-Hmac)
+        bridge = self._t.bridge  # dedicated LTSM WASM bridge for E2EE key handles
 
         session = self.qr_create_session()
         qr = self.qr_create_qrcode(session)

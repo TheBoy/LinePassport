@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from typing import Any, Callable
 
@@ -103,8 +104,9 @@ class OkLine(AllServices):
         # When loaded from a session file, persist refreshed tokens back to it.
         self._session_path: str | None = None
         self._session_save_hook: Callable[[], None] | None = None
+        self._token_refresh_lock = threading.RLock()
 
-        # Auto-refresh the access token on a 401 if we hold a refresh token.
+        # Auto-refresh the access token on refreshable gateway auth failures.
         self.transport._refresh_hook = self._auto_refresh
 
     # -- credential helpers --------------------------------------------------
@@ -120,19 +122,20 @@ class OkLine(AllServices):
         self.transport.tokens.access_token = token
 
     def _auto_refresh(self) -> bool:
-        if not self.transport.tokens.refresh_token:
-            return False
-        try:
-            self.auth.refresh_access_token()
-            log.info("access token refreshed")
-            if self._session_save_hook is not None:
-                self._session_save_hook()
-            elif self._session_path:  # persist the new token
-                self.save_tokens(self._session_path)
-            return True
-        except Exception as exc:  # pragma: no cover - network
-            log.warning("token refresh failed: %s", exc)
-            return False
+        with self._token_refresh_lock:
+            if not self.transport.tokens.refresh_token:
+                return False
+            try:
+                self.auth.refresh_access_token()
+                log.info("access token refreshed")
+                if self._session_save_hook is not None:
+                    self._session_save_hook()
+                elif self._session_path:  # persist the new token
+                    self.save_tokens(self._session_path)
+                return True
+            except Exception as exc:  # pragma: no cover - network
+                log.warning("token refresh failed: %s", exc)
+                return False
 
     # -- session persistence -------------------------------------------------
     def save_tokens(self, path: str | None = None) -> None:
@@ -331,10 +334,8 @@ class OkLine(AllServices):
 
     # -- lifecycle -----------------------------------------------------------
     def close(self) -> None:
-        """Release the LTSM Node bridge subprocess (if started)."""
-        signer = getattr(self.transport, "_signer", None)
-        if signer is not None:
-            signer.close()
+        """Release the LTSM signer and E2EE bridge subprocesses."""
+        self.transport.close()
 
     def __enter__(self) -> OkLine:
         return self

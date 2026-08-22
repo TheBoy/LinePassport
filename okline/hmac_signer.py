@@ -38,10 +38,11 @@ class HmacSignerError(LineError):
 class LtsmBridge:
     """Persistent Node bridge running LINE's real LTSM WASM module.
 
-    A single shared instance serves both the per-request ``X-Hmac`` signing and
-    the Curve25519 / E2EE-keychain operations needed for QR login (the curve
-    key handle lives inside the one WASM instance, so the same process must be
-    reused across calls).
+    An instance can perform either per-request ``X-Hmac`` signing or the
+    Curve25519 / E2EE-keychain operations needed for QR login. Curve key
+    handles are process-local, so all E2EE operations for one login must stay
+    on the same instance. :class:`Transport` keeps that instance separate from
+    its restartable HMAC signer.
 
     Thread-safe: one lock serialises the request/response round-trips.  The
     Node process is started lazily on first use and reused for the lifetime of
@@ -257,22 +258,30 @@ class LtsmBridge:
         )
 
     # -- teardown ------------------------------------------------------------
-    def close(self) -> None:
-        with self._lock:
-            if self._proc and self._proc.poll() is None:
+    def _close_unlocked(self) -> None:
+        if self._proc and self._proc.poll() is None:
+            try:
+                self._proc.stdin.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=5)
+            except Exception:
                 try:
-                    self._proc.stdin.close()  # type: ignore[union-attr]
+                    self._proc.kill()
                 except Exception:
                     pass
-                try:
-                    self._proc.terminate()
-                    self._proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        self._proc.kill()
-                    except Exception:
-                        pass
-            self._proc = None
+        self._proc = None
+
+    def restart(self) -> None:
+        """Discard a poisoned WASM process; the next command starts a fresh one."""
+        with self._lock:
+            self._close_unlocked()
+
+    def close(self) -> None:
+        with self._lock:
+            self._close_unlocked()
 
     def __del__(self) -> None:  # best-effort cleanup
         try:

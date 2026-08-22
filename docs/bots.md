@@ -15,7 +15,7 @@ If you only need the raw event stream, see
 ```python
 from okline import OkLine, Bot
 
-api = OkLine.from_tokens_file("tokens.json")   # log in once, reuse forever
+api = OkLine.from_tokens_file("tokens.json")   # reuse and auto-refresh the saved session
 bot = Bot(api)
 
 @bot.on_message

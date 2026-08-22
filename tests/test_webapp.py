@@ -14,6 +14,7 @@ import requests
 
 from okline import OkLine
 from okline import webapp as webapp_module
+from okline.exceptions import LineAuthError, LineLoginRequired
 from okline.obs import encode_message_talk_meta
 from okline.webapp import (
     GOD_HTML,
@@ -260,9 +261,8 @@ def test_web_ui_configures_proxy_per_line_account():
     assert 'id="loginProxyUsername" type="text"' in INDEX_HTML
     assert 'id="loginProxyPassword" type="password"' in INDEX_HTML
     assert 'id="loginProxyUrl"' not in INDEX_HTML
-    assert (
-        'await post("/api/login/start", {waitSeconds: 180, ...proxySettings});' in INDEX_HTML
-    )
+    assert 'accountId: state.reconnectAccountId || ""' in INDEX_HTML
+    assert 'await post("/api/login/start", {' in INDEX_HTML
     assert "proxyEnabled: proxyEnabled.checked" in INDEX_HTML
     assert "proxyScheme: scheme.value" in INDEX_HTML
     assert "proxyHost: host.input.value.trim()" in INDEX_HTML
@@ -1348,6 +1348,111 @@ def test_web_managed_line_session_is_encrypted_and_loadable(web_state, tmp_path)
         if loaded is not None:
             loaded.close()
         api.close()
+
+
+def test_reconnect_replaces_session_without_changing_account_references(
+    web_state, tmp_path
+):
+    account_id = "stable-account"
+    token_file = tmp_path / "stable-account.tokens"
+    old_api = OkLine(
+        access_token="old-access",
+        refresh_token="old-refresh",
+        mid="U-same",
+        record=False,
+    )
+    new_api = OkLine(
+        access_token="new-access",
+        refresh_token="new-refresh",
+        mid="U-same",
+        record=False,
+    )
+    loaded = None
+    try:
+        web_state._save_account_tokens(old_api, str(token_file))
+        web_state.account_store.data["accounts"] = [
+            {
+                "id": account_id,
+                "label": "Custom label",
+                "tokenFile": str(token_file),
+                "mid": "U-same",
+                "userid": "old-user-id",
+                "sessionState": "reauth_required",
+                "sessionError": "expired",
+            }
+        ]
+        web_state.account_store.data["activeAccountId"] = account_id
+        web_state.account_store.save()
+        web_state.schedules = [{"id": "job-1", "accountId": account_id}]
+
+        account = web_state._commit_reconnected_account(
+            new_api,
+            {
+                "mid": "U-same",
+                "userid": "new-user-id",
+                "displayName": "LINE display name",
+            },
+            account_id,
+            None,
+        )
+        web_state._bind_account_session(new_api, account_id, str(token_file))
+        new_api.tokens.access_token = "refreshed-access"
+        assert new_api._session_save_hook is not None
+        new_api._session_save_hook()
+        loaded = web_state._api_from_account_tokens(
+            str(token_file), account_id=account_id, redact=True
+        )
+
+        assert account["id"] == account_id
+        assert account["label"] == "Custom label"
+        assert account["userid"] == "new-user-id"
+        assert account["sessionState"] == "connected"
+        assert "sessionError" not in account
+        assert web_state.schedules == [{"id": "job-1", "accountId": account_id}]
+        assert loaded.tokens.access_token == "refreshed-access"
+        assert loaded.tokens.refresh_token == "new-refresh"
+    finally:
+        if loaded is not None:
+            loaded.close()
+        new_api.close()
+        old_api.close()
+
+
+def test_reconnect_rejects_a_different_line_account_before_overwriting_session(
+    web_state, tmp_path
+):
+    token_file = tmp_path / "protected.tokens"
+    old_api = OkLine(access_token="old-access", mid="U-original", record=False)
+    wrong_api = OkLine(access_token="wrong-access", mid="U-other", record=False)
+    try:
+        web_state._save_account_tokens(old_api, str(token_file))
+        before = token_file.read_bytes()
+        web_state.account_store.data["accounts"] = [
+            {
+                "id": "protected-account",
+                "label": "Protected",
+                "tokenFile": str(token_file),
+                "mid": "U-original",
+                "sessionState": "reauth_required",
+            }
+        ]
+        web_state.account_store.save()
+
+        with pytest.raises(WebError) as exc:
+            web_state._commit_reconnected_account(
+                wrong_api,
+                {"mid": "U-other", "displayName": "Wrong account"},
+                "protected-account",
+                None,
+            )
+
+        assert exc.value.status == HTTPStatus.CONFLICT
+        assert exc.value.code == "line_account_mismatch"
+        assert token_file.read_bytes() == before
+        assert web_state.account_store.requires_reauth("protected-account") is True
+    finally:
+        wrong_api.close()
+        old_api.close()
 
 
 def test_web_session_keeps_stored_e2ee_when_restored_key_cannot_export(web_state, tmp_path):
@@ -3032,6 +3137,91 @@ def _auto_reply_owner(web_state):
     global_ai["settings"] = {"enabled": True, "chatModel": "test-model"}
     web_state.store.set("global_ai", global_ai)
     return owner
+
+
+def test_revoked_line_session_is_persisted_exposed_and_logged_once(web_state):
+    owner = _auto_reply_owner(web_state)
+    failure = LineAuthError(
+        "V3_TOKEN_CLIENT_LOGGED_OUT",
+        code=8,
+        path="/api/talk/thrift/Talk/TalkService/getProfile",
+        status=200,
+    )
+
+    web_state._handle_account_auth_failure("auto-account", failure)
+    web_state._handle_account_auth_failure("auto-account", failure)
+
+    account = web_state.account_store.get("auto-account")
+    assert account["sessionState"] == "reauth_required"
+    assert "code 8" in account["sessionError"]
+    assert web_state.account_store.list_accounts({"auto-account"})[0][
+        "sessionState"
+    ] == "reauth_required"
+    with pytest.raises(LineLoginRequired):
+        web_state.get_api("auto-account")
+
+    logs = web_state.list_bot_logs("auto-account", owner)["logs"]
+    session_logs = [
+        item for item in logs if item["action"] == "line.session.reauth_required"
+    ]
+    assert len(session_logs) == 1
+    assert session_logs[0]["ok"] is False
+
+
+def test_revoked_line_session_pauses_auto_reply_without_line_api_call(web_state):
+    owner = _auto_reply_owner(web_state)
+    web_state.save_ai_auto_reply_settings(
+        "auto-account",
+        {"enabled": True, "contactsEnabled": True, "groupsEnabled": True},
+        owner,
+    )
+    web_state.account_store.mark_session_reauth_required(
+        "auto-account", "Connect the account again."
+    )
+    called = []
+    web_state._poll_ai_auto_reply_account = lambda *args: called.append(args)
+
+    web_state.poll_ai_auto_replies()
+
+    assert called == []
+    settings = web_state.ai_auto_reply_settings("auto-account", owner)
+    assert settings["runtime"]["state"] == "login_required"
+    assert "Connect the account again" in settings["runtime"]["lastError"]
+
+
+def test_revoked_line_session_pauses_due_schedule_without_submission(web_state):
+    _seed_account(web_state, "scheduled-account")
+    web_state.account_store.mark_session_reauth_required(
+        "scheduled-account", "Connect the account again."
+    )
+    web_state.schedules = [
+        {
+            "id": "paused-job",
+            "accountId": "scheduled-account",
+            "enabled": True,
+            "running": False,
+            "nextRunAt": 1,
+            "status": "waiting",
+        }
+    ]
+
+    web_state.run_due_schedules()
+
+    job = web_state.schedules[0]
+    assert job["status"] == "login required"
+    assert "Connect the account again" in job["lastError"]
+    assert web_state.schedule_inflight == set()
+
+
+def test_web_ui_exposes_reconnect_states_for_accounts_workers_and_schedules():
+    assert '"accounts.reconnect_required"' in INDEX_HTML
+    assert '"pills.reconnect_required"' in INDEX_HTML
+    assert '"assistant.auto_reply_login_required"' in INDEX_HTML
+    assert '"scheduler.login_required"' in INDEX_HTML
+    assert 'account.sessionState === "reauth_required"' in INDEX_HTML
+    assert 'openAddAccount(true, account)' in INDEX_HTML
+    assert '"login.reconnect_title"' in INDEX_HTML
+    assert '"toast.account_reconnected"' in INDEX_HTML
 
 
 def test_ai_auto_reply_separates_contacts_groups_and_skips_own_messages(web_state):

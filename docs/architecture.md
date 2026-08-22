@@ -63,10 +63,11 @@ unusual, set `LINE_NODE=/path/to/node` (or pass
 `OkLine(config=LineConfig(node_path=...))`). See
 [troubleshooting.md](./troubleshooting.md) if signing fails.
 
-The **same bridge** also generates the Curve25519 keypair for QR login
-(`curvekey_generate` → `e2ee_public_key`), unwraps the E2EE keychain, and runs
-the Letter Sealing encrypt/decrypt — so one WASM process serves signing, login,
-and E2EE.
+The transport uses **two independent bridge processes**. One signs HMAC and may
+be restarted once after a poisoned WASM operation. The other generates the
+Curve25519 keypair for QR login (`curvekey_generate` → `e2ee_public_key`),
+unwraps the E2EE keychain, and runs Letter Sealing encrypt/decrypt. Keeping E2EE
+separate preserves its process-local key handles when HMAC is recovered.
 
 The bundled token is specific to this extension build
 (`chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc`). Override with
@@ -102,7 +103,9 @@ OkLine.send_text(...)                 # a typed service method
        -> JSON-encode the args array               (exact bytes)
        -> LtsmBridge.sign(token, path, body)       -> X-Hmac
        -> add headers, POST via requests.Session    (optional rate limiter)
-       -> retry once on 401 if a refresh_token exists
+       -> decode HTTP status and the {message,data,error} envelope
+       -> refresh once on 401/403 or a refreshable LINE auth code
+       -> coalesce concurrent failures and retry once with the new token
        -> unwrap the {message,data} envelope        (errors -> LineApiError)
        -> record the Exchange                        (recorder.py)
   <- decoded result

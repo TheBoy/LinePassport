@@ -321,6 +321,18 @@ node --version
 
 ต้องเป็น Node.js 18 ขึ้นไป และต้องเรียก `node` ได้จาก `PATH`
 
+### LINE token หลุด หรือขึ้นว่าต้องเชื่อมต่อใหม่
+
+- ต้องเก็บ volume `/data` แบบ persistent และห้ามลบทิ้งตอน redeploy
+- ต้องใช้ `LINEPASSPORT_SECRET_KEY` ค่าเดิมเสมอ หากเปลี่ยน key ระบบจะถอดรหัส
+  LINE session เดิมไม่ได้
+- ห้ามนำ session ของบัญชี LINE เดียวกันไปรันพร้อมกันทั้ง local และ production
+- ระบบจะ refresh token และบันทึก token ใหม่ให้อัตโนมัติเมื่อ LINE อนุญาต
+- หาก LINE ยกเลิก session แล้ว เช่น code `8` ระบบจะหยุด AI auto-reply และ
+  Scheduler ของบัญชีนั้นเพื่อลด API call จากนั้นให้เข้า Account Management
+  แล้วเชื่อมต่อบัญชีด้วย QR ใหม่
+- ใช้ application replica เพียงหนึ่งตัวต่อ database ตามที่ระบุด้านบน
+
 ## Security Notes
 
 - ใช้ LinePassport กับบัญชี LINE ของตนเองเท่านั้น

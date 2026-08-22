@@ -104,15 +104,29 @@ OkLine now **auto-chunks** these requests at 100 mids and merges the results, so
 you can pass arbitrarily long lists. If you still hit this, **upgrade** to the
 latest version (`pip install -U okline`).
 
-## `401` / token expired
+## `401`, code `119`, or token expired
 
-- Pass a `refresh_token` so OkLine auto-refreshes on `401`:
+- Pass a `refresh_token` so OkLine auto-refreshes on HTTP `401`/`403` and
+  refreshable LINE authentication codes returned inside HTTP 200:
   `OkLine(access_token=..., refresh_token=...)`.
 - Or refresh manually: `api.auth.refresh_access_token()`.
 - If you loaded the client with `OkLine.from_tokens_file(...)`, the refreshed
   token is written back to the session file automatically.
-- If the session was revoked (logged out on another device), log in again
-  (`okline login`).
+- Code `8` (`V3_TOKEN_CLIENT_LOGGED_OUT`) after the one refresh attempt means
+  the server session was revoked. Log in again (`okline login`); retrying the
+  old token cannot restore it.
+- Do not run one copied session file simultaneously on local development and
+  production. Keep one active owner for each LINE secondary-device session.
+- In LinePassport, a revoked account is marked **Reconnect required**. Its AI
+  auto-reply and scheduled jobs pause without repeatedly calling LINE, then
+  resume after the account is connected again.
+
+## `hmac failed: Aborted()` / bridge exited
+
+LinePassport restarts the HMAC bridge once and retries the signature. HMAC runs
+in a process separate from E2EE, so a poisoned signer does not discard the
+in-memory Letter Sealing key handles. If both attempts fail, verify Node.js 18+
+is installed and that only one healthy application replica is running.
 
 ## `LineMustUpgradeError` / `MUST_UPGRADE`
 

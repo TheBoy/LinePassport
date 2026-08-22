@@ -57,9 +57,13 @@ class FakeResp:
         self.text = body if isinstance(body, str) else json.dumps(body)
         self.headers = headers or {"content-type": "application/json"}
         self.content = self.text.encode("utf-8")
+        self.closed = False
 
     def json(self) -> Any:
         return json.loads(self.text)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class FakeSession:

@@ -163,10 +163,18 @@ api.save_tokens("tokens.json")
 
 ## Token refresh
 
-Automatic: if a `refresh_token` is set, a `401` from the server triggers a token
-refresh and the original request is retried transparently. When the client was
-built with `from_tokens_file`, the refreshed token is also written back to the
-file.
+Automatic: if a `refresh_token` is set, HTTP `401`/`403` and refreshable LINE
+authentication errors (including `MUST_REFRESH_V3_TOKEN`, code `119`, inside an
+HTTP 200 envelope) trigger one token refresh and one transparent retry.
+Concurrent failures share the same refresh. When the client was built with
+`from_tokens_file`, the new access and refresh tokens are written back to the
+session file atomically.
+
+If refresh fails, or LINE returns a terminal error such as
+`V3_TOKEN_CLIENT_LOGGED_OUT` (code `8`) again after refresh, that server-side
+session has been revoked and cannot be repaired locally. Log in by QR again.
+Avoid running the same saved LINE secondary-device session on multiple machines
+at the same time because one login can invalidate another.
 
 You can also refresh manually:
 

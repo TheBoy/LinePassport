@@ -99,7 +99,7 @@ okline -h                    # full command list
 from okline import OkLine, Bot
 from okline.qrterm import print_qr
 
-# log in once, reuse the session forever
+# log in once, then reuse and automatically refresh the saved session
 api = OkLine()
 api.qr_login(on_qr=print_qr)          # scan the QR with your phone (loads E2EE keys too)
 api.save_tokens("session.json")

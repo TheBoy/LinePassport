@@ -54,7 +54,7 @@ from .assistant import (
 )
 from .client import OkLine
 from .entities import Group
-from .exceptions import LineLoginRequired
+from .exceptions import LineAuthError, LineLoginRequired
 from .hmac_signer import LtsmBridge
 from .obs import encode_message_talk_meta
 from .transport import LineConfig
@@ -3356,8 +3356,8 @@ INDEX_HTML = r"""<!doctype html>
       <section class="login-panel section" id="loginPanel">
         <div class="section-head">
           <div>
-            <h2 data-i18n="login.add_title">Add LINE Account</h2>
-            <span class="muted" data-i18n="login.subtitle">Follow the 4 steps to add another LINE session. LinePassport will use the display name from your LINE account.</span>
+            <h2 id="loginPanelTitle" data-i18n="login.add_title">Add LINE Account</h2>
+            <span class="muted" id="loginPanelSubtitle" data-i18n="login.subtitle">Follow the 4 steps to add another LINE session. LinePassport will use the display name from your LINE account.</span>
           </div>
           <div class="row compact">
             <button id="cancelLoginButton" data-i18n="login.back">Back</button>
@@ -4771,6 +4771,7 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.auto_reply_running": {th: "กำลังทำงาน", en: "Running"},
       "assistant.auto_reply_idle": {th: "รอเปิด Contact หรือ Group", en: "Waiting for Contacts or Groups"},
       "assistant.auto_reply_error_state": {th: "ทำงานผิดพลาด", en: "Error"},
+      "assistant.auto_reply_login_required": {th: "รอเชื่อมต่อ LINE ใหม่", en: "Waiting for LINE reconnect"},
       "assistant.auto_reply_ai_ready": {th: "AI พร้อม", en: "AI ready"},
       "assistant.auto_reply_ai_missing": {th: "ยังไม่ได้ตั้งค่า AI", en: "AI not configured"},
       "assistant.auto_reply_last_poll": {th: "ตรวจข้อความล่าสุด", en: "Last checked"},
@@ -4967,7 +4968,7 @@ INDEX_HTML = r"""<!doctype html>
       "settings.guide_proxy_title": {th: "ใช้ Proxy เฉพาะเมื่อจำเป็น", en: "Use a proxy only when necessary"},
       "settings.guide_proxy_body": {th: "เปิด Proxy ก่อนกดเริ่ม แล้วกรอกประเภท Host และ Port; Username/Password ใส่เมื่อผู้ให้บริการกำหนด Proxy จะผูกกับบัญชี LINE นี้เท่านั้น กรอกผิดจะทำให้ QR หรือการส่งข้อความล้มเหลว", en: "Enable Proxy before starting and enter its type, host, and port; add username and password only when required. It applies only to this LINE account, and incorrect values can break QR login or sending."},
       "settings.guide_manage_account_title": {th: "แก้ชื่อหรือลบบัญชี", en: "Rename or remove an account"},
-      "settings.guide_manage_account_body": {th: "แก้ชื่อเพื่อช่วยแยกหลายบัญชีได้โดยไม่เปลี่ยนชื่อจริงใน LINE การลบบัญชีจะลบเซสชันออกจากพื้นที่ผู้ใช้นี้และพักงานตั้งเวลาของบัญชีนั้น ควรตรวจงานก่อนยืนยัน", en: "Rename an account to distinguish multiple sessions without changing the real LINE name. Removing it deletes the session from this workspace and pauses that account's schedules, so review jobs before confirming."},
+      "settings.guide_manage_account_body": {th: "หากขึ้นว่าต้องเชื่อมต่อใหม่ ให้กด “เชื่อมต่อใหม่” และสแกนบัญชี LINE เดิมเพื่อเก็บงานกับการตั้งค่าไว้ แก้ชื่อได้โดยไม่เปลี่ยนชื่อจริงใน LINE ส่วนการลบจะลบเซสชันและพักงานของบัญชีนั้น", en: "If reconnect is required, choose Reconnect and scan the same LINE account to preserve jobs and settings. Renaming does not change the real LINE name; deleting removes the session and pauses that account's jobs."},
       "settings.guide_users_title": {th: "จัดการผู้ใช้และบทบาท", en: "Manage users and roles"},
       "settings.guide_users_body": {th: "เมนูนี้แสดงเฉพาะผู้มีสิทธิ์ ผู้ใช้ใหม่มีพื้นที่ส่วนตัวแบบคลีนและต้องเพิ่ม LINE ของตนเอง กำหนดบทบาทตามงานที่ต้องทำ และปิดใช้งานบัญชีแทนการลบเมื่อยังต้องเก็บประวัติ", en: "This menu appears only with permission. New users receive a clean private workspace and add their own LINE account. Assign the least role needed and disable a user instead of deleting when history must be retained."},
       "settings.guide_roles_title": {th: "เลือกบทบาทอย่างไร", en: "Choosing a role"},
@@ -4991,6 +4992,8 @@ INDEX_HTML = r"""<!doctype html>
       "accounts.missing": {th: "เซสชันหาย", en: "missing"},
       "accounts.session_ready": {th: "เซสชันพร้อม", en: "Session ready"},
       "accounts.session_missing": {th: "เซสชันหาย", en: "Session missing"},
+      "accounts.reconnect_required": {th: "ต้องเชื่อมต่อ LINE ใหม่", en: "Reconnect LINE"},
+      "accounts.reconnect": {th: "เชื่อมต่อใหม่", en: "Reconnect"},
       "accounts.use": {th: "ใช้บัญชีนี้", en: "Use"},
       "accounts.edit_title": {th: "เปลี่ยนชื่อบัญชี", en: "Rename account"},
       "accounts.name": {th: "ชื่อบัญชี LINE", en: "LINE account name"},
@@ -5034,6 +5037,8 @@ INDEX_HTML = r"""<!doctype html>
       "secure.action": {th: "ตั้งรหัสผ่าน", en: "Set a password"},
       "login.add_title": {th: "เพิ่มบัญชี LINE", en: "Add LINE Account"},
       "login.subtitle": {th: "ทำตาม 4 ขั้นตอนเพื่อเพิ่มเซสชัน LINE — LinePassport จะใช้ชื่อที่แสดงจากบัญชี LINE ของคุณ", en: "Follow the 4 steps to add another LINE session. LinePassport will use the display name from your LINE account."},
+      "login.reconnect_title": {th: "เชื่อมต่อบัญชี LINE ใหม่", en: "Reconnect LINE Account"},
+      "login.reconnect_subtitle": {th: "สแกน QR ของบัญชีเดิมเพื่อเปลี่ยนเฉพาะเซสชัน โดยเก็บตารางส่ง API และการตั้งค่าเดิมไว้", en: "Scan the same LINE account to replace only its session while keeping schedules, APIs, and settings."},
       "login.back": {th: "ย้อนกลับ", en: "Back"},
       "login.step_1": {th: "ขั้นตอน 1", en: "Step 1"},
       "login.step_2": {th: "ขั้นตอน 2", en: "Step 2"},
@@ -5059,6 +5064,7 @@ INDEX_HTML = r"""<!doctype html>
       "login.done_title": {th: "กำลังเปิดบัญชี", en: "Opening account"},
       "login.done_text": {th: "หลังเข้าสู่ระบบเสร็จ LinePassport จะเปิดบัญชี LINE นี้ให้อัตโนมัติ", en: "After login finishes, LinePassport will open this LINE account automatically."},
       "login.added_opening": {th: "เพิ่ม {name} สำเร็จ กำลังเปิดบัญชีนี้…", en: "{name} added successfully. Opening this account…"},
+      "login.reconnected_opening": {th: "เชื่อมต่อ {name} ใหม่สำเร็จ กำลังเปิดบัญชีนี้…", en: "{name} reconnected successfully. Opening this account…"},
       "login.line_account": {th: "บัญชี LINE", en: "LINE account"},
       "login.idle": {th: "พร้อม", en: "Idle"},
       "login.state.starting": {th: "กำลังเริ่ม…", en: "Starting…"},
@@ -5084,6 +5090,7 @@ INDEX_HTML = r"""<!doctype html>
       "pills.node_missing": {th: "ต้องติดตั้ง Node.js เพื่อส่งข้อความ", en: "Install Node.js to send messages"},
       "pills.connected": {th: "เชื่อมต่อแล้ว", en: "Connected"},
       "pills.not_connected": {th: "ยังไม่เชื่อมต่อ", en: "Not connected"},
+      "pills.reconnect_required": {th: "ต้องเชื่อมต่อใหม่", en: "Reconnect required"},
       "contacts.title": {th: "รายชื่อ", en: "Contacts"},
       "contacts.groups": {th: "กลุ่ม", en: "Groups"},
       "contacts.refresh": {th: "รีเฟรช", en: "Refresh"},
@@ -5280,6 +5287,7 @@ INDEX_HTML = r"""<!doctype html>
       "scheduler.next": {th: "ครั้งถัดไป", en: "next"},
       "scheduler.sent": {th: "ส่งแล้ว", en: "sent"},
       "scheduler.error": {th: "ข้อผิดพลาด", en: "error"},
+      "scheduler.login_required": {th: "รอเชื่อมต่อ LINE ใหม่", en: "waiting for LINE reconnect"},
       "scheduler.summary_once": {th: "จะส่งครั้งเดียว วันที่ {at}", en: "Sends once at {at}"},
       "scheduler.summary_once_empty": {th: "เลือกวันและเวลาที่จะส่ง", en: "Pick a date and time to send."},
       "scheduler.summary_repeat": {th: "ส่งซ้ำทุก {interval} นาที ระหว่าง {start}–{end}", en: "Repeats every {interval} min between {start}–{end}"},
@@ -5457,9 +5465,11 @@ INDEX_HTML = r"""<!doctype html>
       "errors.password_too_long": {th: "รหัสผ่านต้องไม่เกิน 128 ตัวอักษร", en: "Password must not exceed 128 characters."},
       "errors.server_error": {th: "เกิดข้อผิดพลาดในระบบ ลองใหม่อีกครั้ง", en: "Something went wrong. Please try again."},
       "errors.line_login_required": {th: "ต้องเข้าสู่ระบบ LINE ใหม่", en: "LINE login is required again."},
+      "errors.line_account_mismatch": {th: "บัญชี LINE ที่สแกนไม่ตรงกับบัญชีเดิม กรุณาสแกนบัญชีเดิม หรือกดย้อนกลับแล้วเพิ่มเป็นบัญชีใหม่", en: "The scanned LINE account does not match. Scan the original account, or go back and add this as a new account."},
       "errors.network": {th: "ติดต่อเซิร์ฟเวอร์ไม่ได้", en: "Cannot reach the server."},
       "toast.using": {th: "กำลังใช้ {name}", en: "Using {name}"},
       "toast.account_added": {th: "เพิ่มบัญชี LINE แล้ว", en: "LINE account added"},
+      "toast.account_reconnected": {th: "เชื่อมต่อบัญชี LINE ใหม่แล้ว", en: "LINE account reconnected"},
       "toast.sent": {th: "ส่งข้อความแล้ว", en: "Message sent"},
       "toast.sending_media": {th: "กำลังส่งไฟล์…", en: "Sending…"},
       "toast.password_updated": {th: "อัปเดตรหัสผ่านแล้ว", en: "Password updated"},
@@ -5475,7 +5485,7 @@ INDEX_HTML = r"""<!doctype html>
       "toast.no_stuck_jobs": {th: "ไม่มีงานค้างให้เคลียร์", en: "No stuck jobs to clear"},
       "toast.select_target_first": {th: "เลือกแชทหรือกรอกปลายทางก่อน", en: "Select a chat or enter a target first"},
       "toast.target_message_required": {th: "ต้องมีปลายทางและข้อความ", en: "Target and message are required"},
-      "toast.no_session_hint": {th: "บัญชีนี้ไม่มีเซสชันที่ใช้ได้ ลองเพิ่มใหม่หรือลบทิ้ง", en: "This account has no usable session. Add it again or delete it."},
+      "toast.no_session_hint": {th: "บัญชีนี้ไม่มีเซสชันที่ใช้ได้ ไปที่จัดการบัญชี LINE แล้วกดเชื่อมต่อใหม่", en: "This account has no usable session. Open LINE Account Management and reconnect it."},
       "toast.args_json": {th: "อาร์กิวเมนต์ Endpoint ต้องเป็น JSON", en: "Endpoint args must be JSON"},
       "toast.image_required": {th: "ต้องระบุแหล่งรูปภาพ", en: "Image source is required"},
       "toast.api_url_required": {th: "ต้องระบุ URL ของ API", en: "API URL is required"},
@@ -5518,7 +5528,7 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.guide_category_system_title": {th: "System", en: "System"},
       "botlog.guide_category_system_body": {th: "เหตุการณ์ทั่วไปของระบบที่ไม่อยู่ในสามหมวดข้างต้น เช่น การจัดการข้อมูลหรือการเชื่อมต่อ", en: "General system activity outside the other categories, such as data management or connection events."},
       "botlog.guide_errors_title": {th: "ข้อผิดพลาดที่พบบ่อย", en: "Common errors"},
-      "botlog.guide_session_body": {th: "เซสชัน LINE หมดอายุ ให้เพิ่มบัญชี LINE ใหม่แล้วทดสอบส่งข้อความธรรมดาก่อน", en: "The LINE session expired. Add the LINE account again and test with plain text first."},
+      "botlog.guide_session_body": {th: "เซสชัน LINE ใช้ไม่ได้ ให้ไปที่จัดการบัญชี LINE กดเชื่อมต่อใหม่ และสแกนบัญชีเดิมเพื่อเก็บงานกับการตั้งค่าไว้", en: "The LINE session is unavailable. Open LINE Account Management, choose Reconnect, and scan the same account to preserve jobs and settings."},
       "botlog.guide_ssl_body": {th: "การเชื่อมต่ออัปโหลดสื่อถูกตัด ลองใหม่ ตรวจ Proxy, DNS และเครือข่ายของเซิร์ฟเวอร์ หรือทดสอบด้วยไฟล์ที่เล็กลง", en: "The media upload connection was interrupted. Retry, check the server proxy, DNS, and network, or test with a smaller file."},
       "botlog.guide_auth_body": {th: "API Key หรือสิทธิ์ของบริการภายนอกไม่ถูกต้อง หมดอายุ หรือไม่มีเครดิต ให้ตรวจค่าที่หน้าตั้งค่าของฟังก์ชันนั้น", en: "The external API key or permission is invalid, expired, or out of credit. Check the settings for that feature."},
       "botlog.guide_ai_error_body": {th: "โมเดล AI ไม่สามารถสร้างรูปจาก Prompt นี้ได้ ให้ตรวจว่าเลือกโมเดลภาพ ไม่มีไฟล์อ้างอิงที่หาย และปรับ Prompt ให้ชัดเจนและปลอดภัย", en: "The AI model could not create an image from the prompt. Confirm it is an image model, no referenced attachment is missing, and revise the prompt to be clear and safe."},
@@ -5588,6 +5598,7 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.ai.auto_reply.sent": {th: "ส่งคำตอบ AI สำเร็จ", en: "AI reply sent"},
       "botlog.action.ai.auto_reply.rate_limit": {th: "หยุดตอบข้อความถี่เกินกำหนด", en: "Auto reply rate limited"},
       "botlog.action.ai.auto_reply.error": {th: "ตอบ LINE อัตโนมัติผิดพลาด", en: "Automatic LINE reply failed"},
+      "botlog.action.line.session.reauth_required": {th: "เซสชัน LINE ถูกยกเลิก", en: "LINE session requires reconnect"},
       "toast.bot_logs_cleared": {th: "ล้าง Log ทั้งหมดแล้ว", en: "Activity logs cleared"}
     };
 
@@ -5597,6 +5608,7 @@ INDEX_HTML = r"""<!doctype html>
       target: "",
       loginTimer: null,
       loginStep: 1,
+      reconnectAccountId: null,
       accounts: [],
       activeAccountId: null,
       schedules: [],
@@ -6223,7 +6235,13 @@ INDEX_HTML = r"""<!doctype html>
     function renderProfile(status) {
       state.lastStatus = status;
       setPill("nodePill", status.nodeAvailable ? t("pills.node_ready") : t("pills.node_missing"), status.nodeAvailable ? "ok" : "warn");
-      setPill("authPill", status.authenticated ? t("pills.connected") : t("pills.not_connected"), status.authenticated ? "ok" : "warn");
+      setPill(
+        "authPill",
+        status.loginRequired
+          ? t("pills.reconnect_required")
+          : (status.authenticated ? t("pills.connected") : t("pills.not_connected")),
+        status.authenticated ? "ok" : "warn"
+      );
 
       state.accounts = status.accounts || [];
       state.activeAccountId = status.activeAccountId || state.activeAccountId || null;
@@ -6237,7 +6255,9 @@ INDEX_HTML = r"""<!doctype html>
       renderProfileAvatar(p, displayName);
       $("profileMid").textContent = p.mid || "-";
       $("profileUserId").textContent = p.userid || "-";
-      $("profileStatus").textContent = p.statusMessage || "-";
+      $("profileStatus").textContent = status.loginRequired
+        ? t("accounts.reconnect_required")
+        : (p.statusMessage || "-");
       $("profileE2ee").textContent = status.e2eeReady ? t("profile.e2ee_ready") : t("profile.e2ee_off");
       updateE2eeButton();
     }
@@ -6260,7 +6280,10 @@ INDEX_HTML = r"""<!doctype html>
         for (const account of state.accounts) {
           const opt = document.createElement("option");
           opt.value = account.id;
-          opt.textContent = `${account.label || account.id}${account.tokenFileExists ? "" : " (" + t("accounts.missing") + ")"}`;
+          const suffix = account.sessionState === "reauth_required"
+            ? ` (${t("accounts.reconnect_required")})`
+            : (account.tokenFileExists ? "" : " (" + t("accounts.missing") + ")");
+          opt.textContent = `${account.label || account.id}${suffix}`;
           select.appendChild(opt);
         }
         select.value = selected;
@@ -6379,7 +6402,9 @@ INDEX_HTML = r"""<!doctype html>
         meta.textContent = account.mid || account.id;
         const sub = document.createElement("span");
         sub.className = "muted";
-        const accountStates = [account.tokenFileExists ? t("accounts.session_ready") : t("accounts.session_missing")];
+        const accountStates = [account.sessionState === "reauth_required"
+          ? t("accounts.reconnect_required")
+          : (account.tokenFileExists ? t("accounts.session_ready") : t("accounts.session_missing"))];
         if (account.proxyConfigured) accountStates.push(t("proxy.configured"));
         sub.textContent = accountStates.join(" · ");
         info.append(title, meta, sub);
@@ -6388,11 +6413,17 @@ INDEX_HTML = r"""<!doctype html>
         actions.className = "management-row-actions";
         const use = document.createElement("button");
         use.textContent = t("accounts.use");
+        use.disabled = !account.tokenFileExists || account.sessionState === "reauth_required";
         use.addEventListener("click", async () => {
           state.activeAccountId = account.id;
           renderAccounts();
           await selectAccount().catch(toastError);
         });
+        const reconnect = document.createElement("button");
+        reconnect.className = "primary";
+        reconnect.textContent = t("accounts.reconnect");
+        reconnect.disabled = !hasPermission("manage_accounts");
+        reconnect.addEventListener("click", () => openAddAccount(true, account));
         const edit = document.createElement("button");
         edit.textContent = t("common.edit");
         edit.disabled = !hasPermission("manage_accounts");
@@ -6402,7 +6433,11 @@ INDEX_HTML = r"""<!doctype html>
         del.textContent = t("common.delete");
         del.disabled = !hasPermission("manage_accounts");
         del.addEventListener("click", () => deleteLineAccount(account).catch(toastError));
-        actions.append(use, edit, del);
+        actions.append(use);
+        if (!account.tokenFileExists || account.sessionState === "reauth_required") {
+          actions.append(reconnect);
+        }
+        actions.append(edit, del);
         row.append(info, actions);
         list.appendChild(row);
       }
@@ -8032,8 +8067,21 @@ INDEX_HTML = r"""<!doctype html>
       });
     }
 
-    function openAddAccount(reset = true) {
+    function openAddAccount(reset = true, reconnectAccount = null) {
       clearInterval(state.loginTimer);
+      state.reconnectAccountId = reconnectAccount && reconnectAccount.id
+        ? reconnectAccount.id
+        : null;
+      const loginTitleKey = state.reconnectAccountId
+        ? "login.reconnect_title"
+        : "login.add_title";
+      const loginSubtitleKey = state.reconnectAccountId
+        ? "login.reconnect_subtitle"
+        : "login.subtitle";
+      $("loginPanelTitle").dataset.i18n = loginTitleKey;
+      $("loginPanelTitle").textContent = t(loginTitleKey);
+      $("loginPanelSubtitle").dataset.i18n = loginSubtitleKey;
+      $("loginPanelSubtitle").textContent = t(loginSubtitleKey);
       $("beginAddAccountButton").disabled = false;
       // Item F: no accounts yet -> nowhere to go "Back" to; hide the button.
       $("cancelLoginButton").classList.toggle("hidden", state.accounts.length === 0);
@@ -8051,9 +8099,11 @@ INDEX_HTML = r"""<!doctype html>
       clearInterval(state.loginTimer);
       $("beginAddAccountButton").disabled = false;
       try { await post("/api/login/cancel"); } catch (_) { /* best effort */ }
+      state.reconnectAccountId = null;
       if (state.activeAccountId) {
         setView("workspace");
-        setAccountControls(true);
+        setAccountControls(false);
+        await refreshStatus(false);
       } else if (state.accounts.length) {
         showGate(false);
         setAccountControls(false);
@@ -8081,7 +8131,11 @@ INDEX_HTML = r"""<!doctype html>
       $("qrBox").replaceChildren(textSpan(t("login.starting"), "muted"));
       setLoginStep(2);
       try {
-        await post("/api/login/start", {waitSeconds: 180, ...proxySettings});
+        await post("/api/login/start", {
+          waitSeconds: 180,
+          accountId: state.reconnectAccountId || "",
+          ...proxySettings
+        });
         pollLogin();
         clearInterval(state.loginTimer);
         state.loginTimer = setInterval(pollLogin, 1400);
@@ -8120,14 +8174,23 @@ INDEX_HTML = r"""<!doctype html>
         if (data.state === "success") {
           clearInterval(state.loginTimer);
           $("beginAddAccountButton").disabled = false;
+          const wasReconnect = Boolean(state.reconnectAccountId);
           state.activeAccountId = data.account && data.account.id ? data.account.id : null;
-          if (data.account && !state.accounts.some((account) => account.id === data.account.id)) {
-            state.accounts.push(data.account);
+          if (data.account) {
+            const existingIndex = state.accounts.findIndex(
+              (account) => account.id === data.account.id
+            );
+            if (existingIndex >= 0) state.accounts[existingIndex] = data.account;
+            else state.accounts.push(data.account);
           }
+          state.reconnectAccountId = null;
           setLoginStep(4);
           const lbl = data.account && data.account.label ? data.account.label : t("login.line_account");
-          $("loginDoneText").textContent = t("login.added_opening", {name: lbl});
-          toast(t("toast.account_added"));
+          $("loginDoneText").textContent = t(
+            wasReconnect ? "login.reconnected_opening" : "login.added_opening",
+            {name: lbl}
+          );
+          toast(t(wasReconnect ? "toast.account_reconnected" : "toast.account_added"));
           renderAccounts();
           setTab("line");
           setView("workspace");
@@ -8138,7 +8201,10 @@ INDEX_HTML = r"""<!doctype html>
           clearInterval(state.loginTimer);
           $("beginAddAccountButton").disabled = false;
           setLoginStep(1);
-          toast(data.error || t("errors.server_error"), true);
+          const localizedError = data.errorCode && I18N[`errors.${data.errorCode}`]
+            ? t(`errors.${data.errorCode}`)
+            : (data.error || t("errors.server_error"));
+          toast(localizedError, true);
         }
       } catch (err) {
         clearInterval(state.loginTimer);
@@ -8856,6 +8922,8 @@ INDEX_HTML = r"""<!doctype html>
         const rawStatus = String(job.status || "").toLowerCase();
         const status = job.running || rawStatus === "running"
           ? t("scheduler.running")
+          : rawStatus === "login required"
+            ? t("scheduler.login_required")
           : rawStatus === "error" || job.lastError
             ? t("scheduler.error")
             : job.enabled ? t("scheduler.enabled") : t("scheduler.paused");
@@ -9450,7 +9518,8 @@ INDEX_HTML = r"""<!doctype html>
         starting: "assistant.auto_reply_starting",
         running: "assistant.auto_reply_running",
         idle: "assistant.auto_reply_idle",
-        error: "assistant.auto_reply_error_state"
+        error: "assistant.auto_reply_error_state",
+        login_required: "assistant.auto_reply_login_required"
       }[runtimeState] || "assistant.auto_reply_off";
       return t(key);
     }
@@ -9485,7 +9554,7 @@ INDEX_HTML = r"""<!doctype html>
       setPill(
         "assistantAutoReplyStatus",
         assistantAutoReplyRuntimeLabel(runtimeState),
-        runtimeState === "error" ? "warn" : (enabled ? "ok" : "")
+        ["error", "login_required"].includes(runtimeState) ? "warn" : (enabled ? "ok" : "")
       );
       setPill(
         "assistantAutoReplyAiStatus",
@@ -13274,6 +13343,7 @@ class AccountStore:
                 token_file = account.get("tokenFile") or ""
                 item = dict(account)
                 item["tokenFileExists"] = bool(token_file and os.path.exists(token_file))
+                item["sessionState"] = self._session_state(account)
                 item.pop("tokenFile", None)
                 item["proxyConfigured"] = bool(item.pop("proxyUrl", None))
                 out.append(item)
@@ -13304,10 +13374,59 @@ class AccountStore:
             self.data["activeAccountId"] = account_id
             self.save()
             token_file = str(account.get("tokenFile") or "")
+            account["sessionState"] = self._session_state(account)
             account.pop("tokenFile", None)
             account["tokenFileExists"] = bool(token_file and os.path.exists(token_file))
             account["proxyConfigured"] = bool(account.pop("proxyUrl", None))
             return account
+
+    @staticmethod
+    def _session_state(account: dict[str, Any]) -> str:
+        explicit = str(account.get("sessionState") or "").strip().lower()
+        if explicit == "reauth_required":
+            return explicit
+        token_file = str(account.get("tokenFile") or "")
+        return "connected" if token_file and os.path.exists(token_file) else "missing"
+
+    def session_state(self, account_id: str) -> str:
+        account = self.get(account_id)
+        return self._session_state(account) if account is not None else "missing"
+
+    def requires_reauth(self, account_id: str) -> bool:
+        return self.session_state(account_id) == "reauth_required"
+
+    def mark_session_reauth_required(self, account_id: str, detail: str = "") -> bool:
+        """Persist a revoked-session marker; return True only on transition."""
+        with self.lock:
+            for account in self.data.get("accounts", []):
+                if not isinstance(account, dict) or account.get("id") != account_id:
+                    continue
+                changed = account.get("sessionState") != "reauth_required"
+                account["sessionState"] = "reauth_required"
+                account["sessionError"] = _short_text(detail, 500)
+                account["sessionErrorAt"] = _now_iso()
+                account["updatedAt"] = _now_iso()
+                self.save()
+                return changed
+        return False
+
+    def mark_session_connected(self, account_id: str) -> None:
+        with self.lock:
+            for account in self.data.get("accounts", []):
+                if not isinstance(account, dict) or account.get("id") != account_id:
+                    continue
+                changed = bool(
+                    account.get("sessionState")
+                    or account.get("sessionError")
+                    or account.get("sessionErrorAt")
+                )
+                account["sessionState"] = "connected"
+                account.pop("sessionError", None)
+                account.pop("sessionErrorAt", None)
+                if changed:
+                    account["updatedAt"] = _now_iso()
+                    self.save()
+                return
 
     def update_profile(self, account_id: str, profile: dict[str, Any]) -> None:
         with self.lock:
@@ -13326,6 +13445,9 @@ class AccountStore:
                             account["pictureStatus"] = profile.get("pictureStatus")
                         else:
                             account.pop("pictureStatus", None)
+                    account["sessionState"] = "connected"
+                    account.pop("sessionError", None)
+                    account.pop("sessionErrorAt", None)
                     account["updatedAt"] = _now_iso()
                     self.save()
                     return
@@ -13430,6 +13552,7 @@ class AccountStore:
                 "picturePath": profile.get("picturePath"),
                 "pictureStatus": profile.get("pictureStatus"),
                 "ownerId": owner_id,
+                "sessionState": "connected",
                 "createdAt": _now_iso(),
                 "updatedAt": _now_iso(),
             }
@@ -13955,7 +14078,10 @@ class WebState:
         token_file = account.get("tokenFile") if account else None
         if token_file and os.path.exists(token_file):
             return self._api_from_account_tokens(
-                str(token_file), redact=redact, line_config=line_config
+                str(token_file),
+                account_id=str(account_id or ""),
+                redact=redact,
+                line_config=line_config,
             )
         return OkLine(config=line_config, redact=redact)
 
@@ -13964,6 +14090,7 @@ class WebState:
         token_file: str,
         *,
         redact: bool,
+        account_id: str = "",
         line_config: LineConfig | None = None,
     ) -> OkLine:
         from .session import Session
@@ -14003,8 +14130,26 @@ class WebState:
             api = OkLine.from_tokens_file(token_file, config=line_config, redact=redact)
             api._session_path = None
             self._save_account_tokens(api, token_file, fallback_e2ee=session.e2ee)
-        api._session_save_hook = lambda: self._save_account_tokens(api, token_file)
+
+        self._bind_account_session(api, account_id, token_file)
         return api
+
+    def _bind_account_session(
+        self, api: OkLine, account_id: str, token_file: str
+    ) -> None:
+        """Persist future refreshes and report terminal auth failures."""
+
+        def persist_refreshed_session() -> None:
+            self._save_account_tokens(api, token_file)
+            if account_id:
+                self.account_store.mark_session_connected(account_id)
+
+        api._session_path = None
+        api._session_save_hook = persist_refreshed_session
+        if account_id:
+            api.transport._auth_failure_hook = (
+                lambda exc: self._handle_account_auth_failure(account_id, exc)
+            )
 
     def _stored_session_e2ee(self, token_file: str) -> dict[str, Any] | None:
         from .session import Session
@@ -14050,12 +14195,38 @@ class WebState:
         _write_private_bytes(token_file, encrypted)
         api._session_path = None
 
+    def _handle_account_auth_failure(
+        self, account_id: str, exc: LineAuthError
+    ) -> None:
+        code = f" (code {exc.code})" if exc.code is not None else ""
+        detail = f"LINE session expired or was revoked{code}. Connect the account again."
+        changed = self.account_store.mark_session_reauth_required(account_id, detail)
+        self.invalidate_inbox_snapshot(account_id)
+        self._set_ai_auto_reply_runtime(
+            account_id,
+            state="login_required",
+            lastError=detail,
+            lastPollAt=_now_iso(),
+        )
+        if changed:
+            self.append_bot_log(
+                "line.session.reauth_required",
+                account_id=account_id,
+                ok=False,
+                detail=detail,
+                data={"code": exc.code, "path": exc.path},
+            )
+
     def get_api(self, account_id: str | None = None, *, require_auth: bool = True) -> OkLine:
         if self.config.access_token and account_id is None:
             cache_key = "__manual__"
         else:
             account_id = account_id or self.account_store.active_id()
             cache_key = account_id or "__anonymous__"
+        if account_id and require_auth and self.account_store.requires_reauth(account_id):
+            raise LineLoginRequired(
+                "LINE session expired or was revoked; connect the account again"
+            )
         with self.lock:
             if cache_key not in self.apis:
                 self.apis[cache_key] = self._new_api(account_id)
@@ -14091,15 +14262,22 @@ class WebState:
         profile: dict[str, Any] | None = None
         profile_error: str | None = None
         e2ee_ready = False
+        session_state = "missing"
+        session_error = ""
         if account_id:
-            if not self.account_store.get(account_id):
+            account = self.account_store.get(account_id)
+            if not account:
                 raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
             if not self.web_auth.can_access_account(user, account_id):
                 raise WebError(
                     HTTPStatus.FORBIDDEN, "Permission denied for this LINE account."
                 )
             api = self.get_api(account_id, require_auth=False)
-            authenticated = bool(api.tokens.access_token)
+            session_state = self.account_store.session_state(account_id)
+            session_error = str(account.get("sessionError") or "")
+            authenticated = bool(
+                api.tokens.access_token and session_state != "reauth_required"
+            )
         if account_id and api and authenticated:
             try:
                 with self.api_lock_for(account_id):
@@ -14108,6 +14286,11 @@ class WebState:
                     self.account_store.update_profile(account_id, profile)
             except Exception as exc:
                 profile_error = str(exc)
+                session_state = self.account_store.session_state(account_id)
+                if session_state == "reauth_required":
+                    authenticated = False
+                    latest = self.account_store.get(account_id) or {}
+                    session_error = str(latest.get("sessionError") or profile_error)
             e2ee_ready = bool(getattr(api, "e2ee", None) and api.e2ee.is_ready())
         return {
             "version": __version__,
@@ -14119,6 +14302,9 @@ class WebState:
             "e2eeReady": e2ee_ready,
             "profile": profile,
             "profileError": profile_error,
+            "sessionState": session_state,
+            "sessionError": session_error,
+            "loginRequired": session_state == "reauth_required",
         }
 
     def accounts(self, user: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -14148,8 +14334,21 @@ class WebState:
         user: dict[str, Any] | None = None,
         *,
         proxy_url: str | None = None,
+        reconnect_account_id: str | None = None,
     ) -> dict[str, Any]:
         validated_proxy = _validate_proxy_url(proxy_url) if proxy_url else None
+        reconnect_account_id = str(reconnect_account_id or "").strip() or None
+        if reconnect_account_id:
+            account = self.account_store.get(reconnect_account_id)
+            if account is None:
+                raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
+            if not self.web_auth.can_access_account(user, reconnect_account_id):
+                raise WebError(
+                    HTTPStatus.FORBIDDEN,
+                    "Permission denied for this LINE account.",
+                )
+            if validated_proxy is None:
+                validated_proxy = self._proxy_url_for_account(account)
         owner_id = self._login_owner_key(user)
         with self.lock:
             login = self.logins.setdefault(owner_id, {"state": "idle"})
@@ -14169,6 +14368,7 @@ class WebState:
                 "profile": None,
                 "account": None,
                 "accountName": account_name,
+                "reconnectAccountId": reconnect_account_id,
                 "proxyConfigured": bool(validated_proxy),
                 "ownerId": owner_id,
             }
@@ -14180,6 +14380,7 @@ class WebState:
                 login_id,
                 owner_id,
                 validated_proxy,
+                reconnect_account_id,
             ),
             daemon=True,
         )
@@ -14210,6 +14411,7 @@ class WebState:
         login_id: str,
         owner_id: str,
         proxy_url: str | None,
+        reconnect_account_id: str | None,
     ) -> None:
         client = OkLine(
             config=_line_config_for_proxy(proxy_url),
@@ -14247,10 +14449,23 @@ class WebState:
                 # The user cancelled while we were finishing; drop the session
                 # instead of registering an account they no longer expect.
                 return
-            account = self._commit_new_account(
-                client, profile, account_name, owner_id, proxy_url
-            )
-            self.replace_api(account["id"], client)
+            if reconnect_account_id:
+                with self.api_lock_for(reconnect_account_id):
+                    account = self._commit_reconnected_account(
+                        client, profile, reconnect_account_id, proxy_url
+                    )
+                    self._bind_account_session(
+                        client, reconnect_account_id, str(account["tokenFile"])
+                    )
+                    self.replace_api(reconnect_account_id, client)
+            else:
+                account = self._commit_new_account(
+                    client, profile, account_name, owner_id, proxy_url
+                )
+                self._bind_account_session(
+                    client, str(account["id"]), str(account["tokenFile"])
+                )
+                self.replace_api(account["id"], client)
             keep_client = True
             with self.lock:
                 if _current():
@@ -14275,11 +14490,87 @@ class WebState:
             with self.lock:
                 if _current():
                     self.logins[owner_key].update(
-                        {"state": "error", "error": _safe_log_detail(exc, 500)}
+                        {
+                            "state": "error",
+                            "error": _safe_log_detail(exc, 500),
+                            "errorCode": str(getattr(exc, "code", "") or ""),
+                        }
                     )
         finally:
             if not keep_client:
                 client.close()
+
+    def _commit_reconnected_account(
+        self,
+        client: OkLine,
+        profile: dict[str, Any],
+        account_id: str,
+        proxy_url: str | None,
+    ) -> dict[str, Any]:
+        """Replace one revoked session while preserving all account references."""
+        with self.lock, self.account_store.lock:
+            previous_accounts = copy.deepcopy(self.account_store.data)
+            existing = next(
+                (
+                    account
+                    for account in self.account_store.data.get("accounts", [])
+                    if isinstance(account, dict) and account.get("id") == account_id
+                ),
+                None,
+            )
+            if existing is None:
+                raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
+            previous_mid = str(existing.get("mid") or "")
+            current_mid = str(profile.get("mid") or "")
+            if previous_mid and current_mid and previous_mid != current_mid:
+                raise WebError(
+                    HTTPStatus.CONFLICT,
+                    "The scanned LINE account does not match this account.",
+                    "line_account_mismatch",
+                )
+
+            token_file = str(existing.get("tokenFile") or "")
+            if not token_file:
+                os.makedirs(self.config.accounts_dir, exist_ok=True)
+                token_file = str(
+                    Path(self.config.accounts_dir) / f"{account_id}.tokens.json"
+                )
+            token_path = Path(token_file)
+            previous_token = token_path.read_bytes() if token_path.exists() else None
+            try:
+                self._save_account_tokens(client, token_file)
+                existing["tokenFile"] = token_file
+                existing["label"] = str(
+                    existing.get("label")
+                    or profile.get("displayName")
+                    or "LINE Account"
+                )[:MAX_NAME_LENGTH]
+                existing["mid"] = profile.get("mid") or existing.get("mid")
+                existing["userid"] = profile.get("userid") or existing.get("userid")
+                for field in ("picturePath", "pictureStatus"):
+                    if profile.get(field):
+                        existing[field] = profile[field]
+                    elif field in profile:
+                        existing.pop(field, None)
+                if proxy_url:
+                    existing["proxyUrl"] = self._encrypt_secret(proxy_url)
+                existing["sessionState"] = "connected"
+                existing.pop("sessionError", None)
+                existing.pop("sessionErrorAt", None)
+                existing["updatedAt"] = _now_iso()
+                self.account_store.data["activeAccountId"] = account_id
+                self.account_store.save()
+                return dict(existing)
+            except Exception:
+                self.account_store.data = previous_accounts
+                if previous_token is None:
+                    try:
+                        token_path.unlink(missing_ok=True)
+                    except OSError:
+                        traceback.print_exc()
+                else:
+                    _write_private_bytes(token_file, previous_token)
+                raise
 
     def _commit_new_account(
         self,
@@ -16704,7 +16995,13 @@ class WebState:
         with self.ai_auto_reply_lock:
             runtime = dict(self.ai_auto_reply_runtime.get(account_id) or {})
         enabled = bool(record.get("enabled"))
-        if not enabled:
+        if self.account_store.requires_reauth(account_id):
+            runtime["state"] = "login_required"
+            runtime["lastError"] = str(
+                account.get("sessionError")
+                or "LINE session expired or was revoked. Connect the account again."
+            )
+        elif not enabled:
             runtime["state"] = "off"
         elif not record.get("contactsEnabled") and not record.get("groupsEnabled"):
             runtime["state"] = "idle"
@@ -16948,6 +17245,21 @@ class WebState:
 
     def _ai_auto_reply_poll_error(self, account_id: str, exc: Exception) -> None:
         detail = _safe_log_detail(exc, 1000)
+        if isinstance(exc, LineAuthError) or self.account_store.requires_reauth(account_id):
+            if not self.account_store.requires_reauth(account_id) and isinstance(
+                exc, LineAuthError
+            ):
+                self._handle_account_auth_failure(account_id, exc)
+            self._set_ai_auto_reply_runtime(
+                account_id,
+                state="login_required",
+                lastError=(
+                    (self.account_store.get(account_id) or {}).get("sessionError")
+                    or "LINE session expired or was revoked. Connect the account again."
+                ),
+                lastPollAt=_now_iso(),
+            )
+            return
         runtime = self._set_ai_auto_reply_runtime(
             account_id, state="error", lastError=detail, lastPollAt=_now_iso()
         )
@@ -16976,6 +17288,17 @@ class WebState:
         for record in records:
             account_id = str(record.get("accountId") or "")
             if not account_id:
+                continue
+            if self.account_store.requires_reauth(account_id):
+                account = self.account_store.get(account_id) or {}
+                self._set_ai_auto_reply_runtime(
+                    account_id,
+                    state="login_required",
+                    lastError=str(
+                        account.get("sessionError")
+                        or "LINE session expired or was revoked. Connect the account again."
+                    ),
+                )
                 continue
             try:
                 self._poll_ai_auto_reply_account(account_id, record)
@@ -17184,8 +17507,14 @@ class WebState:
                 runtime["replyCount"] = int(runtime.get("replyCount") or 0) + 1
         except Exception as exc:
             detail = _safe_log_detail(exc, 2000)
+            runtime_state = (
+                "login_required"
+                if isinstance(exc, LineAuthError)
+                or self.account_store.requires_reauth(account_id)
+                else "error"
+            )
             self._set_ai_auto_reply_runtime(
-                account_id, state="error", lastError=detail
+                account_id, state=runtime_state, lastError=detail
             )
             self.append_bot_log(
                 "ai.auto_reply.error",
@@ -17463,6 +17792,15 @@ class WebState:
             for job in self.schedules:
                 if not job.get("enabled") or job.get("running"):
                     continue
+                job_account_id = str(job.get("accountId") or "")
+                if job_account_id and self.account_store.requires_reauth(job_account_id):
+                    if job.get("status") != "login required":
+                        job["status"] = "login required"
+                        job["lastError"] = (
+                            "LINE session expired or was revoked. Connect the account again."
+                        )
+                        changed = True
+                    continue
                 next_run = job.get("nextRunAt")
                 if not next_run:
                     job["nextRunAt"] = _compute_next_epoch(job)
@@ -17585,7 +17923,14 @@ class WebState:
                 )
                 return {"ok": True, "schedule": dict(job), "messageIds": message_ids}
         except Exception as exc:
-            error_message = _safe_log_detail(exc, 2_000)
+            auth_failure = isinstance(exc, LineAuthError) or self.account_store.requires_reauth(
+                str(snapshot.get("accountId") or "")
+            )
+            error_message = (
+                "LINE session expired or was revoked. Connect the account again."
+                if auth_failure
+                else _safe_log_detail(exc, 2_000)
+            )
             try:
                 account_id = str(snapshot.get("accountId") or "")
                 self.append_bot_log(
@@ -17604,13 +17949,19 @@ class WebState:
                 job.pop("runningSince", None)
                 job.pop("runToken", None)
                 job["lastError"] = error_message
-                job["status"] = "error"
+                job["status"] = "login required" if auth_failure else "error"
                 _append_history(job, {"at": _now_iso(), "ok": False, "error": error_message})
-                if not manual:
+                if not manual and not auth_failure:
                     _advance_after_error(job)
                 self.save_schedules()
             if isinstance(exc, WebError):
                 raise
+            if auth_failure:
+                raise WebError(
+                    HTTPStatus.UNAUTHORIZED,
+                    error_message,
+                    "line_login_required",
+                ) from exc
             raise WebError(HTTPStatus.BAD_GATEWAY, error_message) from exc
 
 
@@ -17773,7 +18124,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 exc.status,
                 headers=exc.headers,
             )
-        except LineLoginRequired as exc:
+        except LineAuthError as exc:
             return self._json(
                 {"error": str(exc), "code": "line_login_required"},
                 HTTPStatus.UNAUTHORIZED,
@@ -18121,11 +18472,15 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/login/start":
             self._require_permission("manage_accounts")
             body = self._read_json()
+            reconnect_account_id = str(body.get("accountId") or "").strip()
+            if reconnect_account_id:
+                self._require_account_access(reconnect_account_id)
             return self.state.start_login(
                 float(body.get("waitSeconds") or 180.0),
                 account_name=str(body.get("accountName") or "").strip() or None,
                 proxy_url=_proxy_url_from_fields(body),
                 user=self.current_user,
+                reconnect_account_id=reconnect_account_id or None,
             )
         if method == "GET" and path == "/api/login/state":
             self._require_permission("manage_accounts")

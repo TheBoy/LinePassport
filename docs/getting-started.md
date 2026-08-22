@@ -143,8 +143,9 @@ api.qr_login(on_qr=lambda url: print("scan:", url),
 api.save_tokens("tokens.json")     # writes tokens + E2EE keys
 ```
 
-With a refresh token set, OkLine automatically refreshes the access token on a
-401 (and re-saves the session file if it came from one).
+With a refresh token set, OkLine automatically refreshes the access token on
+HTTP 401/403 or a refreshable LINE auth code such as 119 (and re-saves the
+session file if it came from one).
 
 ### Clean up
 

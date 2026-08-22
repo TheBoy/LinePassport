@@ -20,6 +20,8 @@ Everything runs against the in-memory :class:`FakeSession` from
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 import pytest
 import requests
@@ -304,6 +306,200 @@ class TestErrorMapping:
         with pytest.raises(LineAuthError) as ei:  # code 8 -> auth
             t.call(PROFILE, [0])
         assert ei.value.code == 8
+
+
+class TestCredentialRecovery:
+    """Expired credentials refresh once and terminal failures request login."""
+
+    def test_http_200_code_119_refreshes_and_retries_with_new_token(self):
+        profile_tokens = []
+        refresh_calls = 0
+
+        def responder(method, url, kw):
+            nonlocal refresh_calls
+            if url.endswith("/api/auth/tokenRefresh"):
+                refresh_calls += 1
+                return enveloped(
+                    {
+                        "tokenV3IssueResult": {
+                            "accessToken": "NEW-TOKEN",
+                            "refreshToken": "NEW-REFRESH",
+                        }
+                    }
+                )
+            profile_tokens.append(kw["headers"].get("X-Line-Access"))
+            if profile_tokens[-1] == "OLD-TOKEN":
+                return FakeResp(
+                    200,
+                    {
+                        "message": "FAILED",
+                        "error": {"code": "119", "message": "TOKEN_EXPIRED"},
+                    },
+                )
+            return enveloped({"mid": "u1"})
+
+        api = build_api(responder, access_token="OLD-TOKEN")
+        try:
+            api.tokens.refresh_token = "OLD-REFRESH"
+            assert api.call(PROFILE, 0) == {"mid": "u1"}
+            assert profile_tokens == ["OLD-TOKEN", "NEW-TOKEN"]
+            assert refresh_calls == 1
+            assert api.tokens.access_token == "NEW-TOKEN"
+            assert api.tokens.refresh_token == "NEW-REFRESH"
+        finally:
+            api.close()
+
+    def test_terminal_http_200_auth_failure_notifies_once_after_refresh(self):
+        refresh_calls = 0
+        profile_calls = 0
+
+        def responder(method, url, kw):
+            nonlocal refresh_calls, profile_calls
+            if url.endswith("/api/auth/tokenRefresh"):
+                refresh_calls += 1
+                return enveloped(
+                    {"tokenV3IssueResult": {"accessToken": "NEW-TOKEN"}}
+                )
+            profile_calls += 1
+            return FakeResp(
+                200,
+                {
+                    "message": "FAILED",
+                    "error": {"code": 8, "message": "CLIENT_LOGGED_OUT"},
+                },
+            )
+
+        api = build_api(responder, access_token="OLD-TOKEN")
+        failures = []
+        api.tokens.refresh_token = "REFRESH"
+        api.transport._auth_failure_hook = failures.append
+        try:
+            with pytest.raises(LineAuthError) as exc:
+                api.call(PROFILE, 0)
+            assert exc.value.code == 8
+            assert refresh_calls == 1
+            assert profile_calls == 2
+            assert len(failures) == 1
+            assert failures[0].code == 8
+        finally:
+            api.close()
+
+    def test_get_401_refreshes_closes_old_response_and_retries(self):
+        responses = []
+
+        def responder(method, url, kw):
+            token = kw["headers"].get("X-Line-Access")
+            response = FakeResp(401 if token == "OLD" else 200, {"token": token})
+            responses.append(response)
+            return response
+
+        t = make_transport(responder, access_token="OLD")
+
+        def refresh():
+            t.tokens.access_token = "NEW"
+            return True
+
+        t._refresh_hook = refresh
+        response = t.get("/api/ping")
+
+        assert response.status_code == 200
+        assert responses[0].closed is True
+        assert responses[1].closed is False
+        assert [call["headers"]["X-Line-Access"] for call in t.session.calls] == [
+            "OLD",
+            "NEW",
+        ]
+
+    def test_concurrent_failures_share_one_refresh(self):
+        t = make_transport(access_token="OLD")
+        refresh_started = threading.Event()
+        release_refresh = threading.Event()
+        refresh_calls = 0
+
+        def refresh():
+            nonlocal refresh_calls
+            refresh_calls += 1
+            refresh_started.set()
+            assert release_refresh.wait(timeout=2)
+            t.tokens.access_token = "NEW"
+            return True
+
+        t._refresh_hook = refresh
+        results = []
+        first = threading.Thread(
+            target=lambda: results.append(t._refresh_credentials("OLD"))
+        )
+        second = threading.Thread(
+            target=lambda: results.append(t._refresh_credentials("OLD"))
+        )
+        first.start()
+        assert refresh_started.wait(timeout=2)
+        second.start()
+        time.sleep(0.01)
+        release_refresh.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert results == [True, True]
+        assert refresh_calls == 1
+
+
+class TestBridgeRecovery:
+    def test_hmac_failure_restarts_bridge_once_and_retries_signature(self):
+        from okline.hmac_signer import HmacSignerError
+
+        class FlakySigner:
+            def __init__(self):
+                self.sign_calls = 0
+                self.restart_calls = 0
+
+            def sign(self, access_token, path, body):
+                self.sign_calls += 1
+                if self.sign_calls == 1:
+                    raise HmacSignerError("hmac failed: Aborted()")
+                return "RECOVERED-SIGNATURE"
+
+            def restart(self):
+                self.restart_calls += 1
+
+        signer = FlakySigner()
+        t = Transport(
+            LineConfig(enable_hmac=True),
+            Tokens(access_token="TOKEN"),
+            session=FakeSession(lambda m, u, kw: enveloped({"ok": True})),
+            signer=signer,
+            bridge=object(),
+        )
+
+        assert t.post_json("/api/test", []) == {"ok": True}
+        assert signer.sign_calls == 2
+        assert signer.restart_calls == 1
+        assert t.session.last["headers"]["X-Hmac"] == "RECOVERED-SIGNATURE"
+
+    def test_transport_closes_independent_signer_and_e2ee_bridge(self):
+        class Closable:
+            def __init__(self):
+                self.close_calls = 0
+
+            def close(self):
+                self.close_calls += 1
+
+        signer = Closable()
+        bridge = Closable()
+        t = Transport(
+            LineConfig(enable_hmac=False),
+            Tokens(access_token="TOKEN"),
+            session=FakeSession(lambda m, u, kw: enveloped({})),
+            signer=signer,
+            bridge=bridge,
+        )
+
+        t.close()
+
+        assert signer.close_calls == 1
+        assert bridge.close_calls == 1
 
 
 class TestMustUpgrade:
