@@ -1321,6 +1321,77 @@ INDEX_HTML = r"""<!doctype html>
       color: var(--danger);
       overflow-wrap: anywhere;
     }
+    .assistant-auto-reply-group-config {
+      display: grid;
+      gap: 14px;
+      padding: 18px 0 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .assistant-auto-reply-group-head,
+    .assistant-auto-reply-group-toolbar,
+    .assistant-auto-reply-group-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .assistant-auto-reply-group-head > div { display: grid; gap: 3px; min-width: 0; }
+    .assistant-auto-reply-group-modes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+    }
+    .assistant-auto-reply-group-mode {
+      min-height: 44px;
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+    }
+    .assistant-auto-reply-group-mode.active {
+      border-color: #9ed9b5;
+      background: #fff;
+      color: #176b38;
+      box-shadow: 0 1px 3px rgba(18, 29, 26, .1);
+    }
+    .assistant-auto-reply-group-picker { display: grid; gap: 12px; }
+    .assistant-auto-reply-group-search {
+      display: grid;
+      flex: 1 1 320px;
+      gap: 5px;
+      min-width: 0;
+    }
+    .assistant-auto-reply-group-search > span {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .assistant-auto-reply-group-list {
+      min-height: 116px;
+      max-height: 320px;
+      overflow-y: auto;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .assistant-auto-reply-group-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      min-height: 58px;
+      padding: 9px 4px;
+      border-bottom: 1px solid var(--line);
+      cursor: pointer;
+    }
+    .assistant-auto-reply-group-row:last-child { border-bottom: 0; }
+    .assistant-auto-reply-group-row input { width: 18px; height: 18px; }
+    .assistant-auto-reply-group-identity { display: grid; gap: 2px; min-width: 0; }
+    .assistant-auto-reply-group-identity strong,
+    .assistant-auto-reply-group-identity span { overflow-wrap: anywhere; }
+    .assistant-auto-reply-group-actions .muted { min-width: 0; }
     .usage-guide-intro { max-width: 68ch; }
     .usage-guide-steps { margin: 0; padding: 0; list-style: none; }
     .usage-guide-step {
@@ -1403,6 +1474,12 @@ INDEX_HTML = r"""<!doctype html>
       .assistant-auto-reply-row { align-items: flex-start; }
       .assistant-auto-reply-meta { grid-template-columns: 1fr; }
       .assistant-auto-reply-error { grid-column: auto; }
+      .assistant-auto-reply-group-head,
+      .assistant-auto-reply-group-toolbar,
+      .assistant-auto-reply-group-actions { align-items: stretch; flex-direction: column; }
+      .assistant-auto-reply-group-search { width: 100%; flex-basis: auto; }
+      .assistant-auto-reply-group-toolbar button,
+      .assistant-auto-reply-group-actions button { width: 100%; }
       .usage-guide-actions { display: grid; }
       .usage-guide-actions button { width: 100%; }
       .line-guide-view { padding: 12px; }
@@ -3707,6 +3784,33 @@ INDEX_HTML = r"""<!doctype html>
                           <span class="assistant-auto-reply-state" id="assistantAutoReplyGroupsState">เปิด</span>
                         </span>
                       </label>
+                      <div id="assistantAutoReplyGroupConfig" class="assistant-auto-reply-group-config hidden">
+                        <div class="assistant-auto-reply-group-head">
+                          <div>
+                            <strong id="assistantAutoReplyGroupScopeLabel" data-i18n="assistant.auto_reply_group_scope">กลุ่มที่อนุญาตให้ AI ตอบ</strong>
+                            <span class="muted" data-i18n="assistant.auto_reply_group_scope_hint">เลือกตอบทุกกลุ่ม หรือจำกัดเฉพาะกลุ่มที่กำหนด</span>
+                          </div>
+                          <span class="pill" id="assistantAutoReplyGroupCount">ทุกกลุ่ม</span>
+                        </div>
+                        <div class="assistant-auto-reply-group-modes" role="radiogroup" aria-labelledby="assistantAutoReplyGroupScopeLabel">
+                          <button id="assistantAutoReplyGroupModeAll" class="assistant-auto-reply-group-mode active" type="button" role="radio" aria-checked="true" data-assistant-auto-reply-group-mode="all" data-requires-account data-requires-permission="ask_ai" data-i18n="assistant.auto_reply_group_mode_all">ทุกกลุ่ม</button>
+                          <button id="assistantAutoReplyGroupModeSelected" class="assistant-auto-reply-group-mode" type="button" role="radio" aria-checked="false" data-assistant-auto-reply-group-mode="selected" data-requires-account data-requires-permission="ask_ai" data-i18n="assistant.auto_reply_group_mode_selected">เฉพาะกลุ่มที่เลือก</button>
+                        </div>
+                        <div id="assistantAutoReplyGroupPicker" class="assistant-auto-reply-group-picker hidden">
+                          <div class="assistant-auto-reply-group-toolbar">
+                            <label class="assistant-auto-reply-group-search" for="assistantAutoReplyGroupSearch">
+                              <span data-i18n="assistant.auto_reply_group_search">ค้นหากลุ่ม</span>
+                              <input id="assistantAutoReplyGroupSearch" type="search" autocomplete="off" data-requires-account data-requires-permission="ask_ai" data-i18n-ph="assistant.auto_reply_group_search_ph" placeholder="ค้นหาจากชื่อกลุ่ม">
+                            </label>
+                            <button id="assistantAutoReplyGroupRefreshButton" type="button" data-requires-account data-requires-permission="ask_ai" data-i18n="assistant.auto_reply_group_refresh">รีเฟรชรายชื่อ</button>
+                          </div>
+                          <div id="assistantAutoReplyGroupList" class="assistant-auto-reply-group-list" aria-live="polite"></div>
+                        </div>
+                        <div class="assistant-auto-reply-group-actions">
+                          <span class="muted" id="assistantAutoReplyGroupSummary"></span>
+                          <button id="assistantAutoReplyGroupSaveButton" class="primary" type="button" data-requires-account data-requires-permission="ask_ai" data-i18n="assistant.auto_reply_group_save">บันทึกกลุ่มที่ตอบ</button>
+                        </div>
+                      </div>
                     </div>
                     <div class="assistant-auto-reply-meta">
                       <div><span class="muted" data-i18n="assistant.auto_reply_last_poll">ตรวจข้อความล่าสุด</span><strong id="assistantAutoReplyLastPoll">-</strong></div>
@@ -4785,6 +4889,22 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.auto_reply_contacts_hint": {th: "ตอบข้อความส่วนตัวจากรายชื่อผู้ติดต่อ", en: "Reply to direct messages from contacts."},
       "assistant.auto_reply_groups": {th: "Group", en: "Groups"},
       "assistant.auto_reply_groups_hint": {th: "ตอบข้อความใหม่ภายในกลุ่ม LINE", en: "Reply to new messages in LINE groups."},
+      "assistant.auto_reply_group_scope": {th: "กลุ่มที่อนุญาตให้ AI ตอบ", en: "Groups AI may reply to"},
+      "assistant.auto_reply_group_scope_hint": {th: "เลือกตอบทุกกลุ่ม หรือจำกัดเฉพาะกลุ่มที่กำหนด", en: "Reply in every group or limit replies to selected groups."},
+      "assistant.auto_reply_group_mode_all": {th: "ทุกกลุ่ม", en: "All groups"},
+      "assistant.auto_reply_group_mode_selected": {th: "เฉพาะกลุ่มที่เลือก", en: "Selected groups only"},
+      "assistant.auto_reply_group_search": {th: "ค้นหากลุ่ม", en: "Search groups"},
+      "assistant.auto_reply_group_search_ph": {th: "ค้นหาจากชื่อกลุ่ม", en: "Search by group name"},
+      "assistant.auto_reply_group_refresh": {th: "รีเฟรชรายชื่อ", en: "Refresh list"},
+      "assistant.auto_reply_group_save": {th: "บันทึกกลุ่มที่ตอบ", en: "Save group selection"},
+      "assistant.auto_reply_group_all_summary": {th: "AI จะตอบข้อความใหม่จากทุกกลุ่มที่บัญชีนี้เข้าร่วม", en: "AI will reply to new messages in every group this account has joined."},
+      "assistant.auto_reply_group_selected_summary": {th: "AI จะตอบเฉพาะ {n} กลุ่มที่เลือก", en: "AI will reply only in the {n} selected groups."},
+      "assistant.auto_reply_group_count_all": {th: "ทุกกลุ่ม", en: "All groups"},
+      "assistant.auto_reply_group_count": {th: "เลือกแล้ว {n} กลุ่ม", en: "{n} selected"},
+      "assistant.auto_reply_group_none": {th: "ยังไม่พบกลุ่ม LINE ที่บัญชีนี้เข้าร่วม", en: "No joined LINE groups were found."},
+      "assistant.auto_reply_group_no_match": {th: "ไม่พบกลุ่มที่ตรงกับคำค้นหา", en: "No groups match your search."},
+      "assistant.auto_reply_group_unavailable": {th: "กลุ่มที่เคยเลือก (ไม่พบในรายชื่อปัจจุบัน)", en: "Previously selected group (not in the current list)"},
+      "assistant.auto_reply_group_required": {th: "เลือกอย่างน้อย 1 กลุ่ม หรือเปลี่ยนเป็นทุกกลุ่ม", en: "Select at least one group or choose All groups."},
       "assistant.auto_reply_on": {th: "เปิด", en: "On"},
       "assistant.auto_reply_off": {th: "ปิด", en: "Off"},
       "assistant.auto_reply_starting": {th: "กำลังเริ่ม", en: "Starting"},
@@ -4809,7 +4929,7 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.guide_step_4_title": {th: "ถามให้ชัดเจนแล้วตรวจแหล่งข้อมูล", en: "Ask clearly and review the sources"},
       "assistant.guide_step_4_body": {th: "ถามคำถามที่เกี่ยวข้องกับ Knowledge ระบบจะแสดงคำตอบพร้อมแหล่งข้อมูล หากตอบไม่ได้ คำถามจะถูกส่งให้ Admin ตรวจสอบ", en: "Ask a question related to the knowledge. The answer includes its sources; unanswered questions are sent to an admin for review."},
       "assistant.guide_step_5_title": {th: "ทดสอบก่อนเปิดตอบ LINE อัตโนมัติ", en: "Test before enabling automatic LINE replies"},
-      "assistant.guide_step_5_body": {th: "ถามคำถามตัวอย่างในหน้าแชทหลายแบบจนคำตอบถูกต้อง แล้วไปที่ “ตอบ LINE อัตโนมัติ” เลือกบัญชี LINE เปิดสวิตช์หลัก และเลือกว่าจะตอบ Contact, Group หรือทั้งสองแบบ", en: "Test several realistic questions in Chat until the answers are correct. Then open LINE Auto Reply, select the LINE account, enable the main switch, and choose Contacts, Groups, or both."},
+      "assistant.guide_step_5_body": {th: "ถามคำถามตัวอย่างในหน้าแชทหลายแบบจนคำตอบถูกต้อง แล้วไปที่ “ตอบ LINE อัตโนมัติ” เปิดสวิตช์หลัก เลือกว่าจะตอบ Contact หรือ Group และกำหนดได้ว่าจะตอบทุกกลุ่มหรือเฉพาะกลุ่มที่เลือก", en: "Test several realistic questions in Chat until the answers are correct. Then open LINE Auto Reply, enable the main switch, choose Contacts or Groups, and decide whether to reply in all groups or selected groups only."},
       "assistant.guide_step_6_title": {th: "ติดตามคำตอบและปรับ Knowledge", en: "Monitor replies and improve knowledge"},
       "assistant.guide_step_6_body": {th: "ดูเวลาตรวจข้อความและเวลาตอบล่าสุด หากไม่ตอบให้เปิด Log หมวด AI ส่วนคำถามที่ AI ตอบไม่ได้จะถูกส่งให้ Admin หรือ God เติมคำตอบกลับเข้า Knowledge", en: "Review the last check and last reply times. If no reply is sent, open the AI logs. Questions the AI cannot answer are queued for an Admin or God to add an approved answer to knowledge."},
       "assistant.guide_open_knowledge": {th: "ไปที่ Knowledge / RAG", en: "Open Knowledge / RAG"},
@@ -5482,6 +5602,7 @@ INDEX_HTML = r"""<!doctype html>
       "errors.ai_key_rejected": {th: "API Key ถูกปฏิเสธหรือไม่มีสิทธิ์ใช้งาน — ตรวจสอบคีย์และสิทธิ์การใช้งานของผู้ให้บริการ", en: "The API key was rejected or lacks access — check the key and your provider access."},
       "errors.assistant_not_configured": {th: "ยังไม่ได้ตั้งค่า Ollama และโมเดล AI ที่หน้า God", en: "Ollama and an AI model have not been configured on the God page."},
       "errors.invalid_auto_reply_setting": {th: "ค่าตั้งตอบ LINE อัตโนมัติไม่ถูกต้อง", en: "Automatic LINE reply settings are invalid."},
+      "errors.auto_reply_group_required": {th: "เลือกอย่างน้อย 1 กลุ่ม หรือเปลี่ยนเป็นทุกกลุ่ม", en: "Select at least one group or choose All groups."},
       "errors.email_invalid": {th: "กรอกอีเมลให้ถูกต้อง", en: "Enter a valid email address."},
       "errors.email_exists": {th: "อีเมลนี้มีบัญชีอยู่แล้ว", en: "An account with this email already exists."},
       "errors.account_already_owned": {th: "บัญชี LINE นี้มีเจ้าของแล้วและไม่สามารถแชร์ข้ามสมาชิกได้", en: "This LINE account already belongs to another user and cannot be shared."},
@@ -5623,6 +5744,11 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.ai.auto_reply.sent": {th: "ส่งคำตอบ AI สำเร็จ", en: "AI reply sent"},
       "botlog.action.ai.auto_reply.rate_limit": {th: "หยุดตอบข้อความถี่เกินกำหนด", en: "Auto reply rate limited"},
       "botlog.action.ai.auto_reply.error": {th: "ตอบ LINE อัตโนมัติผิดพลาด", en: "Automatic LINE reply failed"},
+      "botlog.chat_contact": {th: "Contact", en: "Contact"},
+      "botlog.chat_group": {th: "กลุ่ม", en: "Group"},
+      "botlog.chat_unknown": {th: "แชท", en: "Chat"},
+      "botlog.sender": {th: "ผู้ส่ง", en: "Sender"},
+      "botlog.model": {th: "โมเดล", en: "Model"},
       "botlog.action.line.session.reauth_required": {th: "เซสชัน LINE ถูกยกเลิก", en: "LINE session requires reconnect"},
       "toast.bot_logs_cleared": {th: "ล้าง Log ทั้งหมดแล้ว", en: "Activity logs cleared"}
     };
@@ -5675,6 +5801,11 @@ INDEX_HTML = r"""<!doctype html>
       assistantView: "auto-reply",
       assistantAutoReply: null,
       assistantAutoReplySaving: false,
+      assistantAutoReplyGroupMode: "all",
+      assistantAutoReplySelectedGroupMids: new Set(),
+      assistantAutoReplyGroups: null,
+      assistantAutoReplyGroupsAccountId: "",
+      assistantAutoReplyGroupsLoading: false,
       incomingApiLinks: [],
       incomingApiContacts: [],
       incomingApiGroups: [],
@@ -6171,6 +6302,13 @@ INDEX_HTML = r"""<!doctype html>
       state.incomingApiGroups = [];
       state.incomingApiSelectedTargets = new Map();
       state.incomingApiCreatedLink = null;
+      state.assistantAutoReply = null;
+      state.assistantAutoReplyGroupMode = "all";
+      state.assistantAutoReplySelectedGroupMids = new Set();
+      state.assistantAutoReplyGroups = null;
+      state.assistantAutoReplyGroupsAccountId = "";
+      state.assistantAutoReplyGroupsLoading = false;
+      if ($("assistantAutoReplyGroupList")) $("assistantAutoReplyGroupList").replaceChildren();
       if ($("incomingApiList")) $("incomingApiList").replaceChildren();
       updateUnreadTitle([]);
       state.schedules = [];
@@ -9022,6 +9160,32 @@ INDEX_HTML = r"""<!doctype html>
       ].filter(Boolean).join(" ").toLocaleLowerCase();
     }
 
+    function botLogConversationParts(log) {
+      const data = log && log.data && typeof log.data === "object" ? log.data : {};
+      const chatMid = String(data.chatMid || "").trim();
+      const chatName = String(data.chatName || "").trim();
+      const senderMid = String(data.senderMid || "").trim();
+      const senderName = String(data.senderName || "").trim();
+      const parts = [];
+      if (chatMid) {
+        const typeKey = data.chatType === "group"
+          ? "botlog.chat_group"
+          : (data.chatType === "contact" ? "botlog.chat_contact" : "botlog.chat_unknown");
+        const identity = chatName
+          ? `${chatName} (${compactLogValue(chatMid, 30)})`
+          : compactLogValue(chatMid, 34);
+        parts.push(`${t(typeKey)}: ${identity}`);
+      }
+      if (senderMid && (data.chatType === "group" || senderMid !== chatMid)) {
+        const identity = senderName
+          ? `${senderName} (${compactLogValue(senderMid, 30)})`
+          : compactLogValue(senderMid, 34);
+        parts.push(`${t("botlog.sender")}: ${identity}`);
+      }
+      if (data.model) parts.push(`${t("botlog.model")}: ${String(data.model)}`);
+      return parts;
+    }
+
     function renderBotLogs({preserveScroll = false} = {}) {
       const logs = state.botLogs || [];
       const category = state.botLogCategory || "all";
@@ -9079,6 +9243,7 @@ INDEX_HTML = r"""<!doctype html>
         const parts = [];
         if (log.scheduleName) parts.push(log.scheduleName);
         if (log.target) parts.push(compactLogValue(log.target, 22));
+        parts.push(...botLogConversationParts(log));
         meta.textContent = parts.length ? "-- " + parts.filter(Boolean).join(" / ") : "";
         meta.title = parts.filter(Boolean).join(" / ");
         line.append(time, status, categoryChip, title);
@@ -9555,11 +9720,125 @@ INDEX_HTML = r"""<!doctype html>
       $(stateId).textContent = t(input.checked ? "assistant.auto_reply_on" : "assistant.auto_reply_off");
     }
 
+    function renderAssistantAutoReplyGroupSummary() {
+      const mode = state.assistantAutoReplyGroupMode;
+      const count = state.assistantAutoReplySelectedGroupMids.size;
+      $("assistantAutoReplyGroupCount").textContent = mode === "selected"
+        ? t("assistant.auto_reply_group_count", {n: count})
+        : t("assistant.auto_reply_group_count_all");
+      $("assistantAutoReplyGroupSummary").textContent = mode === "selected"
+        ? t("assistant.auto_reply_group_selected_summary", {n: count})
+        : t("assistant.auto_reply_group_all_summary");
+    }
+
+    function renderAssistantAutoReplyGroupPicker() {
+      const list = $("assistantAutoReplyGroupList");
+      renderAssistantAutoReplyGroupSummary();
+      if (state.assistantAutoReplyGroupsLoading || state.assistantAutoReplyGroups === null) {
+        listLoading("assistantAutoReplyGroupList");
+        return;
+      }
+      list.replaceChildren();
+      const search = $("assistantAutoReplyGroupSearch").value.trim().toLocaleLowerCase();
+      const groups = (state.assistantAutoReplyGroups || []).map((group) => ({
+        mid: String(group.mid || ""),
+        name: String(group.name || group.mid || ""),
+        memberCount: Number(group.memberCount) || 0,
+        unavailable: false
+      }));
+      const knownMids = new Set(groups.map((group) => group.mid));
+      for (const mid of state.assistantAutoReplySelectedGroupMids) {
+        if (!knownMids.has(mid)) {
+          groups.push({mid, name: mid, memberCount: 0, unavailable: true});
+        }
+      }
+      const rows = groups.filter((group) => group.mid && (
+        !search
+        || group.name.toLocaleLowerCase().includes(search)
+        || group.mid.toLocaleLowerCase().includes(search)
+      ));
+      for (const group of rows) {
+        const label = document.createElement("label");
+        label.className = "assistant-auto-reply-group-row";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = state.assistantAutoReplySelectedGroupMids.has(group.mid);
+        checkbox.disabled = state.assistantAutoReplySaving
+          || !selectedAccountId()
+          || !hasPermission("ask_ai");
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) state.assistantAutoReplySelectedGroupMids.add(group.mid);
+          else state.assistantAutoReplySelectedGroupMids.delete(group.mid);
+          renderAssistantAutoReplyGroupSummary();
+        });
+        const identity = document.createElement("span");
+        identity.className = "assistant-auto-reply-group-identity";
+        identity.append(
+          textSpan(group.name, "strong"),
+          textSpan(
+            group.unavailable
+              ? t("assistant.auto_reply_group_unavailable")
+              : t("groups.members", {n: group.memberCount}),
+            "muted"
+          )
+        );
+        label.append(checkbox, identity);
+        list.appendChild(label);
+      }
+      if (!rows.length) {
+        list.appendChild(textSpan(
+          search
+            ? t("assistant.auto_reply_group_no_match")
+            : t("assistant.auto_reply_group_none"),
+          "state-row"
+        ));
+      }
+    }
+
+    function setAssistantAutoReplyGroupMode(mode, options = {}) {
+      const selected = mode === "selected" ? "selected" : "all";
+      state.assistantAutoReplyGroupMode = selected;
+      document.querySelectorAll("[data-assistant-auto-reply-group-mode]").forEach((button) => {
+        const active = button.dataset.assistantAutoReplyGroupMode === selected;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-checked", String(active));
+      });
+      $("assistantAutoReplyGroupPicker").classList.toggle("hidden", selected !== "selected");
+      renderAssistantAutoReplyGroupSummary();
+      if (selected === "selected") renderAssistantAutoReplyGroupPicker();
+      if (
+        selected === "selected"
+        && $("assistantAutoReplyGroups").checked
+        && options.load !== false
+      ) {
+        loadAssistantAutoReplyGroups().catch(toastError);
+      }
+    }
+
+    function syncAssistantAutoReplyGroupConfig() {
+      const visible = $("assistantAutoReplyGroups").checked;
+      $("assistantAutoReplyGroupConfig").classList.toggle("hidden", !visible);
+      setAssistantAutoReplyGroupMode(state.assistantAutoReplyGroupMode, {load: false});
+    }
+
     function setAssistantAutoReplyBusy(busy) {
       state.assistantAutoReplySaving = Boolean(busy);
       const enabled = Boolean(selectedAccountId()) && hasPermission("ask_ai") && !busy;
-      ["assistantAutoReplyEnabled", "assistantAutoReplyContacts", "assistantAutoReplyGroups", "assistantAutoReplyRefreshButton"].forEach((id) => {
+      [
+        "assistantAutoReplyEnabled",
+        "assistantAutoReplyContacts",
+        "assistantAutoReplyGroups",
+        "assistantAutoReplyRefreshButton",
+        "assistantAutoReplyGroupModeAll",
+        "assistantAutoReplyGroupModeSelected",
+        "assistantAutoReplyGroupSearch",
+        "assistantAutoReplyGroupRefreshButton",
+        "assistantAutoReplyGroupSaveButton"
+      ].forEach((id) => {
         $(id).disabled = !enabled;
+      });
+      document.querySelectorAll(".assistant-auto-reply-group-row input").forEach((input) => {
+        input.disabled = !enabled;
       });
     }
 
@@ -9568,6 +9847,12 @@ INDEX_HTML = r"""<!doctype html>
       const enabled = Boolean(data && data.enabled);
       const contactsEnabled = data ? data.contactsEnabled !== false : true;
       const groupsEnabled = data ? data.groupsEnabled !== false : true;
+      state.assistantAutoReplyGroupMode = data && data.groupReplyMode === "selected"
+        ? "selected"
+        : "all";
+      state.assistantAutoReplySelectedGroupMids = new Set(
+        data && Array.isArray(data.selectedGroupMids) ? data.selectedGroupMids : []
+      );
       $("assistantAutoReplyEnabled").checked = enabled;
       $("assistantAutoReplyContacts").checked = contactsEnabled;
       $("assistantAutoReplyGroups").checked = groupsEnabled;
@@ -9592,7 +9877,11 @@ INDEX_HTML = r"""<!doctype html>
       const error = String(runtime.lastError || "");
       $("assistantAutoReplyError").textContent = error;
       $("assistantAutoReplyErrorRow").classList.toggle("hidden", !error);
+      syncAssistantAutoReplyGroupConfig();
       setAssistantAutoReplyBusy(false);
+      if (groupsEnabled && state.assistantAutoReplyGroupMode === "selected") {
+        loadAssistantAutoReplyGroups().catch(toastError);
+      }
     }
 
     async function loadAssistantAutoReply() {
@@ -9606,16 +9895,70 @@ INDEX_HTML = r"""<!doctype html>
       renderAssistantAutoReply(data);
     }
 
+    async function loadAssistantAutoReplyGroups(options = {}) {
+      const accountId = selectedAccountId();
+      if (!accountId || !hasPermission("ask_ai") || state.assistantAutoReplyGroupsLoading) return;
+      if (
+        !options.force
+        && state.assistantAutoReplyGroupsAccountId === accountId
+        && Array.isArray(state.assistantAutoReplyGroups)
+      ) {
+        renderAssistantAutoReplyGroupPicker();
+        return;
+      }
+      state.assistantAutoReplyGroupsLoading = true;
+      $("assistantAutoReplyGroupRefreshButton").disabled = true;
+      $("assistantAutoReplyGroupRefreshButton").setAttribute("aria-busy", "true");
+      renderAssistantAutoReplyGroupPicker();
+      let loaded = false;
+      try {
+        const data = await api(
+          `/api/assistant/auto-reply/groups?${accountQuery(accountId)}&limit=500`
+        );
+        if (accountId !== selectedAccountId()) return;
+        state.assistantAutoReplyGroups = data.groups || [];
+        state.assistantAutoReplyGroupsAccountId = accountId;
+        loaded = true;
+      } catch (err) {
+        if (accountId === selectedAccountId()) {
+          state.assistantAutoReplyGroups = [];
+          listError(
+            "assistantAutoReplyGroupList",
+            () => loadAssistantAutoReplyGroups({force: true})
+          );
+        }
+        throw err;
+      } finally {
+        state.assistantAutoReplyGroupsLoading = false;
+        $("assistantAutoReplyGroupRefreshButton").removeAttribute("aria-busy");
+        setAssistantAutoReplyBusy(state.assistantAutoReplySaving);
+        if (loaded && accountId === selectedAccountId()) {
+          renderAssistantAutoReplyGroupPicker();
+        }
+      }
+    }
+
     async function saveAssistantAutoReply() {
       const accountId = requireAccount();
       if (!accountId || state.assistantAutoReplySaving) return;
+      if (
+        $("assistantAutoReplyGroups").checked
+        && state.assistantAutoReplyGroupMode === "selected"
+        && !state.assistantAutoReplySelectedGroupMids.size
+      ) {
+        toast(t("assistant.auto_reply_group_required"), true);
+        $("assistantAutoReplyGroupSearch").focus();
+        return;
+      }
       setAssistantAutoReplyBusy(true);
       try {
         const data = await post("/api/assistant/auto-reply", {
           accountId,
           enabled: $("assistantAutoReplyEnabled").checked,
           contactsEnabled: $("assistantAutoReplyContacts").checked,
-          groupsEnabled: $("assistantAutoReplyGroups").checked
+          groupsEnabled: $("assistantAutoReplyGroups").checked,
+          groupReplyMode: state.assistantAutoReplyGroupMode,
+          selectedGroupMids: [...state.assistantAutoReplySelectedGroupMids]
         });
         if (accountId !== selectedAccountId()) return;
         renderAssistantAutoReply(data);
@@ -10368,8 +10711,21 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     ["assistantAutoReplyEnabled", "assistantAutoReplyContacts", "assistantAutoReplyGroups"].forEach((id) => {
       $(id).addEventListener("change", () => {
         syncAssistantAutoReplySwitch(id, id + "State");
+        if (id === "assistantAutoReplyGroups") syncAssistantAutoReplyGroupConfig();
         saveAssistantAutoReply().catch(toastError);
       });
+    });
+    document.querySelectorAll("[data-assistant-auto-reply-group-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        setAssistantAutoReplyGroupMode(button.dataset.assistantAutoReplyGroupMode);
+      });
+    });
+    $("assistantAutoReplyGroupSearch").addEventListener("input", renderAssistantAutoReplyGroupPicker);
+    $("assistantAutoReplyGroupRefreshButton").addEventListener("click", () => {
+      loadAssistantAutoReplyGroups({force: true}).catch(toastError);
+    });
+    $("assistantAutoReplyGroupSaveButton").addEventListener("click", () => {
+      saveAssistantAutoReply().catch(toastError);
     });
     document.querySelectorAll("[data-assistant-view-target]").forEach((button) => {
       button.addEventListener("click", () => setAssistantView(button.dataset.assistantViewTarget));
@@ -11858,6 +12214,7 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("POST", "/api/call"): (20, 10.0),
     ("POST", "/api/ai/generate"): (8, 60.0),
     ("GET", "/api/assistant/auto-reply"): (20, 30.0),
+    ("GET", "/api/assistant/auto-reply/groups"): (10, 30.0),
     ("POST", "/api/assistant/auto-reply"): (10, 30.0),
 }
 MAX_USERS = 1000
@@ -11881,6 +12238,8 @@ MAX_PROXY_USERNAME_LENGTH = 255
 MAX_PROXY_PASSWORD_LENGTH = 1024
 AI_AUTO_REPLY_POLL_SECONDS = 5.0
 MAX_AI_AUTO_REPLY_CHATS = 500
+AI_AUTO_REPLY_IDENTITY_CACHE_TTL_SECONDS = 10 * 60
+MAX_AI_AUTO_REPLY_IDENTITY_CACHE = 4000
 INBOX_SNAPSHOT_TTL_SECONDS = AI_AUTO_REPLY_POLL_SECONDS
 INBOX_SNAPSHOT_CHAT_LIMIT = 1000
 INBOX_SNAPSHOT_MESSAGES_PER_BOX = 10
@@ -13793,6 +14152,9 @@ class WebState:
         self.ai_auto_reply_inflight: set[tuple[str, str]] = set()
         self.ai_auto_reply_runtime: dict[str, dict[str, Any]] = {}
         self.ai_auto_reply_rate_events: dict[tuple[str, ...], list[float]] = {}
+        self.ai_auto_reply_identity_cache: dict[
+            tuple[str, str], tuple[float, str]
+        ] = {}
         self.schedules: list[dict[str, Any]] = self._load_schedules()
         self.schedule_inflight: set[str] = set()
         self.schedule_executor = ThreadPoolExecutor(
@@ -17086,6 +17448,8 @@ class WebState:
             "enabled": False,
             "contactsEnabled": True,
             "groupsEnabled": True,
+            "groupReplyMode": "all",
+            "selectedGroupMids": [],
             "enabledAtMs": 0,
             "lastSeen": {},
             "updatedAt": "",
@@ -17099,6 +17463,21 @@ class WebState:
             record.update(raw)
         if not isinstance(record.get("lastSeen"), dict):
             record["lastSeen"] = {}
+        if record.get("groupReplyMode") not in {"all", "selected"}:
+            record["groupReplyMode"] = "all"
+        raw_group_mids = record.get("selectedGroupMids")
+        record["selectedGroupMids"] = (
+            list(
+                dict.fromkeys(
+                    str(value).strip()
+                    for value in raw_group_mids
+                    if isinstance(value, str)
+                    and self._ai_auto_reply_chat_type(str(value).strip()) == "group"
+                )
+            )[:MAX_AI_AUTO_REPLY_CHATS]
+            if isinstance(raw_group_mids, list)
+            else []
+        )
         return record
 
     def ai_auto_reply_settings(
@@ -17124,7 +17503,9 @@ class WebState:
             )
         elif not enabled:
             runtime["state"] = "off"
-        elif not record.get("contactsEnabled") and not record.get("groupsEnabled"):
+        elif not record.get("contactsEnabled") and not self._ai_auto_reply_group_scope_enabled(
+            record
+        ):
             runtime["state"] = "idle"
         elif not runtime.get("state"):
             runtime["state"] = "starting"
@@ -17136,6 +17517,8 @@ class WebState:
             "enabled": enabled,
             "contactsEnabled": bool(record.get("contactsEnabled", True)),
             "groupsEnabled": bool(record.get("groupsEnabled", True)),
+            "groupReplyMode": str(record.get("groupReplyMode") or "all"),
+            "selectedGroupMids": list(record.get("selectedGroupMids") or []),
             "updatedAt": str(record.get("updatedAt") or ""),
             "aiConfigured": bool(settings.get("configured")),
             "runtime": {
@@ -17177,6 +17560,57 @@ class WebState:
         enabled = boolean_value("enabled")
         contacts_enabled = boolean_value("contactsEnabled")
         groups_enabled = boolean_value("groupsEnabled")
+        group_reply_mode = str(
+            body.get("groupReplyMode", current.get("groupReplyMode") or "all")
+        ).strip().lower()
+        if group_reply_mode not in {"all", "selected"}:
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "groupReplyMode must be all or selected.",
+                "invalid_auto_reply_setting",
+            )
+        raw_group_mids = body.get(
+            "selectedGroupMids", current.get("selectedGroupMids") or []
+        )
+        if not isinstance(raw_group_mids, list):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "selectedGroupMids must be a list.",
+                "invalid_auto_reply_setting",
+            )
+        selected_group_mids: list[str] = []
+        for raw_mid in raw_group_mids:
+            if not isinstance(raw_mid, str):
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    "Each selected group must be a LINE group MID.",
+                    "invalid_auto_reply_setting",
+                )
+            group_mid = raw_mid.strip()
+            if (
+                not group_mid
+                or len(group_mid) > 512
+                or self._ai_auto_reply_chat_type(group_mid) != "group"
+            ):
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    "Each selected group must be a LINE group MID.",
+                    "invalid_auto_reply_setting",
+                )
+            if group_mid not in selected_group_mids:
+                selected_group_mids.append(group_mid)
+        if len(selected_group_mids) > MAX_AI_AUTO_REPLY_CHATS:
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                f"Select no more than {MAX_AI_AUTO_REPLY_CHATS} groups.",
+                "invalid_auto_reply_setting",
+            )
+        if groups_enabled and group_reply_mode == "selected" and not selected_group_mids:
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "Select at least one LINE group or choose all groups.",
+                "auto_reply_group_required",
+            )
         if enabled and not self.global_ai_settings().get("configured"):
             raise WebError(
                 HTTPStatus.CONFLICT,
@@ -17195,6 +17629,8 @@ class WebState:
                 "enabled": enabled,
                 "contactsEnabled": contacts_enabled,
                 "groupsEnabled": groups_enabled,
+                "groupReplyMode": group_reply_mode,
+                "selectedGroupMids": selected_group_mids,
                 "updatedAt": now,
             }
         )
@@ -17208,7 +17644,16 @@ class WebState:
             runtime = self.ai_auto_reply_runtime.setdefault(account_id, {})
             runtime["state"] = (
                 "starting"
-                if enabled and (contacts_enabled or groups_enabled)
+                if enabled
+                and (
+                    contacts_enabled
+                    or (
+                        groups_enabled
+                        and (
+                            group_reply_mode == "all" or bool(selected_group_mids)
+                        )
+                    )
+                )
                 else ("idle" if enabled else "off")
             )
             runtime["lastError"] = ""
@@ -17216,12 +17661,15 @@ class WebState:
             "ai.auto_reply.settings",
             account_id=account_id,
             detail=(
-                f"enabled={enabled}, contacts={contacts_enabled}, groups={groups_enabled}"
+                f"enabled={enabled}, contacts={contacts_enabled}, groups={groups_enabled}, "
+                f"group_mode={group_reply_mode}, selected_groups={len(selected_group_mids)}"
             ),
             data={
                 "enabled": enabled,
                 "contactsEnabled": contacts_enabled,
                 "groupsEnabled": groups_enabled,
+                "groupReplyMode": group_reply_mode,
+                "selectedGroupMids": selected_group_mids,
             },
         )
         return self.ai_auto_reply_settings(account_id, user)
@@ -17234,6 +17682,28 @@ class WebState:
         if prefix in {"c", "r"}:
             return "group"
         return ""
+
+    @staticmethod
+    def _ai_auto_reply_group_scope_enabled(record: dict[str, Any]) -> bool:
+        if not record.get("groupsEnabled"):
+            return False
+        return record.get("groupReplyMode") != "selected" or bool(
+            record.get("selectedGroupMids")
+        )
+
+    @classmethod
+    def _ai_auto_reply_chat_enabled(
+        cls, record: dict[str, Any], chat_type: str, chat_mid: str
+    ) -> bool:
+        if chat_type == "contact":
+            return bool(record.get("contactsEnabled"))
+        if chat_type != "group" or not record.get("groupsEnabled"):
+            return False
+        if record.get("groupReplyMode") != "selected":
+            return True
+        return chat_mid in {
+            str(value) for value in record.get("selectedGroupMids") or [] if value
+        }
 
     @staticmethod
     def _ai_auto_reply_message_key(message: dict[str, Any]) -> str:
@@ -17316,7 +17786,7 @@ class WebState:
             self.store.set("ai_auto_reply", data)
 
     def _ai_auto_reply_enabled(
-        self, account_id: str, enabled_at_ms: int, chat_type: str
+        self, account_id: str, enabled_at_ms: int, chat_type: str, chat_mid: str
     ) -> bool:
         record = self._ai_auto_reply_record(account_id)
         if (
@@ -17324,8 +17794,7 @@ class WebState:
             or _coerce_int(record.get("enabledAtMs")) != enabled_at_ms
         ):
             return False
-        key = "contactsEnabled" if chat_type == "contact" else "groupsEnabled"
-        return bool(record.get(key))
+        return self._ai_auto_reply_chat_enabled(record, chat_type, chat_mid)
 
     def _consume_ai_auto_reply_rate(self, account_id: str, chat_mid: str) -> bool:
         now = time.monotonic()
@@ -17363,6 +17832,83 @@ class WebState:
             runtime = self.ai_auto_reply_runtime.setdefault(account_id, {})
             runtime.update(values)
             return dict(runtime)
+
+    def _hydrate_ai_auto_reply_candidate_identities(
+        self,
+        account_id: str,
+        api: OkLine,
+        candidates: list[dict[str, Any]],
+    ) -> None:
+        if not candidates:
+            return
+        now = time.monotonic()
+        requested_mids = {
+            str(value)
+            for candidate in candidates
+            for value in (candidate.get("chatMid"), candidate.get("senderMid"))
+            if value
+        }
+        names: dict[str, str] = {}
+        with self.ai_auto_reply_lock:
+            for mid in requested_mids:
+                cached = self.ai_auto_reply_identity_cache.get((account_id, mid))
+                if cached and now - cached[0] <= AI_AUTO_REPLY_IDENTITY_CACHE_TTL_SECONDS:
+                    names[mid] = cached[1]
+                elif cached:
+                    self.ai_auto_reply_identity_cache.pop((account_id, mid), None)
+
+        missing_contacts = [
+            mid for mid in requested_mids if mid[:1].lower() == "u" and mid not in names
+        ]
+        if missing_contacts:
+            _resolve_names(api, missing_contacts, names)
+
+        missing_groups = [
+            mid
+            for mid in requested_mids
+            if self._ai_auto_reply_chat_type(mid) == "group" and mid not in names
+        ]
+        if missing_groups:
+            try:
+                raw_groups = api.get_chats(missing_groups)
+                for raw in (
+                    raw_groups.get("chats", [])
+                    if isinstance(raw_groups, dict)
+                    else []
+                ):
+                    if not isinstance(raw, dict):
+                        continue
+                    group = Group.from_dict(raw)
+                    if group.chat_mid and group.name:
+                        names[group.chat_mid] = group.name
+            except Exception:
+                # Missing labels should never prevent the automatic reply itself.
+                pass
+
+        resolved = {
+            mid: _short_text(name, MAX_NAME_LENGTH)
+            for mid, name in names.items()
+            if mid and str(name).strip()
+        }
+        if resolved:
+            with self.ai_auto_reply_lock:
+                for mid, name in resolved.items():
+                    self.ai_auto_reply_identity_cache[(account_id, mid)] = (now, name)
+                if len(self.ai_auto_reply_identity_cache) > MAX_AI_AUTO_REPLY_IDENTITY_CACHE:
+                    newest = sorted(
+                        self.ai_auto_reply_identity_cache.items(),
+                        key=lambda item: item[1][0],
+                        reverse=True,
+                    )[:MAX_AI_AUTO_REPLY_IDENTITY_CACHE]
+                    self.ai_auto_reply_identity_cache = dict(newest)
+
+        for candidate in candidates:
+            chat_mid = str(candidate.get("chatMid") or "")
+            sender_mid = str(candidate.get("senderMid") or "")
+            candidate["chatName"] = resolved.get(chat_mid, names.get(chat_mid, ""))
+            candidate["senderName"] = resolved.get(
+                sender_mid, names.get(sender_mid, "")
+            )
 
     def _ai_auto_reply_poll_error(self, account_id: str, exc: Exception) -> None:
         detail = _safe_log_detail(exc, 1000)
@@ -17490,10 +18036,8 @@ class WebState:
                     continue
                 latest = unseen[-1]
                 direction_incoming = str(latest.get("from") or "") not in {"", own_mid}
-                type_enabled = bool(
-                    record.get(
-                        "contactsEnabled" if chat_type == "contact" else "groupsEnabled"
-                    )
+                type_enabled = self._ai_auto_reply_chat_enabled(
+                    record, chat_type, chat_mid
                 )
                 try:
                     content_type = int(str(latest.get("contentType")))
@@ -17533,6 +18077,10 @@ class WebState:
                     }
                 )
 
+            self._hydrate_ai_auto_reply_candidate_identities(
+                account_id, api, candidates
+            )
+
         self._save_ai_auto_reply_cursors(account_id, enabled_at_ms, cursor_updates)
         self._set_ai_auto_reply_runtime(
             account_id, state="running", lastPollAt=_now_iso(), lastError=""
@@ -17555,9 +18103,18 @@ class WebState:
         chat_type = str(candidate.get("chatType") or "")
         enabled_at_ms = _coerce_int(candidate.get("enabledAtMs"))
         question = str(candidate.get("question") or "")
+        conversation = {
+            "chatMid": chat_mid,
+            "chatType": chat_type,
+            "chatName": str(candidate.get("chatName") or ""),
+            "senderMid": str(candidate.get("senderMid") or ""),
+            "senderName": str(candidate.get("senderName") or ""),
+        }
         inflight_key = (account_id, chat_mid)
         try:
-            if not self._ai_auto_reply_enabled(account_id, enabled_at_ms, chat_type):
+            if not self._ai_auto_reply_enabled(
+                account_id, enabled_at_ms, chat_type, chat_mid
+            ):
                 return
             owner = self.web_auth.user_for_account(account_id)
             if (
@@ -17572,10 +18129,8 @@ class WebState:
                 detail=question,
                 data={
                     "question": question,
-                    "chatMid": chat_mid,
-                    "chatType": chat_type,
                     "messageId": candidate.get("messageId"),
-                    "senderMid": candidate.get("senderMid"),
+                    **conversation,
                 },
             )
             generated = self.ask_global_ai(
@@ -17598,12 +18153,13 @@ class WebState:
                 data={
                     "question": question,
                     "answer": outbound,
-                    "chatMid": chat_mid,
-                    "chatType": chat_type,
                     "model": question_record.get("model"),
+                    **conversation,
                 },
             )
-            if not self._ai_auto_reply_enabled(account_id, enabled_at_ms, chat_type):
+            if not self._ai_auto_reply_enabled(
+                account_id, enabled_at_ms, chat_type, chat_mid
+            ):
                 return
             api = self.get_api(account_id)
             with self.api_lock_for(account_id):
@@ -17615,9 +18171,8 @@ class WebState:
                 detail=outbound,
                 data={
                     "answer": outbound,
-                    "chatMid": chat_mid,
-                    "chatType": chat_type,
                     "messageId": message_id,
+                    **conversation,
                 },
             )
             with self.ai_auto_reply_lock:
@@ -17644,8 +18199,7 @@ class WebState:
                 detail=detail,
                 data={
                     "question": question,
-                    "chatMid": chat_mid,
-                    "chatType": chat_type,
+                    **conversation,
                 },
             )
         finally:
@@ -18481,6 +19035,11 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.ai_auto_reply_settings(
                 _query_one(query, "accountId", ""), self.current_user
             )
+        if method == "GET" and path == "/api/assistant/auto-reply/groups":
+            self._require_permission("ask_ai")
+            return self._with_api(
+                query, lambda api: self._auto_reply_groups(api, query)
+            )
         if method == "POST" and path == "/api/assistant/auto-reply":
             self._require_permission("ask_ai")
             body = self._read_json()
@@ -18824,6 +19383,17 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             groups.append(group)
         groups.sort(key=lambda row: _recent_chat_sort_key(row, recency))
         groups = groups[:limit]
+        return {"groups": groups, "count": len(groups)}
+
+    def _auto_reply_groups(
+        self, api: OkLine, query: dict[str, list[str]]
+    ) -> dict[str, Any]:
+        result = self._groups(api, query)
+        groups = [
+            group
+            for group in result.get("groups", [])
+            if isinstance(group, dict) and not group.get("invited")
+        ]
         return {"groups": groups, "count": len(groups)}
 
     def _conversations(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:

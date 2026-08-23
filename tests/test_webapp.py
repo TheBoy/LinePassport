@@ -3101,6 +3101,8 @@ class _AutoReplyFakeApi:
         self.sent = []
         self.sent_event = threading.Event()
         self.message_box_calls = 0
+        self.contact_lookup_calls = 0
+        self.group_lookup_calls = 0
 
     def get_message_boxes(self, *, limit=100, last_messages_per_box=5):
         self.message_box_calls += 1
@@ -3116,6 +3118,33 @@ class _AutoReplyFakeApi:
 
     def get_profile(self):
         return {"mid": "U-me", "displayName": "Owner"}
+
+    def get_contacts(self, mids):
+        self.contact_lookup_calls += 1
+        names = {
+            "U-contact": "Customer One",
+            "U-member": "Group Member",
+        }
+        return {
+            "contacts": {
+                mid: {"contact": {"mid": mid, "displayName": names.get(mid, mid)}}
+                for mid in mids
+            }
+        }
+
+    def get_chats(self, mids):
+        self.group_lookup_calls += 1
+        names = {"C-group": "Support Group", "C-other": "Other Group"}
+        return {
+            "chats": [
+                {
+                    "chatMid": mid,
+                    "chatName": names.get(mid, mid),
+                    "extra": {"groupExtra": {"memberMids": ["U-member"]}},
+                }
+                for mid in mids
+            ]
+        }
 
     def send_text(self, mid, text):
         self.sent.append((mid, text))
@@ -3300,6 +3329,154 @@ def test_ai_auto_reply_separates_contacts_groups_and_skips_own_messages(web_stat
     logs = web_state.list_bot_logs("auto-account", owner)["logs"]
     assert any(log["action"] == "ai.auto_reply.received" for log in logs)
     assert any(log["action"] == "ai.auto_reply.sent" for log in logs)
+    contact_sent = next(
+        log
+        for log in logs
+        if log["action"] == "ai.auto_reply.sent"
+        and log["data"]["chatMid"] == "U-contact"
+    )
+    assert contact_sent["data"]["chatName"] == "Customer One"
+    assert contact_sent["data"]["senderName"] == "Customer One"
+    group_sent = next(
+        log
+        for log in logs
+        if log["action"] == "ai.auto_reply.sent"
+        and log["data"]["chatMid"] == "C-group"
+    )
+    assert group_sent["data"]["chatName"] == "Support Group"
+    assert group_sent["data"]["senderName"] == "Group Member"
+    lookup_counts = (fake.contact_lookup_calls, fake.group_lookup_calls)
+    web_state._hydrate_ai_auto_reply_candidate_identities(
+        "auto-account",
+        fake,
+        [{"chatMid": "C-group", "senderMid": "U-member"}],
+    )
+    assert (fake.contact_lookup_calls, fake.group_lookup_calls) == lookup_counts
+
+
+def test_ai_auto_reply_only_answers_selected_groups(web_state):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    fake.boxes["C-other"] = []
+    web_state.get_api = lambda account_id, **kwargs: fake
+    asked = []
+
+    def ask(question, user, **metadata):
+        asked.append((question, metadata))
+        return {
+            "ok": True,
+            "question": {"answer": f"AI: {question}", "model": "test-model"},
+        }
+
+    web_state.ask_global_ai = ask
+    settings = web_state.save_ai_auto_reply_settings(
+        "auto-account",
+        {
+            "enabled": True,
+            "contactsEnabled": False,
+            "groupsEnabled": True,
+            "groupReplyMode": "selected",
+            "selectedGroupMids": ["C-group"],
+        },
+        owner,
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    assert settings["groupReplyMode"] == "selected"
+    assert settings["selectedGroupMids"] == ["C-group"]
+
+    fake.boxes["C-group"].append(
+        {
+            "id": "selected-group-message",
+            "from": "U-member",
+            "text": "selected hello",
+            "contentType": 0,
+            "createdTime": enabled_at + 1000,
+        }
+    )
+    fake.boxes["C-other"].append(
+        {
+            "id": "other-group-message",
+            "from": "U-member",
+            "text": "other ignored",
+            "contentType": 0,
+            "createdTime": enabled_at + 1000,
+        }
+    )
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.poll_ai_auto_replies()
+
+    assert fake.sent == [("C-group", "AI: selected hello")]
+    assert [entry[0] for entry in asked] == ["selected hello"]
+
+    web_state.save_ai_auto_reply_settings(
+        "auto-account",
+        {
+            "enabled": True,
+            "contactsEnabled": False,
+            "groupsEnabled": True,
+            "groupReplyMode": "selected",
+            "selectedGroupMids": ["C-other"],
+        },
+        owner,
+    )
+    fake.boxes["C-group"].append(
+        {
+            "id": "selected-group-disabled",
+            "from": "U-member",
+            "text": "now ignored",
+            "contentType": 0,
+            "createdTime": enabled_at + 2000,
+        }
+    )
+    fake.boxes["C-other"].append(
+        {
+            "id": "other-group-enabled",
+            "from": "U-member",
+            "text": "now selected",
+            "contentType": 0,
+            "createdTime": enabled_at + 2000,
+        }
+    )
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.poll_ai_auto_replies()
+
+    assert fake.sent[-1] == ("C-other", "AI: now selected")
+    assert [entry[0] for entry in fake.sent] == ["C-group", "C-other"]
+
+
+def test_ai_auto_reply_selected_group_mode_requires_valid_group(web_state):
+    owner = _auto_reply_owner(web_state)
+
+    with pytest.raises(WebError) as missing:
+        web_state.save_ai_auto_reply_settings(
+            "auto-account",
+            {
+                "enabled": False,
+                "contactsEnabled": True,
+                "groupsEnabled": True,
+                "groupReplyMode": "selected",
+                "selectedGroupMids": [],
+            },
+            owner,
+        )
+    assert missing.value.code == "auto_reply_group_required"
+
+    with pytest.raises(WebError) as invalid:
+        web_state.save_ai_auto_reply_settings(
+            "auto-account",
+            {
+                "enabled": False,
+                "contactsEnabled": True,
+                "groupsEnabled": True,
+                "groupReplyMode": "selected",
+                "selectedGroupMids": ["U-contact"],
+            },
+            owner,
+        )
+    assert invalid.value.code == "invalid_auto_reply_setting"
 
 
 def test_inbox_snapshot_is_shared_by_auto_reply_and_conversation_summaries(web_state):
@@ -3419,9 +3596,16 @@ def test_assistant_has_account_scoped_line_auto_reply_controls():
     assert 'id="assistantAutoReplyEnabled" type="checkbox"' in INDEX_HTML
     assert 'id="assistantAutoReplyContacts" type="checkbox"' in INDEX_HTML
     assert 'id="assistantAutoReplyGroups" type="checkbox"' in INDEX_HTML
+    assert 'id="assistantAutoReplyGroupModeAll"' in INDEX_HTML
+    assert 'id="assistantAutoReplyGroupModeSelected"' in INDEX_HTML
+    assert 'id="assistantAutoReplyGroupList"' in INDEX_HTML
+    assert 'id="assistantAutoReplyGroupSaveButton"' in INDEX_HTML
     assert '"/api/assistant/auto-reply"' in INDEX_HTML
+    assert "/api/assistant/auto-reply/groups?" in INDEX_HTML
     assert "contactsEnabled: $(\"assistantAutoReplyContacts\").checked" in INDEX_HTML
     assert "groupsEnabled: $(\"assistantAutoReplyGroups\").checked" in INDEX_HTML
+    assert "groupReplyMode: state.assistantAutoReplyGroupMode" in INDEX_HTML
+    assert "selectedGroupMids: [...state.assistantAutoReplySelectedGroupMids]" in INDEX_HTML
 
 
 def test_assistant_auto_reply_is_the_first_and_default_view():
