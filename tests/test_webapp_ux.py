@@ -292,7 +292,8 @@ def test_kpi_report_aggregates_responses_and_presence(web_state):
     row = next(item for item in report["perUser"] if item["id"] == staff["id"])
     assert row["chats"] == 2 and row["avgResponseSeconds"] == 330
     assert row["presence"]["active"] == 1800 and row["presence"]["away"] == 1800
-    assert row["presence"]["offline"] == 0
+    # No shift and no business hours: "offline" is not meaningful.
+    assert row["presence"]["offline"] is None
     staff_user = web_state.web_auth._find_user(staff["id"])
     with pytest.raises(WebError):
         web_state.kpi_report("acct", staff_user, from_ms=start, to_ms=start + 1)
@@ -312,7 +313,9 @@ def test_kpi_shift_windows_expand_weekly_rules():
 
 def test_kpi_settings_owner_only_and_validated(web_state):
     owner = _seed_owned_account(web_state, _owner(web_state))
-    staff = web_state.web_auth.create_staff(owner, "s@example.com", "staff-pass", "S", ["acct"])
+    staff = web_state.web_auth.create_staff(
+        owner, "s@example.com", "staff-pass", "S", ["acct"]
+    )
     saved = web_state.save_kpi_settings(
         {
             "accountId": "acct",
@@ -422,7 +425,12 @@ class _FakeGemini:
 
     def chat(self, **kwargs):
         if "เปิด" in kwargs["question"] and "เปิด" in kwargs["context"]:
-            return {"answer": "เปิด 9 โมง", "canAnswer": True, "confidence": 0.9, "model": kwargs["model"]}
+            return {
+                "answer": "เปิด 9 โมง",
+                "canAnswer": True,
+                "confidence": 0.9,
+                "model": kwargs["model"],
+            }
         return {"answer": "", "canAnswer": False, "confidence": 0.0, "model": kwargs["model"]}
 
     def list_models(self):
@@ -446,7 +454,9 @@ def test_owner_configures_gemini_without_god(web_state, monkeypatch):
     result = web_state.save_ai_auto_reply_settings("acct", {"enabled": True}, owner)
     assert result["enabled"] is True and result["aiConfigured"] is True
 
-    staff = web_state.web_auth.create_staff(owner, "s@example.com", "staff-pass", "S", ["acct"])
+    staff = web_state.web_auth.create_staff(
+        owner, "s@example.com", "staff-pass", "S", ["acct"]
+    )
     staff_user = web_state.web_auth._find_user(staff["id"])
     with pytest.raises(WebError):
         web_state.save_assistant_settings({"provider": "gemini", "apiKey": "x"}, staff_user)
@@ -456,7 +466,9 @@ def test_owner_configures_gemini_without_god(web_state, monkeypatch):
 def test_shop_topics_cite_sources_and_collect_faq(web_state, monkeypatch):
     monkeypatch.setattr(webapp_module, "GeminiClient", _FakeGemini)
     owner = _seed_owned_account(web_state, _owner(web_state))
-    web_state.save_assistant_settings({"provider": "gemini", "apiKey": "k", "test": False}, owner)
+    web_state.save_assistant_settings(
+        {"provider": "gemini", "apiKey": "k", "test": False}, owner
+    )
     knowledge = web_state.save_assistant_knowledge(
         {
             "sections": [
@@ -470,7 +482,9 @@ def test_shop_topics_cite_sources_and_collect_faq(web_state, monkeypatch):
     assert knowledge["knowledgeMarkdown"].startswith("## เวลาเปิด–ปิด")
     assert knowledge["indexMode"] == "embedding"
 
-    staff = web_state.web_auth.create_staff(owner, "s@example.com", "staff-pass", "S", ["acct"])
+    staff = web_state.web_auth.create_staff(
+        owner, "s@example.com", "staff-pass", "S", ["acct"]
+    )
     staff_user = web_state.web_auth._find_user(staff["id"])
     answered = web_state.ask_global_ai("ร้านเปิดกี่โมง", staff_user)["question"]
     assert answered["status"] == "answered"
@@ -519,7 +533,13 @@ def test_gemini_client_parses_structured_answer(monkeypatch):
         return _Response(
             {
                 "candidates": [
-                    {"content": {"parts": [{"text": '{"answer":"ok","canAnswer":true,"confidence":0.7}'}]}}
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": '{"answer":"ok","canAnswer":true,"confidence":0.7}'}
+                            ]
+                        }
+                    }
                 ],
                 "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2},
             }
@@ -586,3 +606,156 @@ def test_presence_and_kpi_routes_enforce_roles(live):
     report = owner_session.get(f"{base}/api/kpi?accountId=acct", timeout=5)
     assert report.status_code == 200
     assert {row["role"] for row in report.json()["perUser"]} == {"owner", "staff"}
+
+
+def test_weekly_schedule_skips_days_and_daily_jobs_do_not_drift(monkeypatch):
+    job = webapp_module._schedule_from_body(
+        {
+            "name": "weekly",
+            "to": "u" + "1" * 32,
+            "text": "hi",
+            "mode": "repeat",
+            "windowStart": "09:00",
+            "windowEnd": "09:01",
+            "intervalMinutes": 1440,
+            "weekdays": [0, 2],  # Mon, Wed
+        },
+        account_id="acct",
+    )
+    assert job["weekdays"] == [0, 2]
+    tuesday = dt.datetime(2027, 1, 5, 10, 0)
+    nxt = dt.datetime.fromtimestamp(webapp_module._next_repeat_epoch(job, tuesday))
+    assert nxt == dt.datetime(2027, 1, 6, 9, 0)
+
+    class _Now(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2027, 1, 6, 9, 0, 40)
+
+    monkeypatch.setattr(webapp_module._dt, "datetime", _Now)
+    job["sentCount"] = 1
+    webapp_module._advance_after_success(job)
+    assert dt.datetime.fromtimestamp(job["nextRunAt"]) == dt.datetime(2027, 1, 11, 9, 0)
+    with pytest.raises(WebError):
+        webapp_module._schedule_weekdays([7])
+    assert webapp_module._schedule_weekdays(list(range(7))) == []
+
+
+# -- Frontend structure for the redesigned UI -------------------------------------
+from okline.webapp import INDEX_HTML
+
+
+def _js_block(start: str, end: str) -> str:
+    begin = INDEX_HTML.index(start)
+    return INDEX_HTML[begin : INDEX_HTML.index(end, begin)]
+
+
+def test_sidebar_replaces_top_tabs_with_account_card_and_dev_group():
+    assert 'class="tabbar sidenav"' in INDEX_HTML
+    assert 'id="accountCard"' in INDEX_HTML and 'id="accountPopover"' in INDEX_HTML
+    for tab in ("line", "assistant", "bot", "kpi", "incoming-api", "tools", "logs"):
+        assert f'data-tab="{tab}"' in INDEX_HTML
+    assert 'data-tab-panel="kpi"' in INDEX_HTML
+    # Developer pages sit in their own small group at the bottom.
+    assert INDEX_HTML.index('data-i18n="tabs.dev_group"') < INDEX_HTML.index(
+        'id="tabIncomingApi"'
+    )
+    # One status dot replaces the contradictory pills.
+    assert ".line-me-pills { display: none; }" in INDEX_HTML
+    # Phones get a bottom bar.
+    assert "@media (max-width: 640px)" in INDEX_HTML
+
+
+def test_thai_ui_uses_plan_vocabulary():
+    import re
+
+    th_values = re.findall(r'\{th:\s*"((?:[^"\\]|\\.)*)"', INDEX_HTML)
+    joined = "\n".join(th_values)
+    for banned in (
+        "Knowledge",
+        "RAG",
+        "AI Chat Bot",
+        "แพทเทิร์น",
+        "Contact",
+        "chunks",
+        "ส่งเดี๋ยวนี้",
+    ):
+        assert banned not in joined, banned
+    assert '"tabs.line": {th: "แชท"' in INDEX_HTML
+    assert '"tabs.assistant": {th: "ตอบอัตโนมัติ"' in INDEX_HTML
+    assert '"tabs.bot": {th: "ส่งตามเวลา"' in INDEX_HTML
+
+
+def test_chat_opens_on_click_and_accepts_pasted_chat_id():
+    assert ".convo-advanced { display: none !important; }" in INDEX_HTML
+    assert "function looksLikeMid(value)" in INDEX_HTML
+    assert (
+        'list.prepend(itemButton(t("chat.open_mid"), rawSearch, rawSearch, {}));' in INDEX_HTML
+    )
+    assert '<span data-i18n="chat.send">Send</span>' in INDEX_HTML
+    assert "encrypt: Boolean(encrypt || state.forceEncrypt)" in INDEX_HTML
+
+
+def test_notification_policy_matches_plan():
+    block = _js_block(
+        "    function processNewMessageNotifications(accountId, conversations) {",
+        "    async function refreshConversationsInBackground() {",
+    )
+    assert "pageIsInFront()" in block
+    assert "playSoftSound()" in block
+    assert "dispatchBackgroundAlerts(accountId, direct);" in block
+    assert "autoReplyCovers(item.mid)" in block
+    assert "insideWorkingTime()" in block
+    assert "renotify: true" not in INDEX_HTML
+    assert "const NOTIFY_ROOM_COOLDOWN_MS = 120000;" in INDEX_HTML
+    assert 'tag: "linepassport:digest"' in INDEX_HTML
+    assert "requireInteraction: escalate" in INDEX_HTML
+    assert 'const NOTIFY_SNOOZE_KEY = "okline.notifyBannerSnoozedUntil";' in INDEX_HTML
+    assert 'id="notifyBanner"' in INDEX_HTML
+
+
+def test_live_updates_use_sse_with_backoff_and_freshness_chip():
+    assert "const SSE_BACKOFF_MS = [5000, 10000, 30000, 60000];" in INDEX_HTML
+    assert 'source.addEventListener("conversation_updated"' in INDEX_HTML
+    assert 'id="freshnessChip"' in INDEX_HTML
+    assert 'chip.classList.toggle("stale", seconds > 60);' in INDEX_HTML
+
+
+def test_presence_heartbeat_and_busy_toggle():
+    assert (
+        'await post("/api/presence", {state: presence, notification: notificationPermission(), ts: Date.now()});'
+        in INDEX_HTML
+    )
+    assert "const PRESENCE_IDLE_MS = 15 * 60000;" in INDEX_HTML
+    assert 'id="presenceChip"' in INDEX_HTML
+    assert "function togglePresenceBusy()" in INDEX_HTML
+
+
+def test_scheduler_wizard_has_three_steps_and_safe_defaults():
+    for step in ("1", "2", "3"):
+        assert f'data-wizard-pane="{step}"' in INDEX_HTML
+    for kind in ("text", "image", "ai_image", "api"):
+        assert f'data-wizard-type="{kind}"' in INDEX_HTML
+    for freq in ("once", "daily", "weekly", "custom"):
+        assert f'data-wizard-freq="{freq}"' in INDEX_HTML
+    assert 'freq: "daily",' in INDEX_HTML  # once a day, never every 15 minutes
+    assert 'id="wizardTime" type="time"' in INDEX_HTML
+    assert '"/api/schedules/test"' in INDEX_HTML
+    assert '["{name}", "var.name"]' in INDEX_HTML
+    assert 'id="wizardAdvanced"' in INDEX_HTML and '"wizard.ban_warning"' in INDEX_HTML
+
+
+def test_auto_reply_setup_checklist_and_shop_topics():
+    assert 'id="assistantSetup"' in INDEX_HTML
+    assert '"/api/assistant/settings"' in INDEX_HTML
+    assert 'id="kbTopics"' in INDEX_HTML and 'id="kbChatLog"' in INDEX_HTML
+    assert 'post("/api/assistant/knowledge", {sections})' in INDEX_HTML
+    assert '"/api/assistant/knowledge/faq"' in INDEX_HTML
+    assert "setTimeout(() => saveKbTopics().catch(toastError), 2000)" in INDEX_HTML
+
+
+def test_add_account_goes_straight_to_qr():
+    block = _js_block("    function openAddAccount(", "    async function cancelLogin()")
+    assert "startLogin().catch(toastError);" in block
+    assert 'id="loginAdvancedDetails"' in INDEX_HTML
+    assert ".login-panel.qr-first .login-steps" in INDEX_HTML

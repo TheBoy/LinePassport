@@ -3258,6 +3258,631 @@ INDEX_HTML = r"""<!doctype html>
       .msg-time { color: #8494a0; }
       .date-chip span { background: rgba(255, 255, 255, .22); }
     }
+
+    /* ===== LinePassport redesign (UX plan): sidebar shell & shared pieces ===== */
+    :root {
+      --accent: #06C755;
+      --accent-ink: #04913d;
+      --ink: #1A1D21;
+      --muted: #5B6472;
+      --bg: #F5F6F8;
+      --line: #E6E8EC;
+      --surface: #ffffff;
+      --surface-2: #F0F2F5;
+      --danger: #D92D20;
+      --warn: #B54708;
+      --warn-bg: #FFFAEB;
+      --danger-bg: #FEF3F2;
+      --ok-bg: #ECFDF3;
+      --radius: 12px;
+      --sidebar-w: 240px;
+    }
+
+    body {
+      font-family: "Noto Sans Thai", "Noto Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    .app-shell { background: var(--bg); }
+    .main-stage { background: var(--bg); }
+
+    /* Header: brand + quick actions only; the account lives in the sidebar. */
+    .topbar {
+      min-height: 52px;
+      grid-template-columns: auto minmax(0, 1fr);
+      padding: 6px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .topbar .account-picker { display: none; }
+    #refreshAllButton { display: none; }
+
+    /* Workspace = sidebar + panels. */
+    .workspace {
+      grid-template-rows: minmax(0, 1fr);
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    }
+    .tabbar.sidenav {
+      flex-direction: column;
+      flex-wrap: nowrap;
+      gap: 2px;
+      padding: 12px 10px;
+      border-bottom: 0;
+      border-right: 1px solid var(--line);
+      background: var(--surface);
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .sidenav .tab {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 40px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 10px;
+      color: var(--muted);
+      font-weight: 600;
+      text-align: left;
+    }
+    .sidenav .tab svg { width: 18px; height: 18px; flex: 0 0 auto; }
+    .sidenav .tab:hover { background: var(--surface-2); color: var(--ink); }
+    .sidenav .tab[aria-selected="true"] {
+      border: 0;
+      background: rgba(6, 199, 85, .1);
+      color: var(--accent-ink);
+    }
+    .sidenav .tab .nav-badge {
+      margin-left: auto;
+      min-width: 20px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: var(--danger);
+      color: #fff;
+      font-size: 11px;
+      line-height: 20px;
+      text-align: center;
+    }
+    .sidenav-group-label {
+      margin: 14px 12px 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .02em;
+    }
+    .sidenav .tab.dev { min-height: 34px; font-size: 13px; font-weight: 500; }
+    .sidenav-spacer { flex: 1 1 auto; }
+
+    .account-card-wrap { position: relative; margin-bottom: 10px; }
+    .account-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 56px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      text-align: left;
+    }
+    .account-card .avatar { width: 36px; height: 36px; flex: 0 0 auto; }
+    .account-card-text { display: grid; min-width: 0; flex: 1 1 auto; }
+    .account-card-text strong {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 14px;
+    }
+    .account-card-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #98A2B3;
+      flex: 0 0 auto;
+    }
+    .status-dot.ok { background: var(--accent); }
+    .status-dot.bad { background: var(--danger); }
+    .account-card > svg { width: 16px; height: 16px; color: var(--muted); }
+    .account-popover {
+      position: absolute;
+      z-index: 30;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      display: grid;
+      gap: 2px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 12px 32px rgba(16, 24, 40, .14);
+    }
+    .account-popover button {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 0;
+      border-radius: 8px;
+      text-align: left;
+    }
+    .account-popover button:hover,
+    .account-popover button[aria-selected="true"] { background: var(--surface-2); }
+    .account-popover .add-account { color: var(--accent-ink); font-weight: 600; }
+
+    /* Hide the legacy status pills; the account card shows one status dot. */
+    .line-me-pills { display: none; }
+    .line-me { grid-template-areas: "avatar info"; }
+
+    /* Chat: click a row to open; the legacy target/count row is gone. */
+    .convo-advanced { display: none !important; }
+    .send-btn.with-label {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: row;
+      width: auto;
+      min-width: 72px;
+      gap: 6px;
+      padding: 0 14px;
+      border-radius: 999px;
+      font-weight: 700;
+    }
+    .send-btn.with-label svg { width: 16px; height: 16px; }
+    #sendEncryptedButton { display: none; }
+    .convo-menu-wrap { position: relative; }
+    .convo-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      z-index: 20;
+      display: grid;
+      min-width: 220px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 12px 32px rgba(16, 24, 40, .14);
+    }
+    .convo-menu button {
+      border: 0;
+      text-align: left;
+      border-radius: 8px;
+    }
+    .convo-menu button:hover { background: var(--surface-2); }
+
+    .notify-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 8px 10px 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+    }
+    .notify-banner.warn { background: var(--warn-bg); color: var(--warn); border: 1px solid #FEDF89; }
+    .notify-banner.bad { background: var(--danger-bg); color: var(--danger); border: 1px solid #FECDCA; }
+    .notify-banner span { flex: 1 1 180px; }
+    .notify-banner button { min-height: 30px; font-size: 13px; }
+
+    .fresh-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .fresh-chip.stale { background: var(--danger-bg); color: var(--danger); }
+    .fresh-chip::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .fresh-chip.stale::before { background: var(--danger); }
+
+    .presence-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .presence-chip .status-dot.active { background: var(--accent); }
+    .presence-chip .status-dot.standby { background: #2E90FA; }
+    .presence-chip .status-dot.away { background: #F79009; }
+    .presence-chip .status-dot.busy { background: #7A5AF8; }
+    .presence-chip .status-dot.idle { background: #98A2B3; }
+
+    /* Shared card & helper styles for the new screens. */
+    .ux-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 16px;
+    }
+    .ux-card h3 { margin: 0 0 4px; font-size: 15px; }
+    .ux-card + .ux-card { margin-top: 12px; }
+    .ux-grid { display: grid; gap: 12px; }
+    .ux-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .ux-row.space { justify-content: space-between; }
+    .ux-muted { color: var(--muted); font-size: 13px; }
+    .ux-help {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      min-height: 30px;
+      padding: 0;
+      border-radius: 50%;
+      font-weight: 700;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--surface-2);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .badge.ok { background: var(--ok-bg); color: #067647; }
+    .badge.warn { background: var(--warn-bg); color: var(--warn); }
+    .badge.bad { background: var(--danger-bg); color: var(--danger); }
+    .badge.info { background: #EFF8FF; color: #175CD3; }
+    .switch {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      width: 44px;
+      height: 24px;
+      flex: 0 0 auto;
+    }
+    .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+    .switch span {
+      width: 44px;
+      height: 24px;
+      border-radius: 999px;
+      background: #D0D5DD;
+      transition: background .15s;
+      pointer-events: none;
+    }
+    .switch span::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, .2);
+      transition: transform .15s;
+    }
+    .switch input:checked + span { background: var(--accent); }
+    .switch input:checked + span::after { transform: translateX(20px); }
+    .switch input:disabled + span { opacity: .5; }
+    .choice-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+    }
+    .choice-card {
+      display: grid;
+      gap: 2px;
+      min-height: 64px;
+      padding: 10px 12px;
+      border: 1.5px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      text-align: left;
+    }
+    .choice-card strong { font-size: 14px; }
+    .choice-card span { color: var(--muted); font-size: 12px; font-weight: 400; }
+    .choice-card[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: rgba(6, 199, 85, .06);
+    }
+    .day-picker { display: flex; gap: 6px; flex-wrap: wrap; }
+    .day-picker button {
+      width: 40px;
+      min-height: 40px;
+      padding: 0;
+      border-radius: 50%;
+      font-weight: 600;
+    }
+    #kpiSettingsPane .day-picker button { width: 32px; min-height: 32px; font-size: 12px; }
+    #kpiShiftList > .ux-row { display: grid; grid-template-columns: auto 90px 1fr; align-items: center; }
+    #kpiShiftList > .ux-row > input[type="time"], #kpiShiftList > .ux-row > span:not(.strong) { grid-column: auto; }
+    .day-picker button[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+    details.ux-advanced {
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+    }
+    details.ux-advanced > summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    details.ux-advanced[open] > summary { margin-bottom: 10px; }
+    .ux-warning {
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--warn-bg);
+      color: var(--warn);
+      font-size: 13px;
+    }
+    .stepper { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+    .stepper button {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .stepper button b {
+      display: inline-grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--surface-2);
+      font-size: 12px;
+    }
+    .stepper button[aria-current="step"] { color: var(--ink); }
+    .stepper button[aria-current="step"] b,
+    .stepper button.done b { background: var(--accent); color: #fff; }
+
+    /* Login: QR-first page for people without an account. */
+    .login-panel.qr-first .login-steps,
+    .login-panel.qr-first [data-login-step="1"] .wizard-start { display: none; }
+    .login-panel.qr-first .login-step .pill.ok { display: none; }
+    .qr-howto { margin: 0; padding-left: 20px; display: grid; gap: 6px; color: var(--ink); }
+    .login-proxy-details { margin-top: 12px; text-align: left; }
+
+    /* Mobile: sidebar becomes a 4-button bottom bar; header shrinks. */
+    @media (max-width: 640px) {
+      .topbar { min-height: 44px; padding: 4px 10px; grid-template-columns: auto 1fr; }
+      .topbar .brand h1 { font-size: 16px; }
+      .workspace { grid-template-columns: 1fr; padding-bottom: 64px; }
+      .tabbar.sidenav {
+        position: fixed;
+        z-index: 40;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        flex-direction: row;
+        overflow: visible;
+        gap: 0;
+        padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
+        border-right: 0;
+        border-top: 1px solid var(--line);
+      }
+      .sidenav .account-card-wrap,
+      .sidenav .sidenav-group-label,
+      .sidenav .sidenav-spacer,
+      .sidenav .tab.dev,
+      .sidenav .tab.mobile-hide { display: none; }
+      .sidenav .tab {
+        flex: 1 1 0;
+        flex-direction: column;
+        justify-content: center;
+        gap: 2px;
+        min-height: 52px;
+        padding: 0 2px;
+        font-size: 11px;
+        text-align: center;
+      }
+      .sidenav .tab .nav-badge { position: absolute; margin: -30px 0 0 24px; }
+      .mobile-account-button {
+        display: inline-flex !important;
+        align-items: center;
+        gap: 6px;
+        width: auto;
+        max-width: 46vw;
+        min-height: 34px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        border-radius: 999px;
+      }
+    }
+    @media (min-width: 641px) { .mobile-account-button { display: none !important; } }
+
+    /* KPI screen. */
+    .kpi-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .kpi-tile { text-align: left; display: grid; gap: 4px; min-height: 96px; }
+    .kpi-tile .value { font-size: 26px; font-weight: 700; }
+    .kpi-tile.alert { border-color: #FECDCA; background: var(--danger-bg); cursor: pointer; }
+    .kpi-tile.alert .value { color: var(--danger); }
+    .kpi-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .kpi-table th, .kpi-table td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; }
+    .kpi-table th { color: var(--muted); font-weight: 600; }
+    .kpi-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; min-width: 80px; }
+    .kpi-bar > span { display: block; height: 100%; background: var(--accent); }
+    .kpi-chart { width: 100%; height: 180px; }
+    .kpi-timeline { display: grid; gap: 6px; }
+    .kpi-timeline-row { display: grid; grid-template-columns: 120px 1fr; gap: 8px; align-items: center; font-size: 12px; }
+    .kpi-timeline-track { position: relative; height: 14px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+    .kpi-timeline-track span { position: absolute; top: 0; bottom: 0; }
+    .kpi-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+    .kpi-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+    @media (max-width: 900px) { .kpi-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+    /* Scheduler list. */
+    .job-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+    .job-card .avatar { width: 40px; height: 40px; }
+    .job-card-main { display: grid; gap: 4px; min-width: 0; }
+    .job-card-main .preview { color: var(--muted); font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .job-card-side { display: flex; align-items: center; gap: 8px; }
+    .job-history { display: flex; gap: 4px; font-size: 12px; }
+    .job-history .ok { color: #067647; }
+    .job-history .bad { color: var(--danger); }
+    .job-error-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 10px 12px;
+      border: 1px solid #FECDCA;
+      border-radius: var(--radius);
+      background: var(--danger-bg);
+      color: var(--danger);
+    }
+    .job-error-banner span { flex: 1 1 200px; }
+    .kebab-wrap { position: relative; }
+    .kebab-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      z-index: 20;
+      display: grid;
+      min-width: 180px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 12px 32px rgba(16, 24, 40, .14);
+    }
+    .kebab-menu button { border: 0; text-align: left; border-radius: 8px; }
+    .kebab-menu button:hover { background: var(--surface-2); }
+    .kebab-menu button.danger { color: var(--danger); }
+    .wizard-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+    .wizard-summary { position: sticky; top: 0; display: grid; gap: 10px; color: var(--ink); }
+    .wizard-summary label { color: var(--muted); }
+    /* Scheduled sends is one list page; old sub-navigation stays reachable via links. */
+    #botShell > .bot-page-nav { display: none; }
+    .scheduler-list-head > h2,
+    .scheduler-list-head #scheduleCount,
+    .scheduler-list-head #scheduleFormToggle { display: none; }
+    .scheduler-list-panel { border: 0; box-shadow: none; background: transparent; }
+    .scheduler-list-panel > .section-head { padding: 0; border: 0; background: transparent; justify-content: flex-end; }
+    .scheduler-list-panel > .section-body { padding: 0; }
+    .scheduler-list-head button { min-height: 32px; font-size: 13px; }
+    #schedulesList { display: grid; gap: 10px; max-height: none; overflow: visible; }
+    .job-card { overflow: visible; }
+    .wizard-summary dl { margin: 0; display: grid; gap: 8px; }
+    .wizard-summary dt { color: var(--muted); font-size: 12px; }
+    .wizard-summary dd { margin: 0; font-weight: 600; word-break: break-word; }
+    .msg-preview {
+      align-self: start;
+      max-width: 100%;
+      padding: 10px 12px;
+      border-radius: 14px 14px 14px 4px;
+      background: #E9F9EF;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .target-picker { display: grid; gap: 8px; }
+    .target-picker-list { display: grid; gap: 4px; max-height: 320px; overflow-y: auto; }
+    .target-picker-list button {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid transparent;
+      text-align: left;
+    }
+    .target-picker-list button[aria-pressed="true"] { border-color: var(--accent); background: rgba(6, 199, 85, .06); }
+    .target-picker-list .avatar { width: 30px; height: 30px; }
+    .extra-message { display: grid; gap: 6px; }
+    @media (max-width: 980px) { .wizard-layout { grid-template-columns: 1fr; } .wizard-summary { position: static; } }
+
+    /* Auto-reply screen. */
+    .setup-steps { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+    .setup-step { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; }
+    .setup-step > b {
+      display: inline-grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--surface-2);
+      color: var(--muted);
+    }
+    .setup-step.done > b { background: var(--accent); color: #fff; }
+    .setup-step.current > b { background: var(--ink); color: #fff; }
+    .hero-switch { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .hero-switch .switch { width: 56px; height: 30px; }
+    .hero-switch .switch span { width: 56px; height: 30px; }
+    .hero-switch .switch span::after { width: 24px; height: 24px; }
+    .hero-switch .switch input:checked + span::after { transform: translateX(26px); }
+    .hero-switch h2 { margin: 0; font-size: 18px; }
+    .kb-split { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, 1fr); gap: 16px; align-items: start; }
+    .kb-topic { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .kb-topic + .kb-topic { margin-top: 8px; }
+    .kb-topic > summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .kb-topic > summary .badge { margin-left: auto; }
+    .kb-topic-body { display: grid; gap: 8px; padding: 0 12px 12px; }
+    .kb-topic-body textarea { min-height: 110px; }
+    .kb-topic-body > button.danger { justify-self: start; min-height: 30px; font-size: 13px; }
+    .kb-chat { position: sticky; top: 0; display: grid; gap: 10px; }
+    .kb-chat-log { display: grid; gap: 8px; max-height: 420px; overflow-y: auto; padding: 4px; }
+    .kb-bubble { max-width: 90%; padding: 8px 12px; border-radius: 14px; white-space: pre-wrap; word-break: break-word; }
+    .kb-bubble.me { justify-self: end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+    .kb-bubble.ai { justify-self: start; background: var(--surface-2); border-bottom-left-radius: 4px; }
+    .kb-bubble .kb-source { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .kb-bubble.ai.none { background: var(--warn-bg); color: var(--warn); }
+    .unanswered-item { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+    .unanswered-item:first-child { border-top: 0; }
+    @media (max-width: 980px) { .kb-split { grid-template-columns: 1fr; } .kb-chat { position: static; } }
+
+    #assistantPanelRoot .assistant-view-nav { display: none; }
+    [hidden] { display: none !important; }
+    .ux-row > select, .ux-row > input[type="date"], .ux-row > input[type="time"] { width: auto; }
+    .line-row-main { display: grid; }
+    .fresh-row { display: flex; justify-content: flex-end; padding: 0 12px 4px; min-height: 0; }
+    .fresh-row:has(> [hidden]) { display: none; }
+    #notificationButton { display: none; }
+    body.account-pop-mobile .sidenav .account-card-wrap {
+      display: block;
+      position: fixed;
+      z-index: 60;
+      top: 52px;
+      left: 8px;
+      right: 8px;
+    }
+    body.account-pop-mobile .sidenav .account-card { display: none; }
+    body.account-pop-mobile .account-popover { position: static; }
+
+
   </style>
 </head>
 <body class="advanced">
@@ -3306,6 +3931,7 @@ INDEX_HTML = r"""<!doctype html>
         <select id="accountSelect"></select>
       </label>
       <div class="top-actions">
+        <button class="mobile-account-button" id="mobileAccountButton" type="button" aria-haspopup="listbox"><span class="status-dot" id="mobileAccountDot"></span><span id="mobileAccountName">LINE</span></button>
         <button class="icon-ghost" id="notificationButton" type="button" aria-pressed="false" data-sound-status="idle" data-i18n-title="notifications.enable" title="Enable notifications" aria-label="Enable notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg></button>
         <button id="refreshAllButton" data-i18n="topbar.refresh">Refresh</button>
         <div class="settings-wrap">
@@ -3347,7 +3973,84 @@ INDEX_HTML = r"""<!doctype html>
             <button id="passwordTabButton" data-settings-pane="password" data-i18n="topbar.change_password">Change Password</button>
             <button id="accountsTabButton" data-settings-pane="accounts" data-i18n="topbar.line_account_management">LINE Account Management</button>
             <button id="usersTabButton" data-settings-pane="users" data-i18n="topbar.user_management">User Management</button>
+            <button id="teamTabButton" data-settings-pane="team" data-i18n="settings.nav_team">Team</button>
+            <button id="aiTabButton" data-settings-pane="ai" data-i18n="settings.nav_ai">AI</button>
+            <button id="kpiSettingsTabButton" data-settings-pane="kpi" data-i18n="settings.nav_kpi">KPI &amp; shifts</button>
+            <button id="notifySettingsTabButton" data-settings-pane="notify" data-i18n="settings.nav_notify">Notifications</button>
             <button id="settingsGuideTabButton" data-settings-pane="guide" data-i18n="settings.nav_guide">วิธีใช้</button>
+          </div>
+
+          <div class="settings-pane" id="teamPane">
+            <div class="section-head">
+              <div>
+                <h3 data-i18n="team.title">Team</h3>
+                <span class="muted" data-i18n="team.subtitle">Staff sign in with their own email and reply from your LINE account. Each reply is credited to them in KPI.</span>
+              </div>
+            </div>
+            <div class="wizard-card">
+              <h3 data-i18n="team.add">Add staff member</h3>
+              <div class="two-col">
+                <label><span data-i18n="users.email">Email</span><input id="teamNewEmail" type="email" inputmode="email" autocomplete="off" placeholder="staff@example.com"></label>
+                <label><span data-i18n="users.displayname">Display name</span><input id="teamNewName" autocomplete="off" maxlength="80"></label>
+              </div>
+              <label><span data-i18n="users.password">Password</span><input id="teamNewPassword" type="password" autocomplete="new-password"></label>
+              <div><span class="ux-muted" data-i18n="team.accounts">LINE accounts they can use</span><div class="ux-row" id="teamNewAccounts"></div></div>
+              <button id="teamCreateButton" class="primary" type="button" data-i18n="team.add">Add staff member</button>
+            </div>
+            <div class="management-list" id="teamList"></div>
+          </div>
+
+          <div class="settings-pane" id="aiSettingsPane">
+            <div class="wizard-card">
+              <h3 data-i18n="brain.title">AI for auto reply</h3>
+              <span class="muted" data-i18n="brain.subtitle">Choose what answers your customers. Changes apply to every staff member on your LINE accounts.</span>
+              <div id="settingsBrainSlot"></div>
+            </div>
+            <div id="settingsImageAiSlot"></div>
+          </div>
+
+          <div class="settings-pane" id="kpiSettingsPane">
+            <div class="wizard-card">
+              <h3 data-i18n="kpi.settings">KPI settings</h3>
+              <span class="muted" id="kpiSettingsAccountLabel"></span>
+              <label><span data-i18n="kpi.sla_label">Reply target (minutes)</span><input id="kpiSlaMinutes" type="number" min="1" max="1440" value="5"></label>
+              <label class="checkbox-row"><input id="kpiBusinessEnabled" type="checkbox"><span data-i18n="kpi.business_hours">Count only during business hours</span></label>
+              <div class="ux-row" id="kpiBusinessRow">
+                <div class="day-picker" id="kpiBusinessDays"></div>
+                <input id="kpiBusinessStart" type="time" value="09:00" style="width:auto">
+                <span>–</span>
+                <input id="kpiBusinessEnd" type="time" value="18:00" style="width:auto">
+              </div>
+              <h3 data-i18n="kpi.shifts_title">Shifts</h3>
+              <span class="muted" data-i18n="kpi.shifts_hint">Screen time and notifications count only inside each person's shift. No shift = business hours.</span>
+              <div id="kpiShiftList" class="ux-grid"></div>
+              <button id="kpiSettingsSave" class="primary" type="button" data-i18n="common.save">Save</button>
+            </div>
+            <div class="wizard-card">
+              <h3 data-i18n="presence.explain_title">What staff status means</h3>
+              <ul class="ux-muted" style="margin:0;padding-left:18px;display:grid;gap:4px">
+                <li data-i18n="presence.explain_active">Replying: this tab is open and focused, and a chat is waiting or you typed in the last minute.</li>
+                <li data-i18n="presence.explain_standby">Standby: tab open and focused, nothing waiting.</li>
+                <li data-i18n="presence.explain_away">Switched away: another tab or app is in front.</li>
+                <li data-i18n="presence.explain_idle">Idle: no typing or clicks for 15 minutes.</li>
+                <li data-i18n="presence.explain_busy">On other work: you pressed "On other work" yourself.</li>
+                <li data-i18n="presence.explain_offline">Offline: no page open for 2 minutes.</li>
+                <li data-i18n="presence.explain_visible">Everyone always sees their own status in the chat header.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="settings-pane" id="notifySettingsPane">
+            <div class="wizard-card">
+              <h3 data-i18n="notify.settings_title">Browser notifications</h3>
+              <span class="muted" id="notifySettingsState"></span>
+              <div class="ux-row">
+                <button id="notifySettingsEnable" class="primary" type="button" data-i18n="notify.banner_enable">Turn on notifications</button>
+                <button id="notifySettingsTest" type="button" data-i18n="notify.test">Send a test</button>
+              </div>
+              <label class="checkbox-row"><input id="notifyOutsideShift" type="checkbox"><span data-i18n="notify.outside_shift">Also notify me outside my shift</span></label>
+              <span class="muted" data-i18n="notify.policy">While this page is in front you hear one soft sound per new chat. When it's hidden you get at most one notification per chat every 2 minutes, a single summary when many customers write at once, and one louder reminder when a chat waits past the reply target. No alert when the AI already replied.</span>
+            </div>
           </div>
 
           <div class="settings-pane" id="passwordPane">
@@ -3513,12 +4216,22 @@ INDEX_HTML = r"""<!doctype html>
             <div class="wizard-card">
               <span class="pill ok" data-i18n="login.step2of4">Step 2 of 4</span>
               <h3 data-i18n="login.scan_title">Scan the QR code</h3>
+              <ol class="qr-howto">
+                <li data-i18n="login.howto_1">Open LINE on your phone and go to Home.</li>
+                <li data-i18n="login.howto_2">Tap the QR scanner at the top right.</li>
+                <li data-i18n="login.howto_3">Scan this code, then confirm on your phone.</li>
+              </ol>
               <div class="status-row">
                 <span class="pill warn" id="loginState" data-i18n="login.idle">Idle</span>
               </div>
               <div class="qr" id="qrBox" tabindex="-1">
                 <span class="muted" data-i18n="login.qr_placeholder">QR will appear here</span>
               </div>
+              <details class="ux-advanced login-proxy-details" id="loginAdvancedDetails">
+                <summary data-i18n="login.advanced">Advanced options (proxy)</summary>
+                <div id="loginProxySlot"></div>
+                <button id="loginRestartButton" type="button" data-i18n="login.restart_with_proxy">Make a new QR with these settings</button>
+              </details>
               <div class="qr-actions" id="qrActions" hidden>
                 <a id="qrLink" class="mono" href="#" target="_blank" rel="noreferrer"></a>
                 <button id="qrCopyButton" type="button" data-i18n="common.copy">Copy link</button>
@@ -3550,14 +4263,29 @@ INDEX_HTML = r"""<!doctype html>
       </section>
 
       <div class="workspace hidden" id="workspace">
-        <div class="tabbar" role="tablist" aria-label="LinePassport sections">
-          <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line" data-i18n="tabs.line">LINE</button>
-          <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai" data-i18n="tabs.assistant">AI Chat Bot</button>
-          <button class="tab" id="tabIncomingApi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelIncomingApi" data-tab="incoming-api" data-requires-permission="manage_api" data-i18n="tabs.incoming_api">API</button>
-          <button class="tab" id="tabTools" type="button" role="tab" aria-selected="false" aria-controls="tabPanelTools" data-tab="tools" data-i18n="tabs.tools">Tools</button>
-          <button class="tab" id="tabBot" type="button" role="tab" aria-selected="false" aria-controls="tabPanelBot" data-tab="bot" data-i18n="tabs.bot">Bot</button>
-          <button class="tab" id="tabLogs" type="button" role="tab" aria-selected="false" aria-controls="tabPanelLogs" data-tab="logs" data-requires-permission="read" data-i18n="tabs.logs">Logs</button>
-        </div>
+        <nav class="tabbar sidenav" role="tablist" aria-label="LinePassport sections" aria-orientation="vertical">
+          <div class="account-card-wrap">
+            <button class="account-card" id="accountCard" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="accountPopover">
+              <span class="avatar" id="accountCardAvatar" aria-hidden="true">?</span>
+              <span class="account-card-text">
+                <strong id="accountCardName" data-i18n="profile.no_account">No account selected</strong>
+                <span class="account-card-status"><span class="status-dot" id="accountCardDot"></span><span id="accountCardStatus">-</span></span>
+              </span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+            </button>
+            <div class="account-popover hidden" id="accountPopover" role="listbox" aria-label="LINE"></div>
+          </div>
+          <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span data-i18n="tabs.line">Chat</span><span class="nav-badge hidden" id="navChatBadge"></span></button>
+          <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 14h.01M15 14h.01"/></svg><span data-i18n="tabs.assistant">Auto reply</span></button>
+          <button class="tab" id="tabBot" type="button" role="tab" aria-selected="false" aria-controls="tabPanelBot" data-tab="bot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span data-i18n="tabs.bot">Scheduled sends</span></button>
+          <button class="tab" id="tabKpi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelKpi" data-tab="kpi" data-requires-permission="manage_accounts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span data-i18n="tabs.kpi">Staff KPI</span><span class="nav-badge hidden" id="navKpiBadge"></span></button>
+          <button class="tab mobile-hide" id="tabSettings" type="button" data-nav-settings="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-i18n="tabs.settings">Settings</span></button>
+          <div class="sidenav-spacer"></div>
+          <div class="sidenav-group-label" data-i18n="tabs.dev_group">For developers</div>
+          <button class="tab dev" id="tabIncomingApi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelIncomingApi" data-tab="incoming-api" data-requires-permission="manage_api"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 8-4 4 4 4M16 8l4 4-4 4"/></svg><span data-i18n="tabs.incoming_api">API</span></button>
+          <button class="tab dev" id="tabTools" type="button" role="tab" aria-selected="false" aria-controls="tabPanelTools" data-tab="tools"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/></svg><span data-i18n="tabs.tools">Tools</span></button>
+          <button class="tab dev" id="tabLogs" type="button" role="tab" aria-selected="false" aria-controls="tabPanelLogs" data-tab="logs" data-requires-permission="read"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg><span data-i18n="tabs.logs">Activity log</span></button>
+        </nav>
         <div class="tab-panels">
           <div class="tab-panel active" data-tab-panel="line" id="tabPanelLine" role="tabpanel" aria-labelledby="tabLine">
         <aside class="line-list" id="lineListPanel">
@@ -3590,10 +4318,16 @@ INDEX_HTML = r"""<!doctype html>
             </div>
             <button id="contactsRefreshButton" class="icon-ghost" type="button" data-requires-account data-requires-permission="read" data-i18n-title="contacts.refresh_title" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.9 6.3"/><path d="M20 5v5h-5"/></svg></button>
           </div>
+          <div class="notify-banner warn hidden" id="notifyBanner" role="status">
+            <span id="notifyBannerText"></span>
+            <button class="primary" id="notifyBannerEnable" type="button" data-i18n="notify.banner_enable">Turn on notifications</button>
+            <button id="notifyBannerLater" type="button" data-i18n="notify.banner_later">Later</button>
+          </div>
           <div class="line-search" id="contactSearchRow">
             <button id="contactSearchButton" class="search-icon" type="button" data-requires-account data-requires-permission="read" data-i18n-title="contacts.search" title="Search" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M21 21l-4-4"/></svg></button>
             <input id="contactSearch" data-requires-account data-i18n-ph="contacts.search_ph" placeholder="Search…">
           </div>
+          <div class="fresh-row"><span class="fresh-chip" id="freshnessChip" aria-live="off" hidden></span></div>
           <div class="line-rows all-list" id="allList"></div>
           <div class="line-rows contact-list hidden" id="contactsList"></div>
           <div class="line-rows group-list hidden" id="groupsList"></div>
@@ -3606,9 +4340,17 @@ INDEX_HTML = r"""<!doctype html>
               <span id="targetLabel" class="convo-sub" data-i18n="chat.no_target">No target selected</span>
             </div>
             <div class="convo-actions">
+              <button class="presence-chip" id="presenceChip" type="button" data-i18n-title="presence.chip_title" title="Your status"><span class="status-dot" id="presenceDot"></span><span id="presenceLabel">-</span></button>
               <button class="icon-ghost" id="lineGuideButton" type="button" data-i18n-title="line_guide.open" title="Usage guide" aria-label="Usage guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.7 2c-1 .6-1.5 1.1-1.5 2.2"/><path d="M12 17h.01"/></svg></button>
               <button class="icon-ghost" id="reloadMessagesButton" type="button" data-requires-account data-requires-permission="read" data-i18n-title="chat.refresh" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.9 6.3"/><path d="M20 5v5h-5"/></svg></button>
-              <button class="icon-ghost" type="button" data-i18n-title="convo.menu" title="Menu" aria-label="Menu"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
+              <div class="convo-menu-wrap">
+                <button class="icon-ghost" id="convoMenuButton" type="button" aria-haspopup="menu" aria-expanded="false" data-i18n-title="convo.menu" title="Menu" aria-label="Menu"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
+                <div class="convo-menu hidden" id="convoMenu" role="menu">
+                  <button id="convoMenuEncrypt" type="button" role="menuitemcheckbox" aria-checked="false" data-requires-account data-requires-permission="send" data-i18n="chat.menu_encrypt">Encrypt messages in this chat</button>
+                  <button id="convoMenuSchedule" type="button" role="menuitem" data-requires-account data-requires-permission="schedule" data-i18n="chat.menu_schedule">Schedule a message to this chat</button>
+                  <button id="convoMenuCopyMid" type="button" role="menuitem" data-i18n="chat.menu_copy_id">Copy chat ID</button>
+                </div>
+              </div>
             </div>
           </header>
           <div class="convo-advanced advanced-only">
@@ -3635,7 +4377,7 @@ INDEX_HTML = r"""<!doctype html>
             <button class="icon-ghost" id="imageButton" type="button" data-requires-account data-requires-permission="send" data-i18n-title="composer.image" title="Image" aria-label="Image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg></button>
             <textarea id="messageText" rows="1" data-requires-account data-requires-permission="send" data-i18n-ph="chat.message_ph" placeholder="Message"></textarea>
             <button class="icon-toggle" id="sendEncryptedButton" type="button" aria-pressed="false" data-requires-account data-requires-permission="send" data-i18n-title="chat.send_encrypted" title="Send encrypted" aria-label="Send encrypted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></button>
-            <button class="send-btn" id="sendButton" type="button" data-requires-account data-requires-permission="send" data-i18n-title="chat.send" title="Send" aria-label="Send"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4l17.4-8a1 1 0 0 0 0-1.8l-17.4-8A1 1 0 0 0 2 3.5L4 11l10 1-10 1-2 7.5a1 1 0 0 0 1.4 1z"/></svg></button>
+            <button class="send-btn with-label" id="sendButton" type="button" data-requires-account data-requires-permission="send" data-i18n-title="chat.send" title="Send"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4l17.4-8a1 1 0 0 0 0-1.8l-17.4-8A1 1 0 0 0 2 3.5L4 11l10 1-10 1-2 7.5a1 1 0 0 0 1.4 1z"/></svg><span data-i18n="chat.send">Send</span></button>
           </div>
         </section>
         <div class="line-guide-view hidden" id="lineGuideView">
@@ -3685,7 +4427,7 @@ INDEX_HTML = r"""<!doctype html>
           </div>
 
           <div class="tab-panel" data-tab-panel="assistant" id="tabPanelAssistant" role="tabpanel" aria-labelledby="tabAssistant">
-            <div class="tab-panel-inner assistant-panel-inner">
+            <div class="tab-panel-inner assistant-panel-inner" id="assistantPanelRoot">
               <div class="subtabs assistant-view-nav" role="tablist" aria-label="AI Chat Bot">
                 <button id="assistantAutoReplyViewButton" class="subtab active" type="button" role="tab" aria-selected="true" data-assistant-view-target="auto-reply" data-i18n="assistant.nav_auto_reply">LINE Auto Reply</button>
                 <button id="assistantChatViewButton" class="subtab" type="button" role="tab" aria-selected="false" data-assistant-view-target="chat" data-i18n="assistant.nav_chat">Chat</button>
@@ -3734,10 +4476,45 @@ INDEX_HTML = r"""<!doctype html>
               </div>
 
               <div id="assistantAutoReplyView" data-assistant-view="auto-reply">
+                <section class="ux-card hidden" id="assistantSetup">
+                  <div class="ux-row space">
+                    <div>
+                      <h2 style="margin:0" data-i18n="setup.title">Set up auto reply in 3 steps</h2>
+                      <span class="ux-muted" data-i18n="setup.subtitle">The switch turns on once all three are done.</span>
+                    </div>
+                    <button class="ux-help" type="button" data-assistant-help="true" data-i18n-title="common.help" title="Help">?</button>
+                  </div>
+                  <ol class="setup-steps" style="margin-top:12px">
+                    <li class="setup-step" id="setupStep1"><b>1</b><div class="ux-grid"><div><strong data-i18n="setup.step1">Choose the AI brain</strong><div class="ux-muted" data-i18n="setup.step1_hint">A Gemini API key is easiest. Ollama runs on your own computer.</div></div><div id="setupBrainSlot"></div></div></li>
+                    <li class="setup-step" id="setupStep2"><b>2</b><div class="ux-grid"><div><strong data-i18n="setup.step2">Add your shop info</strong><div class="ux-muted" data-i18n="setup.step2_hint">Opening hours, menu and prices, how to order and pay.</div></div><div><button id="setupOpenKnowledge" type="button" data-i18n="setup.open_knowledge">Open shop info</button></div></div></li>
+                    <li class="setup-step" id="setupStep3"><b>3</b><div class="ux-grid"><div><strong data-i18n="setup.step3">Try a conversation</strong><div class="ux-muted" data-i18n="setup.step3_hint">Ask what a customer would ask and check where the answer came from.</div></div><div><button id="setupOpenChat" type="button" data-i18n="setup.open_chat">Try it</button></div></div></li>
+                  </ol>
+                </section>
+                <section class="ux-card" id="assistantHero">
+                  <div class="hero-switch">
+                    <label class="switch"><input id="assistantHeroSwitch" type="checkbox" data-requires-account data-requires-permission="ask_ai" aria-labelledby="assistantHeroTitle"><span></span></label>
+                    <div style="flex:1 1 200px">
+                      <h2 id="assistantHeroTitle" data-i18n="hero.off">Auto reply is off</h2>
+                      <span class="ux-muted" id="assistantHeroStats"></span>
+                    </div>
+                    <span class="badge" id="assistantHeroBadge"></span>
+                    <button class="ux-help" type="button" data-assistant-help="true" data-i18n-title="common.help" title="Help">?</button>
+                  </div>
+                </section>
+                <div class="ux-grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin:12px 0">
+                  <section class="ux-card" style="margin:0">
+                    <div class="ux-row space"><h3 data-i18n="hero.brain_title">AI used to reply</h3><button id="heroBrainEdit" type="button" data-i18n="common.edit">Edit</button></div>
+                    <div class="ux-muted" id="heroBrainSummary">-</div>
+                  </section>
+                  <section class="ux-card" style="margin:0">
+                    <div class="ux-row space"><h3 data-i18n="hero.knowledge_title">Info the AI answers from</h3><button id="heroKnowledgeEdit" type="button" data-i18n="common.edit">Edit</button></div>
+                    <div class="ux-muted" id="heroKnowledgeSummary">-</div>
+                  </section>
+                </div>
                 <section class="section">
                   <div class="section-head">
                     <div>
-                      <h2 data-i18n="assistant.auto_reply_title">ตอบ LINE อัตโนมัติ</h2>
+                      <h2 data-i18n="assistant.auto_reply_title">Who gets replies</h2>
                       <span class="muted" data-i18n="assistant.auto_reply_hint">ทำงานบนเซิร์ฟเวอร์ตลอดเวลาแม้ปิดหน้าเว็บ โดยใช้ AI และ Knowledge / RAG ตอบเฉพาะข้อความใหม่</span>
                     </div>
                     <div class="row compact">
@@ -3754,7 +4531,7 @@ INDEX_HTML = r"""<!doctype html>
                       <span class="pill" id="assistantAutoReplyAiStatus" data-i18n="assistant.checking">กำลังตรวจสอบ</span>
                     </div>
                     <div class="assistant-auto-reply-settings">
-                      <label class="assistant-auto-reply-row">
+                      <label class="assistant-auto-reply-row hidden" id="assistantAutoReplyMasterRow">
                         <span class="assistant-auto-reply-copy">
                           <strong data-i18n="assistant.auto_reply_master">เปิดระบบตอบอัตโนมัติ</strong>
                           <span class="muted" data-i18n="assistant.auto_reply_master_hint">เมื่อปิด ระบบจะไม่อ่านข้อความเพื่อส่งคำตอบ AI</span>
@@ -3825,6 +4602,45 @@ INDEX_HTML = r"""<!doctype html>
               </div>
 
               <div id="assistantKnowledgeView" class="hidden" data-assistant-view="knowledge">
+                <div class="ux-row" style="margin-bottom:12px">
+                  <button id="kbBackButton" type="button" data-i18n="common.back">Back</button>
+                </div>
+                <div class="kb-split">
+                  <section class="ux-card" style="margin:0">
+                    <div class="ux-row space">
+                      <div>
+                        <h2 style="margin:0" data-i18n="kb.title">Shop info</h2>
+                        <span class="ux-muted" data-i18n="kb.subtitle">Shared by everyone who looks after this shop. Saving updates the AI automatically.</span>
+                      </div>
+                      <span class="badge" id="kbStatus"></span>
+                    </div>
+                    <div id="kbTopics" style="margin-top:12px"></div>
+                    <div class="ux-row" style="margin-top:10px">
+                      <button id="kbAddTopic" type="button" data-requires-permission="ask_ai" data-i18n="kb.add_topic">+ Add topic</button>
+                      <button id="kbStarter" type="button" data-requires-permission="ask_ai" data-i18n="kb.starter">Create starter info</button>
+                    </div>
+                    <div class="ux-row" style="margin-top:12px">
+                      <button id="kbSave" class="primary" type="button" data-requires-permission="ask_ai" data-i18n="common.save">Save</button>
+                      <span class="ux-muted" id="kbSaveState" aria-live="polite"></span>
+                    </div>
+                  </section>
+                  <section class="ux-card kb-chat" style="margin:0">
+                    <h3 data-i18n="kb.chat_title">Try a conversation</h3>
+                    <span class="ux-muted" data-i18n="kb.chat_hint">Ask like a customer. Every answer shows which topic it came from.</span>
+                    <div class="kb-chat-log" id="kbChatLog" role="log" aria-live="polite"></div>
+                    <form class="ux-grid" id="kbChatForm">
+                      <textarea id="kbChatInput" rows="2" maxlength="4000" data-requires-permission="ask_ai" data-i18n-ph="kb.chat_ph" placeholder="e.g. What time do you open?"></textarea>
+                      <button class="primary" type="submit" id="kbChatSend" data-requires-permission="ask_ai" data-i18n="kb.chat_send">Ask</button>
+                    </form>
+                  </section>
+                </div>
+                <section class="ux-card" id="kbUnansweredCard" style="margin-top:12px">
+                  <div class="ux-row space"><h3 data-i18n="kb.unanswered_title">Questions the AI couldn't answer</h3><span class="badge" id="kbUnansweredCount">0</span></div>
+                  <span class="ux-muted" data-i18n="kb.unanswered_hint">Type the answer once and it is added to your shop info.</span>
+                  <div id="kbUnansweredList"></div>
+                </section>
+                <details class="ux-advanced" id="kbLegacy" style="margin-top:12px">
+                  <summary data-i18n="kb.legacy_summary">Advanced: edit everything as text, connect a data API</summary>
                 <section class="section">
                   <div class="section-head">
                     <div>
@@ -3845,7 +4661,7 @@ INDEX_HTML = r"""<!doctype html>
                       <button id="assistantKnowledgeGenerateButton" type="button" data-requires-permission="ask_ai" data-i18n="assistant.knowledge_generate">Generate Knowledge / RAG</button>
                     </div>
                     <label>
-                      <span>knowledge.md</span>
+                      <span data-i18n="kb.full_text">All shop info as text</span>
                       <textarea id="assistantKnowledgeMarkdown" class="assistant-knowledge-editor" spellcheck="false" maxlength="750000" data-i18n-ph="assistant.knowledge_ph" placeholder="# Knowledge"></textarea>
                     </label>
                     <div class="row compact" style="margin-top:12px">
@@ -3858,7 +4674,7 @@ INDEX_HTML = r"""<!doctype html>
 
                 <section class="section">
                   <div class="section-head">
-                    <div><h2>Knowledge API</h2><span class="muted" data-i18n="assistant.api_hint">ดึงข้อมูลผ่าน GET รองรับ JSON path และ Bearer token</span></div>
+                    <div><h2 data-i18n="kb.api_title">Shop data API</h2><span class="muted" data-i18n="assistant.api_hint">ดึงข้อมูลผ่าน GET รองรับ JSON path และ Bearer token</span></div>
                   </div>
                   <div class="section-body">
                     <input id="assistantSourceId" type="hidden">
@@ -3880,9 +4696,11 @@ INDEX_HTML = r"""<!doctype html>
                   <div class="section-head"><h2 data-i18n="assistant.api_list">รายการ Knowledge API</h2><span class="pill" id="assistantSourceCount">0</span></div>
                   <div class="section-body assistant-source-list" id="assistantSourceList"></div>
                 </section>
+                </details>
               </div>
 
               <div id="assistantGuideView" class="hidden" data-assistant-view="guide">
+                <div class="ux-row" style="margin-bottom:12px"><button id="assistantGuideBackButton" type="button" data-i18n="common.back">Back</button></div>
                 <section class="section">
                   <div class="section-head">
                     <div class="usage-guide-intro">
@@ -4195,6 +5013,48 @@ INDEX_HTML = r"""<!doctype html>
             </div>
           </div>
 
+          <div class="tab-panel" data-tab-panel="kpi" id="tabPanelKpi" role="tabpanel" aria-labelledby="tabKpi">
+            <div class="tab-panel-inner ux-grid">
+              <div class="ux-row space">
+                <div>
+                  <h2 data-i18n="kpi.title">Staff response KPI</h2>
+                  <span class="ux-muted" data-i18n="kpi.subtitle">Customer chats only. Groups and scheduled sends are not counted.</span>
+                </div>
+                <div class="ux-row">
+                  <select id="kpiRange" aria-label="Range">
+                    <option value="today" data-i18n="kpi.range_today">Today</option>
+                    <option value="7d" data-i18n="kpi.range_7d">Last 7 days</option>
+                    <option value="30d" data-i18n="kpi.range_30d">Last 30 days</option>
+                    <option value="custom" data-i18n="kpi.range_custom">Custom</option>
+                  </select>
+                  <input id="kpiFrom" type="date" hidden aria-label="From">
+                  <input id="kpiTo" type="date" hidden aria-label="To">
+                  <button id="kpiCsvButton" type="button" data-i18n="kpi.csv">Download CSV</button>
+                  <button id="kpiSettingsButton" type="button" data-i18n="kpi.settings">KPI settings</button>
+                </div>
+              </div>
+              <div class="ux-warning hidden" id="kpiAwayAlert"></div>
+              <div class="kpi-tiles" id="kpiTiles"></div>
+              <section class="ux-card">
+                <h3 data-i18n="kpi.per_user">By staff member</h3>
+                <div style="overflow-x:auto"><table class="kpi-table" id="kpiTable"></table></div>
+              </section>
+              <section class="ux-card">
+                <div class="ux-row space"><h3 data-i18n="kpi.daily">First response time per day</h3><span class="kpi-legend" id="kpiChartLegend"></span></div>
+                <svg class="kpi-chart" id="kpiChart" role="img" aria-label="Daily first response"></svg>
+              </section>
+              <section class="ux-card" id="kpiPendingCard">
+                <h3 data-i18n="kpi.pending_title">Waiting for a reply now</h3>
+                <div id="kpiPendingList"></div>
+              </section>
+              <section class="ux-card">
+                <h3 data-i18n="kpi.presence_title">Screen time</h3>
+                <div class="kpi-legend" id="kpiPresenceLegend"></div>
+                <div class="kpi-timeline" id="kpiTimeline"></div>
+              </section>
+            </div>
+          </div>
+
           <div class="tab-panel" data-tab-panel="bot" id="tabPanelBot" role="tabpanel" aria-labelledby="tabBot">
             <div class="tab-panel-inner">
           <div class="bot-shell" id="botShell">
@@ -4206,6 +5066,17 @@ INDEX_HTML = r"""<!doctype html>
             <button type="button" id="botNavGuide" data-bot-page-target="guide" role="tab" aria-selected="false" data-i18n="bot.nav_guide">Usage guide</button>
           </div>
           <div id="botScheduler" class="bot-page" data-bot-page="schedules">
+          <div class="ux-row space">
+            <div>
+              <h2 style="margin:0" data-i18n="jobs.title">Scheduled sends</h2>
+              <span class="ux-muted" data-i18n="jobs.subtitle">Messages that go out by themselves at the time you choose.</span>
+            </div>
+            <div class="ux-row">
+              <button id="jobsNewButton" class="primary" type="button" data-requires-account data-requires-permission="schedule" data-i18n="jobs.new">+ New scheduled send</button>
+              <button class="ux-help" id="jobsHelpButton" type="button" data-i18n-title="common.help" title="Help">?</button>
+            </div>
+          </div>
+          <div id="jobErrorBanners" class="ux-grid"></div>
           <section class="section scheduler-list-panel">
             <div class="section-head scheduler-list-head">
               <h2 data-i18n="scheduler.title">Scheduler</h2>
@@ -4221,6 +5092,115 @@ INDEX_HTML = r"""<!doctype html>
               <div class="list schedule-list" id="schedulesList"></div>
             </div>
           </section>
+          </div>
+          <div id="botWizard" class="bot-page hidden" data-bot-page="wizard">
+            <div class="ux-row" style="margin-bottom:8px">
+              <button id="wizardBackButton" type="button" data-i18n="common.back">Back</button>
+              <h2 style="margin:0" id="wizardTitle" data-i18n="wizard.title_new">New scheduled send</h2>
+            </div>
+            <nav class="stepper" id="wizardStepper" aria-label="Steps">
+              <button type="button" data-wizard-step="1"><b>1</b><span data-i18n="wizard.step1">Who</span></button>
+              <button type="button" data-wizard-step="2"><b>2</b><span data-i18n="wizard.step2">What</span></button>
+              <button type="button" data-wizard-step="3"><b>3</b><span data-i18n="wizard.step3">When</span></button>
+            </nav>
+            <div class="wizard-layout">
+              <div class="ux-card" style="margin:0">
+                <div data-wizard-pane="1">
+                  <div class="target-picker">
+                    <div class="ux-row">
+                      <div class="subtabs" role="tablist" id="wizardTargetTabs">
+                        <button type="button" class="subtab active" data-wtab="people" role="tab" aria-selected="true" data-i18n="contacts.tab_people">Friends</button>
+                        <button type="button" class="subtab" data-wtab="groups" role="tab" aria-selected="false" data-i18n="contacts.tab_groups">Groups</button>
+                      </div>
+                      <input id="wizardTargetSearch" type="search" data-i18n-ph="contacts.search_ph" placeholder="Search…" style="flex:1 1 160px">
+                    </div>
+                    <div class="target-picker-list" id="wizardTargetList"></div>
+                  </div>
+                </div>
+                <div data-wizard-pane="2" hidden>
+                  <div class="choice-grid" id="wizardTypeCards">
+                    <button type="button" class="choice-card" data-wizard-type="text"><strong data-i18n="wizard.type_text">Text</strong><span data-i18n="wizard.type_text_hint">A message you type</span></button>
+                    <button type="button" class="choice-card" data-wizard-type="image"><strong data-i18n="wizard.type_image">Picture</strong><span data-i18n="wizard.type_image_hint">Upload or link a picture</span></button>
+                    <button type="button" class="choice-card" data-wizard-type="ai_image"><strong data-i18n="wizard.type_ai_image">AI picture</strong><span data-i18n="wizard.type_ai_image_hint">AI draws a new one each time</span></button>
+                    <button type="button" class="choice-card" data-wizard-type="api"><strong data-i18n="wizard.type_api">From a data API</strong><span data-i18n="wizard.type_api_hint">Send what your system returns</span></button>
+                  </div>
+                  <div class="ux-grid" style="margin-top:14px" data-wizard-fields="text">
+                    <label><span data-i18n="wizard.message">Message</span><textarea id="wizardText" rows="4" maxlength="20000"></textarea></label>
+                    <div class="ph-chips" id="wizardVarChips"></div>
+                    <div id="wizardExtraMessages" class="ux-grid"></div>
+                    <div><button id="wizardAddExtra" type="button" data-i18n="wizard.add_extra">+ Add message version 2</button></div>
+                    <span class="ux-muted" data-i18n="wizard.extra_hint">With 2 or more versions, one is picked at random each time so customers don't see the same text.</span>
+                  </div>
+                  <div class="ux-grid" style="margin-top:14px" data-wizard-fields="image" hidden>
+                    <div class="ux-row"><input type="file" id="wizardImageFile" accept="image/*" hidden><button id="wizardImageUpload" type="button" data-i18n="scheduler.upload_image">Upload image…</button><span class="ux-muted" id="wizardImageName"></span></div>
+                    <label><span data-i18n="wizard.image_url">…or picture link</span><input id="wizardImageUrl" type="url" placeholder="https://"></label>
+                  </div>
+                  <div class="ux-grid" style="margin-top:14px" data-wizard-fields="ai_image" hidden>
+                    <label><span data-i18n="scheduler.lbl_ai_prompt">AI image prompt</span><textarea id="wizardAiPrompt" rows="3" maxlength="20000"></textarea></label>
+                    <span class="ux-muted" data-i18n="wizard.ai_key_hint">Uses the picture AI from Settings → AI.</span>
+                  </div>
+                  <div class="ux-grid" style="margin-top:14px" data-wizard-fields="api" hidden>
+                    <div class="two grid">
+                      <label><span data-i18n="scheduler.lbl_api_method">Method</span><select id="wizardApiMethod"><option value="GET">GET</option><option value="POST">POST</option></select></label>
+                      <label><span>API URL</span><input id="wizardApiUrl" type="url" placeholder="https://"></label>
+                    </div>
+                    <label><span data-i18n="scheduler.lbl_api_body">POST body (JSON)</span><textarea id="wizardApiBody" rows="3"></textarea></label>
+                  </div>
+                </div>
+                <div data-wizard-pane="3" hidden>
+                  <div class="choice-grid" id="wizardFreqCards">
+                    <button type="button" class="choice-card" data-wizard-freq="once"><strong data-i18n="wizard.freq_once">Once</strong><span data-i18n="wizard.freq_once_hint">On one date</span></button>
+                    <button type="button" class="choice-card" data-wizard-freq="daily"><strong data-i18n="wizard.freq_daily">Every day</strong><span data-i18n="wizard.freq_daily_hint">Same time daily</span></button>
+                    <button type="button" class="choice-card" data-wizard-freq="weekly"><strong data-i18n="wizard.freq_weekly">Every week</strong><span data-i18n="wizard.freq_weekly_hint">On the days you pick</span></button>
+                    <button type="button" class="choice-card" data-wizard-freq="custom"><strong data-i18n="wizard.freq_custom">Custom</strong><span data-i18n="wizard.freq_custom_hint">Repeat within a time window</span></button>
+                  </div>
+                  <div class="ux-grid" style="margin-top:14px">
+                    <label data-wizard-when="once"><span data-i18n="wizard.date">Date</span><input id="wizardDate" type="date"></label>
+                    <div data-wizard-when="weekly custom"><span class="ux-muted" data-i18n="wizard.days">Days</span><div class="day-picker" id="wizardDays"></div></div>
+                    <label data-wizard-when="once daily weekly"><span data-i18n="wizard.time">Time</span><input id="wizardTime" type="time" value="09:00"></label>
+                    <div class="two grid" data-wizard-when="custom">
+                      <label><span data-i18n="scheduler.window_start">From</span><input id="wizardWindowStart" type="time" value="09:00"></label>
+                      <label><span data-i18n="scheduler.window_end">Until</span><input id="wizardWindowEnd" type="time" value="18:00"></label>
+                    </div>
+                    <details class="ux-advanced" data-wizard-when="daily weekly custom" id="wizardRangeDetails">
+                      <summary data-i18n="wizard.date_range">Only between certain dates</summary>
+                      <div class="two grid">
+                        <label><span data-i18n="scheduler.active_from">Start date</span><input id="wizardActiveFrom" type="date"></label>
+                        <label><span data-i18n="scheduler.active_until">End date</span><input id="wizardActiveUntil" type="date"></label>
+                      </div>
+                    </details>
+                    <details class="ux-advanced" id="wizardAdvanced">
+                      <summary data-i18n="wizard.advanced">Advanced options</summary>
+                      <div class="ux-grid">
+                        <div class="ux-warning" data-i18n="wizard.ban_warning">Sending often or to many chats can get a personal LINE account suspended. Keep repeats to a few times a day.</div>
+                        <div class="two grid">
+                          <label data-wizard-when="custom"><span data-i18n="wizard.every_minutes">Send every (minutes)</span><input id="wizardInterval" type="number" min="1" max="1440" value="60"></label>
+                          <label data-wizard-when="daily weekly custom"><span data-i18n="wizard.max_runs">Stop after this many sends (blank = no limit)</span><input id="wizardMaxRuns" type="number" min="1" placeholder="∞"></label>
+                        </div>
+                        <label class="checkbox-row"><input id="wizardEncrypt" type="checkbox"><span data-i18n="wizard.encrypt">Encrypt (text only)</span></label>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+                <div class="ux-row space" style="margin-top:16px">
+                  <button id="wizardPrev" type="button" data-i18n="wizard.prev">Back</button>
+                  <div class="ux-row">
+                    <button id="wizardTest" type="button" data-requires-account data-requires-permission="send" data-i18n="wizard.test">Send a test to myself</button>
+                    <button id="wizardNext" class="primary" type="button" data-i18n="wizard.next">Next</button>
+                    <button id="wizardSave" class="primary hidden" type="button" data-requires-account data-requires-permission="schedule" data-i18n="wizard.save">Save and turn on</button>
+                  </div>
+                </div>
+              </div>
+              <div class="ux-card wizard-summary" style="margin:0">
+                <h3 data-i18n="wizard.summary">Summary</h3>
+                <dl>
+                  <dt data-i18n="wizard.sum_to">To</dt><dd id="wizardSumTo">-</dd>
+                  <dt data-i18n="wizard.sum_what">Message</dt><dd><div class="msg-preview" id="wizardSumWhat">-</div></dd>
+                  <dt data-i18n="wizard.sum_when">When</dt><dd id="wizardSumWhen">-</dd>
+                  <dt data-i18n="wizard.sum_name">Name</dt><dd><input id="wizardName" maxlength="120"></dd>
+                </dl>
+              </div>
+            </div>
           </div>
           <div id="botScheduleEditor" class="bot-page hidden" data-bot-page="schedule">
           <section class="section">
@@ -4831,7 +5811,7 @@ INDEX_HTML = r"""<!doctype html>
     // Each key holds { th, en }.  t(key) resolves for the current language;
     // missing keys fall back to English, then to the key itself.
     const I18N = {
-      "proxy.scheme": {th: "\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17 Proxy", en: "Proxy type"},
+      "proxy.scheme": {th: "\u0e1b\u0e23\u0e30\u0e40\u0e20\u0e17 พร็อกซี", en: "Proxy type"},
       "proxy.host": {th: "Host", en: "Host"},
       "proxy.port": {th: "Port", en: "Port"},
       "proxy.username": {th: "Username", en: "Username"},
@@ -4858,39 +5838,39 @@ INDEX_HTML = r"""<!doctype html>
       "content.extimage": {th: "[\u0e23\u0e39\u0e1b\u0e20\u0e32\u0e1e]", en: "[image]"},
       "content.flex": {th: "[Flex message]", en: "[Flex message]"},
       "common.you": {th: "คุณ", en: "You"},
-      "tabs.assistant": {th: "AI Chat Bot", en: "AI Chat Bot"},
+      "tabs.assistant": {th: "ตอบอัตโนมัติ", en: "AI Chat Bot"},
       "bot.nav_ai_settings": {th: "ตั้งค่า AI", en: "AI Settings"},
       "assistant.title": {th: "ถาม LinePassport AI", en: "Ask LinePassport AI"},
-      "assistant.subtitle": {th: "คำตอบอ้างอิงจาก Knowledge ส่วนกลางและ Knowledge / RAG ของคุณ", en: "Answers use global knowledge and your private Knowledge / RAG."},
+      "assistant.subtitle": {th: "คำตอบอ้างอิงจาก ข้อมูลส่วนกลางและ ข้อมูลร้านของคุณ", en: "Answers use global knowledge and your private Knowledge / RAG."},
       "assistant.checking": {th: "กำลังตรวจสอบ", en: "Checking"},
       "assistant.loading": {th: "กำลังโหลดคำถาม...", en: "Loading questions..."},
       "assistant.question_label": {th: "คำถาม", en: "Question"},
-      "assistant.question_ph": {th: "ถามจากข้อมูล Knowledge ที่มีอยู่", en: "Ask about the available knowledge"},
+      "assistant.question_ph": {th: "ถามจากข้อมูล ข้อมูลร้าน ที่มีอยู่", en: "Ask about the available knowledge"},
       "assistant.ask": {th: "ถาม AI", en: "Ask AI"},
       "assistant.unanswered_title": {th: "คำถามที่ AI ตอบไม่ได้", en: "Questions AI could not answer"},
-      "assistant.unanswered_hint": {th: "คำตอบที่อนุมัติจะถูกเพิ่มเข้า Knowledge ของเจ้าของคำถาม", en: "Approved answers are added to the question owner's knowledge."},
+      "assistant.unanswered_hint": {th: "คำตอบที่อนุมัติจะถูกเพิ่มเข้า ข้อมูลร้าน ของเจ้าของคำถาม", en: "Approved answers are added to the question owner's knowledge."},
       "assistant.empty": {th: "ยังไม่มีคำถาม", en: "No questions yet."},
       "assistant.pending": {th: "AI ตอบไม่ได้ และส่งให้ผู้ดูแลตรวจสอบแล้ว", en: "AI could not answer; sent for review."},
       "assistant.no_unanswered": {th: "ไม่มีคำถามค้างตอบ", en: "No unanswered questions."},
       "assistant.answer_ph": {th: "พิมพ์คำตอบที่อนุมัติให้ AI ใช้ต่อไป", en: "Write an approved answer for the AI knowledge base."},
       "assistant.approve": {th: "บันทึกคำตอบ", en: "Save answer"},
       "assistant.answer_required": {th: "กรุณากรอกคำตอบ", en: "Answer is required."},
-      "assistant.answer_saved": {th: "บันทึกคำตอบและเพิ่มเข้า Knowledge แล้ว", en: "Answer saved to Knowledge."},
+      "assistant.answer_saved": {th: "บันทึกคำตอบและเพิ่มเข้า ข้อมูลร้าน แล้ว", en: "Answer saved to Knowledge."},
       "assistant.ready": {th: "พร้อมใช้งาน", en: "Ready"},
       "assistant.not_configured": {th: "ยังไม่ได้ตั้งค่า", en: "Not configured"},
       "assistant.asking": {th: "กำลังถาม Ollama...", en: "Asking Ollama..."},
       "assistant.nav_chat": {th: "แชท", en: "Chat"},
-      "assistant.nav_auto_reply": {th: "ตอบ LINE อัตโนมัติ", en: "LINE Auto Reply"},
-      "assistant.nav_knowledge": {th: "Knowledge / RAG", en: "Knowledge / RAG"},
+      "assistant.nav_auto_reply": {th: "ตอบอัตโนมัติ", en: "LINE Auto Reply"},
+      "assistant.nav_knowledge": {th: "ข้อมูลร้าน", en: "Knowledge / RAG"},
       "assistant.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
-      "assistant.auto_reply_title": {th: "ตอบ LINE อัตโนมัติ", en: "Automatic LINE replies"},
-      "assistant.auto_reply_hint": {th: "ทำงานบนเซิร์ฟเวอร์ตลอดเวลาแม้ปิดหน้าเว็บ โดยใช้ AI และ Knowledge / RAG ตอบเฉพาะข้อความใหม่", en: "Runs continuously on the server even when the web page is closed, using AI and Knowledge / RAG for new messages."},
+      "assistant.auto_reply_title": {th: "ตอบอัตโนมัติ", en: "Automatic LINE replies"},
+      "assistant.auto_reply_hint": {th: "ทำงานบนเซิร์ฟเวอร์ตลอดเวลาแม้ปิดหน้าเว็บ โดยใช้ AI และ ข้อมูลร้าน ตอบเฉพาะข้อความใหม่", en: "Runs continuously on the server even when the web page is closed, using AI and Knowledge / RAG for new messages."},
       "assistant.auto_reply_account": {th: "บัญชี LINE", en: "LINE account"},
       "assistant.auto_reply_master": {th: "เปิดระบบตอบอัตโนมัติ", en: "Enable automatic replies"},
       "assistant.auto_reply_master_hint": {th: "เมื่อปิด ระบบจะไม่อ่านข้อความเพื่อส่งคำตอบ AI", en: "When off, incoming messages are not processed for AI replies."},
-      "assistant.auto_reply_contacts": {th: "Contact", en: "Contacts"},
+      "assistant.auto_reply_contacts": {th: "เพื่อน", en: "Contacts"},
       "assistant.auto_reply_contacts_hint": {th: "ตอบข้อความส่วนตัวจากรายชื่อผู้ติดต่อ", en: "Reply to direct messages from contacts."},
-      "assistant.auto_reply_groups": {th: "Group", en: "Groups"},
+      "assistant.auto_reply_groups": {th: "กลุ่ม", en: "Groups"},
       "assistant.auto_reply_groups_hint": {th: "ตอบข้อความใหม่ภายในกลุ่ม LINE", en: "Reply to new messages in LINE groups."},
       "assistant.auto_reply_group_scope": {th: "กลุ่มที่อนุญาตให้ AI ตอบ", en: "Groups AI may reply to"},
       "assistant.auto_reply_group_scope_hint": {th: "เลือกตอบทุกกลุ่ม หรือจำกัดเฉพาะกลุ่มที่กำหนด", en: "Reply in every group or limit replies to selected groups."},
@@ -4912,7 +5892,7 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.auto_reply_off": {th: "ปิด", en: "Off"},
       "assistant.auto_reply_starting": {th: "กำลังเริ่ม", en: "Starting"},
       "assistant.auto_reply_running": {th: "กำลังทำงาน", en: "Running"},
-      "assistant.auto_reply_idle": {th: "รอเปิด Contact หรือ Group", en: "Waiting for Contacts or Groups"},
+      "assistant.auto_reply_idle": {th: "รอเปิด เพื่อน หรือ กลุ่ม", en: "Waiting for Contacts or Groups"},
       "assistant.auto_reply_error_state": {th: "ทำงานผิดพลาด", en: "Error"},
       "assistant.auto_reply_login_required": {th: "รอเชื่อมต่อ LINE ใหม่", en: "Waiting for LINE reconnect"},
       "assistant.auto_reply_ai_ready": {th: "AI พร้อม", en: "AI ready"},
@@ -4920,79 +5900,79 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.auto_reply_last_poll": {th: "ตรวจข้อความล่าสุด", en: "Last checked"},
       "assistant.auto_reply_last_reply": {th: "ตอบล่าสุด", en: "Last reply"},
       "assistant.auto_reply_error": {th: "ข้อผิดพลาด", en: "Error"},
-      "assistant.auto_reply_saved": {th: "บันทึกการตั้งค่าตอบ LINE อัตโนมัติแล้ว", en: "Automatic LINE reply settings saved."},
-      "assistant.guide_title": {th: "เริ่มใช้งาน AI Chat Bot", en: "Get started with AI Chat Bot"},
-      "assistant.guide_subtitle": {th: "ตั้งค่า Knowledge ทดสอบคำตอบ และเปิดตอบ LINE อัตโนมัติอย่างเป็นขั้นตอน", en: "Set up knowledge, test answers, and enable automatic LINE replies step by step."},
+      "assistant.auto_reply_saved": {th: "บันทึกการตั้งค่าตอบอัตโนมัติแล้ว", en: "Automatic LINE reply settings saved."},
+      "assistant.guide_title": {th: "เริ่มใช้งาน ตอบอัตโนมัติ", en: "Get started with AI Chat Bot"},
+      "assistant.guide_subtitle": {th: "ตั้งค่า ข้อมูลร้าน ทดสอบคำตอบ และเปิดตอบอัตโนมัติอย่างเป็นขั้นตอน", en: "Set up knowledge, test answers, and enable automatic LINE replies step by step."},
       "assistant.guide_step_1_title": {th: "ตรวจสอบว่า AI พร้อมใช้งาน", en: "Check that AI is ready"},
-      "assistant.guide_step_1_body": {th: "สถานะในหน้าแชทต้องเป็น “พร้อมใช้งาน” หากยังไม่ได้ตั้งค่า ให้ God เปิด Ollama และเลือกโมเดลที่หน้า /god", en: "The Chat page must show Ready. If it is not configured, ask God to enable Ollama and select a model at /god."},
-      "assistant.guide_step_2_title": {th: "เพิ่ม Knowledge / RAG ของคุณ", en: "Add your Knowledge / RAG"},
-      "assistant.guide_step_2_body": {th: "กด “Generate Knowledge / RAG” เพื่อสร้างคำทักทายและแนวทางตอบคำถามทั่วไป ตรวจแก้ฉบับร่าง แล้วกด “บันทึกและสร้างดัชนี” ข้อมูลส่วนนี้แยกตามผู้ใช้", en: "Select Generate Knowledge / RAG to draft greetings and general-question guidance. Review the draft, then select Save and index. This data is isolated per user."},
-      "assistant.guide_step_3_title": {th: "เชื่อม Knowledge API เมื่อต้องการ", en: "Connect a Knowledge API when needed"},
-      "assistant.guide_step_3_body": {th: "เพิ่ม URL แบบ GET ระบุ JSON path และ Bearer token ได้ จากนั้นกด “ดึงข้อมูล” เพื่ออัปเดตและสร้างดัชนี", en: "Add a GET URL with an optional JSON path and Bearer token, then select Sync to update and index the data."},
+      "assistant.guide_step_1_body": {th: "สถานะในหน้าแชทต้องเป็น “พร้อมใช้งาน” หากยังไม่ได้ตั้งค่า ให้ ผู้ดูแลระบบ เปิด Ollama และเลือกโมเดลที่หน้า /god", en: "The Chat page must show Ready. If it is not configured, ask God to enable Ollama and select a model at /god."},
+      "assistant.guide_step_2_title": {th: "เพิ่ม ข้อมูลร้านของคุณ", en: "Add your Knowledge / RAG"},
+      "assistant.guide_step_2_body": {th: "กด “สร้างข้อมูลเริ่มต้น” เพื่อสร้างคำทักทายและแนวทางตอบคำถามทั่วไป ตรวจแก้ฉบับร่าง แล้วกด “บันทึก” ข้อมูลส่วนนี้แยกตามผู้ใช้", en: "Select Generate Knowledge / RAG to draft greetings and general-question guidance. Review the draft, then select Save and index. This data is isolated per user."},
+      "assistant.guide_step_3_title": {th: "เชื่อม API ข้อมูลร้าน เมื่อต้องการ", en: "Connect a Knowledge API when needed"},
+      "assistant.guide_step_3_body": {th: "เพิ่ม URL แบบ GET ระบุ JSON path และ Bearer token ได้ จากนั้นกด “ดึงข้อมูล” เพื่ออัปเดตและอัปเดต AI", en: "Add a GET URL with an optional JSON path and Bearer token, then select Sync to update and index the data."},
       "assistant.guide_step_4_title": {th: "ถามให้ชัดเจนแล้วตรวจแหล่งข้อมูล", en: "Ask clearly and review the sources"},
-      "assistant.guide_step_4_body": {th: "ถามคำถามที่เกี่ยวข้องกับ Knowledge ระบบจะแสดงคำตอบพร้อมแหล่งข้อมูล หากตอบไม่ได้ คำถามจะถูกส่งให้ Admin ตรวจสอบ", en: "Ask a question related to the knowledge. The answer includes its sources; unanswered questions are sent to an admin for review."},
-      "assistant.guide_step_5_title": {th: "ทดสอบก่อนเปิดตอบ LINE อัตโนมัติ", en: "Test before enabling automatic LINE replies"},
-      "assistant.guide_step_5_body": {th: "ถามคำถามตัวอย่างในหน้าแชทหลายแบบจนคำตอบถูกต้อง แล้วไปที่ “ตอบ LINE อัตโนมัติ” เปิดสวิตช์หลัก เลือกว่าจะตอบ Contact หรือ Group และกำหนดได้ว่าจะตอบทุกกลุ่มหรือเฉพาะกลุ่มที่เลือก", en: "Test several realistic questions in Chat until the answers are correct. Then open LINE Auto Reply, enable the main switch, choose Contacts or Groups, and decide whether to reply in all groups or selected groups only."},
-      "assistant.guide_step_6_title": {th: "ติดตามคำตอบและปรับ Knowledge", en: "Monitor replies and improve knowledge"},
-      "assistant.guide_step_6_body": {th: "ดูเวลาตรวจข้อความและเวลาตอบล่าสุด หากไม่ตอบให้เปิด Log หมวด AI ส่วนคำถามที่ AI ตอบไม่ได้จะถูกส่งให้ Admin หรือ God เติมคำตอบกลับเข้า Knowledge", en: "Review the last check and last reply times. If no reply is sent, open the AI logs. Questions the AI cannot answer are queued for an Admin or God to add an approved answer to knowledge."},
-      "assistant.guide_open_knowledge": {th: "ไปที่ Knowledge / RAG", en: "Open Knowledge / RAG"},
+      "assistant.guide_step_4_body": {th: "ถามคำถามที่เกี่ยวข้องกับ ข้อมูลร้าน ระบบจะแสดงคำตอบพร้อมแหล่งข้อมูล หากตอบไม่ได้ คำถามจะถูกส่งให้ ผู้ดูแล ตรวจสอบ", en: "Ask a question related to the knowledge. The answer includes its sources; unanswered questions are sent to an admin for review."},
+      "assistant.guide_step_5_title": {th: "ทดสอบก่อนเปิดตอบอัตโนมัติ", en: "Test before enabling automatic LINE replies"},
+      "assistant.guide_step_5_body": {th: "ถามคำถามตัวอย่างในหน้าแชทหลายแบบจนคำตอบถูกต้อง แล้วไปที่ “ตอบอัตโนมัติ” เปิดสวิตช์หลัก เลือกว่าจะตอบ เพื่อน หรือ กลุ่ม และกำหนดได้ว่าจะตอบทุกกลุ่มหรือเฉพาะกลุ่มที่เลือก", en: "Test several realistic questions in Chat until the answers are correct. Then open LINE Auto Reply, enable the main switch, choose Contacts or Groups, and decide whether to reply in all groups or selected groups only."},
+      "assistant.guide_step_6_title": {th: "ติดตามคำตอบและปรับ ข้อมูลร้าน", en: "Monitor replies and improve knowledge"},
+      "assistant.guide_step_6_body": {th: "ดูเวลาตรวจข้อความและเวลาตอบล่าสุด หากไม่ตอบให้เปิด บันทึกการทำงาน หมวด AI ส่วนคำถามที่ AI ตอบไม่ได้จะถูกส่งให้ ผู้ดูแล เติมคำตอบกลับเข้า ข้อมูลร้าน", en: "Review the last check and last reply times. If no reply is sent, open the AI logs. Questions the AI cannot answer are queued for an Admin or God to add an approved answer to knowledge."},
+      "assistant.guide_open_knowledge": {th: "ไปที่ ข้อมูลร้าน", en: "Open Knowledge / RAG"},
       "assistant.guide_open_chat": {th: "เริ่มถาม AI", en: "Start asking AI"},
-      "assistant.guide_open_auto_reply": {th: "ตั้งค่าตอบ LINE อัตโนมัติ", en: "Configure LINE Auto Reply"},
-      "assistant.guide_open_logs": {th: "เปิด Log", en: "Open logs"},
-      "assistant.guide_example_title": {th: "ตัวอย่าง knowledge.md", en: "knowledge.md example"},
+      "assistant.guide_open_auto_reply": {th: "ตั้งค่าตอบอัตโนมัติ", en: "Configure LINE Auto Reply"},
+      "assistant.guide_open_logs": {th: "เปิด บันทึกการทำงาน", en: "Open logs"},
+      "assistant.guide_example_title": {th: "ตัวอย่าง ข้อมูลร้าน", en: "knowledge.md example"},
       "assistant.guide_example_hint": {th: "เขียนหัวข้อและข้อมูลให้ตรงไปตรงมา เพื่อให้ค้นหาได้แม่นยำ", en: "Use direct headings and facts so retrieval stays accurate."},
       "assistant.guide_example": {th: "# ข้อมูลร้าน\n\n- เปิดทุกวัน 09:00-20:00 น.\n- ส่งฟรีเมื่อยอดสั่งซื้อครบ 500 บาท\n- เปลี่ยนสินค้าได้ภายใน 7 วัน พร้อมใบเสร็จ", en: "# Store information\n\n- Open daily from 09:00 to 20:00\n- Free delivery for orders of 500 THB or more\n- Returns accepted within 7 days with a receipt"},
-      "assistant.guide_knowledge_rules_title": {th: "เขียน Knowledge ให้ AI ตอบง่าย", en: "Write knowledge the AI can use easily"},
+      "assistant.guide_knowledge_rules_title": {th: "เขียน ข้อมูลร้าน ให้ AI ตอบง่าย", en: "Write knowledge the AI can use easily"},
       "assistant.guide_knowledge_specific_title": {th: "แยกหัวข้อและเขียนข้อเท็จจริงสั้น ๆ", en: "Use sections and short facts"},
       "assistant.guide_knowledge_specific_body": {th: "ใช้หัวข้อ เช่น เวลาเปิดบริการ, ราคา, วิธีจัดส่ง แล้วเขียนหนึ่งข้อเท็จจริงต่อหนึ่งบรรทัด หลีกเลี่ยงย่อหน้ายาวที่รวมหลายเรื่อง", en: "Use headings such as Opening hours, Prices, and Delivery, then put one fact on each line. Avoid long paragraphs that mix unrelated subjects."},
       "assistant.guide_knowledge_variants_title": {th: "ใส่คำที่ลูกค้าใช้จริง", en: "Include words customers actually use"},
       "assistant.guide_knowledge_variants_body": {th: "ถ้าลูกค้าอาจถามว่า “เปิดกี่โมง”, “ร้านปิดตอนไหน” หรือ “เวลาทำการ” ให้มีคำเหล่านี้อยู่ใกล้ข้อมูลเวลาเพื่อช่วยค้นหา", en: "If customers may ask 'what time do you open,' 'when do you close,' or 'business hours,' keep those phrases near the hours so retrieval can find them."},
-      "assistant.guide_knowledge_reindex_title": {th: "บันทึกและสร้างดัชนีทุกครั้ง", en: "Save and index after every change"},
-      "assistant.guide_knowledge_reindex_body": {th: "การแก้ข้อความอย่างเดียวไม่ทำให้ AI เห็นข้อมูลใหม่ ต้องกด “บันทึกและสร้างดัชนี” หรือ “ดึงข้อมูล” ของ Knowledge API ให้เสร็จก่อนทดสอบ", en: "Editing text alone does not update the AI. Finish Save and index or sync the Knowledge API before testing the new information."},
+      "assistant.guide_knowledge_reindex_title": {th: "บันทึกทุกครั้ง", en: "Save and index after every change"},
+      "assistant.guide_knowledge_reindex_body": {th: "การแก้ข้อความอย่างเดียวไม่ทำให้ AI เห็นข้อมูลใหม่ ต้องกด “บันทึก” หรือ “ดึงข้อมูล” ของ API ข้อมูลร้าน ให้เสร็จก่อนทดสอบ", en: "Editing text alone does not update the AI. Finish Save and index or sync the Knowledge API before testing the new information."},
       "assistant.guide_notes_title": {th: "ข้อควรรู้", en: "Good to know"},
-      "assistant.guide_private_title": {th: "Knowledge เป็นส่วนตัว", en: "Knowledge is private"},
-      "assistant.guide_private_body": {th: "Knowledge และประวัติคำถามของคุณแยกจากผู้ใช้อื่นในระบบ", en: "Your knowledge and question history are isolated from other users."},
+      "assistant.guide_private_title": {th: "ข้อมูลร้าน เป็นส่วนตัว", en: "Knowledge is private"},
+      "assistant.guide_private_body": {th: "ข้อมูลร้าน และประวัติคำถามของคุณแยกจากผู้ใช้อื่นในระบบ", en: "Your knowledge and question history are isolated from other users."},
       "assistant.guide_unanswered_title": {th: "เมื่อ AI ตอบไม่ได้", en: "When AI cannot answer"},
-      "assistant.guide_unanswered_body": {th: "Admin สามารถตอบคำถามค้างได้ และคำตอบที่อนุมัติจะถูกเพิ่มกลับเข้า Knowledge ของเจ้าของคำถาม", en: "An admin can resolve the question, and the approved answer is added to the question owner's knowledge."},
+      "assistant.guide_unanswered_body": {th: "ผู้ดูแล สามารถตอบคำถามค้างได้ และคำตอบที่อนุมัติจะถูกเพิ่มกลับเข้า ข้อมูลร้าน ของเจ้าของคำถาม", en: "An admin can resolve the question, and the approved answer is added to the question owner's knowledge."},
       "assistant.guide_refresh_title": {th: "เมื่อข้อมูลเปลี่ยน", en: "When information changes"},
-      "assistant.guide_refresh_body": {th: "บันทึก knowledge.md ใหม่ หรือกด “ดึงข้อมูล” ที่ Knowledge API เพื่อสร้างดัชนีล่าสุดก่อนถามอีกครั้ง", en: "Save knowledge.md again or sync the Knowledge API to rebuild the latest index before asking again."},
+      "assistant.guide_refresh_body": {th: "บันทึก ข้อมูลร้าน ใหม่ หรือกด “ดึงข้อมูล” ที่ API ข้อมูลร้าน เพื่ออัปเดต AIล่าสุดก่อนถามอีกครั้ง", en: "Save knowledge.md again or sync the Knowledge API to rebuild the latest index before asking again."},
       "assistant.guide_background_title": {th: "ตอบอัตโนมัติทำงานบนเซิร์ฟเวอร์", en: "Auto reply runs on the server"},
       "assistant.guide_background_body": {th: "หลังเปิดสวิตช์แล้วสามารถปิดหน้าเว็บได้ แต่โปรแกรม LinePassport, Ollama และเซสชัน LINE ต้องยังทำงานอยู่บนเซิร์ฟเวอร์", en: "You may close the web page after enabling it, but LinePassport, Ollama, and the LINE session must keep running on the server."},
       "assistant.guide_new_messages_title": {th: "ตอบเฉพาะข้อความใหม่", en: "Only new messages are answered"},
       "assistant.guide_new_messages_body": {th: "ระบบสร้างจุดเริ่มต้นเมื่อเปิดใช้งานและไม่ย้อนตอบข้อความเก่า รองรับข้อความตัวอักษรที่เข้ามาหลังจากเปิดระบบ และมีการจำกัดความถี่เพื่อป้องกันการตอบวนหรือ Flood", en: "The system establishes a baseline when enabled and does not reply to old messages. It processes new text messages and rate-limits replies to prevent loops or flooding."},
       "assistant.guide_error_title": {th: "เมื่อไม่ตอบ LINE", en: "When LINE receives no reply"},
-      "assistant.guide_error_body": {th: "ตรวจว่าสวิตช์หลักและ Contact/Group เปิดอยู่ สถานะ AI ขึ้นพร้อมใช้งาน เวลา “ตรวจข้อความล่าสุด” เดินต่อ และไม่มี error ในหน้า Log หมวด AI", en: "Check that the main switch and Contacts/Groups are enabled, AI shows Ready, Last checked keeps updating, and no error appears in the AI logs."},
-      "assistant.knowledge_title": {th: "Knowledge / RAG ของฉัน", en: "My Knowledge / RAG"},
+      "assistant.guide_error_body": {th: "ตรวจว่าสวิตช์หลักและ เพื่อน/กลุ่ม เปิดอยู่ สถานะ AI ขึ้นพร้อมใช้งาน เวลา “ตรวจข้อความล่าสุด” เดินต่อ และไม่มี error ในหน้า บันทึกการทำงาน หมวด AI", en: "Check that the main switch and Contacts/Groups are enabled, AI shows Ready, Last checked keeps updating, and no error appears in the AI logs."},
+      "assistant.knowledge_title": {th: "ข้อมูลร้าน", en: "My Knowledge / RAG"},
       "assistant.knowledge_hint": {th: "ข้อมูลนี้เป็นของบัญชีผู้ใช้คุณและไม่แชร์กับสมาชิกคนอื่น", en: "This knowledge belongs to your user account and is not shared with other members."},
-      "assistant.knowledge_generate_title": {th: "Knowledge เริ่มต้น", en: "Starter knowledge"},
+      "assistant.knowledge_generate_title": {th: "ข้อมูลเริ่มต้น", en: "Starter knowledge"},
       "assistant.knowledge_generate_hint": {th: "สร้างแนวทางตอบคำทักทาย ขอบคุณ ลาก่อน และคำถามทั่วไป โดยไม่เดาข้อมูลธุรกิจ", en: "Draft guidance for greetings, thanks, farewells, and general questions without inventing business facts."},
-      "assistant.knowledge_generate": {th: "Generate Knowledge / RAG", en: "Generate Knowledge / RAG"},
-      "assistant.knowledge_generated": {th: "สร้างฉบับร่างแล้ว ตรวจแก้และกดบันทึกและสร้างดัชนี", en: "Draft created. Review it, then select Save and index."},
-      "assistant.knowledge_already_generated": {th: "มี Knowledge สำหรับคำทักทายและคำถามทั่วไปอยู่แล้ว", en: "Starter knowledge for greetings and general questions already exists."},
-      "assistant.knowledge_ph": {th: "# Knowledge\n\nใส่ข้อมูลที่ต้องการให้ AI ใช้ตอบคำถาม", en: "# Knowledge\n\nAdd information for the AI to use when answering."},
-      "assistant.knowledge_save": {th: "บันทึกและสร้างดัชนี", en: "Save and index"},
-      "assistant.knowledge_reindex": {th: "สร้างดัชนีใหม่", en: "Reindex"},
-      "assistant.knowledge_saved": {th: "บันทึก Knowledge และสร้างดัชนีแล้ว", en: "Knowledge saved and indexed."},
+      "assistant.knowledge_generate": {th: "สร้างข้อมูลเริ่มต้น", en: "Generate Knowledge / RAG"},
+      "assistant.knowledge_generated": {th: "สร้างฉบับร่างแล้ว ตรวจแก้และกดบันทึก", en: "Draft created. Review it, then select Save and index."},
+      "assistant.knowledge_already_generated": {th: "มี ข้อมูลร้าน สำหรับคำทักทายและคำถามทั่วไปอยู่แล้ว", en: "Starter knowledge for greetings and general questions already exists."},
+      "assistant.knowledge_ph": {th: "# ข้อมูลร้าน\n\nใส่ข้อมูลที่ต้องการให้ AI ใช้ตอบคำถาม", en: "# Knowledge\n\nAdd information for the AI to use when answering."},
+      "assistant.knowledge_save": {th: "บันทึก", en: "Save and index"},
+      "assistant.knowledge_reindex": {th: "อัปเดต AI", en: "Reindex"},
+      "assistant.knowledge_saved": {th: "บันทึก ข้อมูลร้าน และอัปเดต AIแล้ว", en: "Knowledge saved and indexed."},
       "assistant.api_hint": {th: "ดึงข้อมูลผ่าน GET รองรับ JSON path และ Bearer token", en: "Fetch with GET using an optional JSON path and Bearer token."},
       "assistant.api_name": {th: "ชื่อแหล่งข้อมูล", en: "Source name"},
       "assistant.api_name_ph": {th: "เช่น Product API", en: "e.g. Product API"},
       "assistant.api_key_ph": {th: "เว้นว่างเพื่อใช้ค่าเดิม", en: "Leave blank to keep the current token"},
       "assistant.api_enabled": {th: "เปิดใช้แหล่งข้อมูลนี้", en: "Enable this source"},
       "assistant.api_save": {th: "บันทึก API", en: "Save API"},
-      "assistant.api_list": {th: "รายการ Knowledge API", en: "Knowledge API sources"},
-      "assistant.api_empty": {th: "ยังไม่มี Knowledge API", en: "No Knowledge API sources yet."},
+      "assistant.api_list": {th: "รายการ API ข้อมูลร้าน", en: "Knowledge API sources"},
+      "assistant.api_empty": {th: "ยังไม่มี API ข้อมูลร้าน", en: "No Knowledge API sources yet."},
       "assistant.api_sync": {th: "ดึงข้อมูล", en: "Sync"},
       "assistant.api_edit": {th: "แก้ไข", en: "Edit"},
       "assistant.api_delete": {th: "ลบ", en: "Delete"},
-      "assistant.api_saved": {th: "บันทึก Knowledge API แล้ว", en: "Knowledge API saved."},
-      "assistant.api_synced": {th: "ดึงข้อมูลและสร้างดัชนีแล้ว", en: "Source synced and indexed."},
-      "assistant.api_deleted": {th: "ลบ Knowledge API แล้ว", en: "Knowledge API deleted."},
-      "assistant.api_delete_confirm": {th: "ลบ Knowledge API นี้?", en: "Delete this Knowledge API source?"},
+      "assistant.api_saved": {th: "บันทึก API ข้อมูลร้าน แล้ว", en: "Knowledge API saved."},
+      "assistant.api_synced": {th: "ดึงข้อมูลและอัปเดต AIแล้ว", en: "Source synced and indexed."},
+      "assistant.api_deleted": {th: "ลบ API ข้อมูลร้าน แล้ว", en: "Knowledge API deleted."},
+      "assistant.api_delete_confirm": {th: "ลบ API ข้อมูลร้าน นี้?", en: "Delete this Knowledge API source?"},
       "auth.secure": {th: "เข้าถึงอย่างปลอดภัย", en: "Secure access"},
       "auth.signin_label": {th: "เข้าสู่ระบบ LinePassport", en: "Sign in to LinePassport"},
       "auth.create_label": {th: "ตั้งรหัสผ่านสำหรับเปิด LinePassport", en: "Create admin user"},
       "auth.email": {th: "อีเมล", en: "Email"},
-      "auth.login_id": {th: "อีเมล หรือ God login", en: "Email or God login"},
+      "auth.login_id": {th: "อีเมล หรือ ผู้ดูแลระบบ", en: "Email or God login"},
       "auth.displayname": {th: "ชื่อที่แสดง", en: "Display name"},
       "auth.password": {th: "รหัสผ่าน", en: "Password"},
       "auth.confirm": {th: "ยืนยันรหัสผ่าน", en: "Confirm password"},
@@ -5023,8 +6003,8 @@ INDEX_HTML = r"""<!doctype html>
       "tabs.line": {th: "LINE", en: "LINE"},
       "tabs.incoming_api": {th: "API", en: "API"},
       "tabs.tools": {th: "เครื่องมือ", en: "Tools"},
-      "tabs.bot": {th: "บอท", en: "Bot"},
-      "tabs.logs": {th: "Log", en: "Logs"},
+      "tabs.bot": {th: "ระบบ", en: "Bot"},
+      "tabs.logs": {th: "บันทึกการทำงาน", en: "Logs"},
       "tabs.ai": {th: "AI", en: "AI Settings"},
       "line_guide.open": {th: "วิธีใช้ LINE", en: "LINE usage guide"},
       "line_guide.title": {th: "เริ่มใช้งาน LINE", en: "Get started with LINE"},
@@ -5052,13 +6032,13 @@ INDEX_HTML = r"""<!doctype html>
       "line_guide.no_contacts_title": {th: "ไม่พบรายชื่อหรือข้อความไม่อัปเดต", en: "Contacts are missing or messages do not update"},
       "line_guide.no_contacts_body": {th: "ตรวจว่าบัญชีด้านบนถูกต้อง กดรีเฟรชหนึ่งครั้ง และดูสถานะการเชื่อมต่อ หากเซสชันหมดอายุให้ลบบัญชีเดิมแล้วเพิ่มบัญชี LINE ใหม่", en: "Confirm the selected account, refresh once, and check connection status. If the session has expired, remove the old account and add the LINE account again."},
       "line_guide.send_error_title": {th: "ส่งข้อความหรือสื่อไม่สำเร็จ", en: "Text or media cannot be sent"},
-      "line_guide.send_error_body": {th: "ลองส่งข้อความธรรมดาก่อน ตรวจอินเทอร์เน็ตและ Proxy ของบัญชี แล้วเปิดเมนู Log เพื่อดูข้อความผิดพลาดแบบเต็ม โดยเฉพาะ SSL, session expired หรือ media upload failed", en: "Try plain text first, check the server connection and account proxy, then open Logs for the full error, especially SSL, session expired, or media upload failed errors."},
+      "line_guide.send_error_body": {th: "ลองส่งข้อความธรรมดาก่อน ตรวจอินเทอร์เน็ตและ พร็อกซี ของบัญชี แล้วเปิดเมนู บันทึกการทำงาน เพื่อดูข้อความผิดพลาดแบบเต็ม โดยเฉพาะ SSL, session expired หรือ media upload failed", en: "Try plain text first, check the server connection and account proxy, then open Logs for the full error, especially SSL, session expired, or media upload failed errors."},
       "line_guide.scope_title": {th: "ข้อมูลไม่ข้ามบัญชี", en: "Data stays account-scoped"},
-      "line_guide.scope_body": {th: "เมื่อเปลี่ยนบัญชี LINE รายชื่อ แชท บอท API และ Log จะเปลี่ยนตามบัญชีที่เลือก และไม่ไปแก้ข้อมูลของบัญชีอื่น", en: "Switching LINE accounts changes contacts, chat, bots, APIs, and logs to the selected account without modifying another account."},
+      "line_guide.scope_body": {th: "เมื่อเปลี่ยนบัญชี LINE รายชื่อ แชท ระบบ API และ บันทึกการทำงาน จะเปลี่ยนตามบัญชีที่เลือก และไม่ไปแก้ข้อมูลของบัญชีอื่น", en: "Switching LINE accounts changes contacts, chat, bots, APIs, and logs to the selected account without modifying another account."},
       "ai.title": {th: "ตั้งค่า AI สร้างรูป", en: "AI image settings"},
       "ai.status_on": {th: "ตั้งค่าแล้ว", en: "Configured"},
       "ai.status_off": {th: "ยังไม่ได้ตั้งค่า", en: "Not configured"},
-      "ai.intro": {th: "เลือกผู้ให้บริการ AI แล้ววาง API Key เพื่อให้บอทสร้างรูปภาพจากข้อความ คีย์จะถูกเก็บไว้ในเครื่องนี้เท่านั้น", en: "Pick an AI provider and paste its API key so the bot can generate images from a text prompt. Keys are stored locally on this machine."},
+      "ai.intro": {th: "เลือกผู้ให้บริการ AI แล้ววาง API Key เพื่อให้ระบบสร้างรูปภาพจากข้อความ คีย์จะถูกเก็บไว้ในเครื่องนี้เท่านั้น", en: "Pick an AI provider and paste its API key so the bot can generate images from a text prompt. Keys are stored locally on this machine."},
       "ai.lbl_provider": {th: "ผู้ให้บริการ", en: "Provider"},
       "ai.lbl_api_key": {th: "API Key", en: "API key"},
       "ai.api_key_ph": {th: "วาง API Key ที่นี่", en: "Paste your API key"},
@@ -5088,7 +6068,7 @@ INDEX_HTML = r"""<!doctype html>
       "composer.emoji": {th: "อีโมจิ", en: "Emoji"},
       "composer.attach": {th: "แนบไฟล์", en: "Attach"},
       "composer.image": {th: "รูปภาพ", en: "Image"},
-      "role.god": {th: "God", en: "God"},
+      "role.god": {th: "ผู้ดูแลระบบ", en: "God"},
       "role.admin": {th: "แอดมิน", en: "Admin"},
       "role.member": {th: "สมาชิก", en: "Member"},
       "role.operator": {th: "ผู้ดูแล", en: "Operator"},
@@ -5113,18 +6093,18 @@ INDEX_HTML = r"""<!doctype html>
       "settings.guide_password_body": {th: "ใส่รหัสปัจจุบัน รหัสใหม่ 8-128 ตัวอักษร และยืนยันรหัสใหม่ให้ตรงกัน รหัสนี้ใช้เข้า LinePassport ไม่ใช่รหัสผ่าน LINE", en: "Enter the current password, a new password of 8-128 characters, and the same confirmation. This password signs in to LinePassport; it is not the LINE password."},
       "settings.guide_account_title": {th: "เพิ่มบัญชี LINE", en: "Add a LINE account"},
       "settings.guide_account_body": {th: "ไปที่ “จัดการบัญชี LINE” กด “เพิ่มบัญชี” แล้วทำ 4 ขั้นตอน: เริ่ม → สแกน QR → ยืนยัน PIN บนมือถือเมื่อ LINE ขอ → รอเสร็จสิ้น ระบบจะดึงชื่อที่แสดงจาก LINE ให้อัตโนมัติ", en: "Open LINE Accounts, select Add Account, and complete four steps: Start, scan QR, confirm the PIN on the phone when LINE asks, and wait for completion. The LINE display name is loaded automatically."},
-      "settings.guide_proxy_title": {th: "ใช้ Proxy เฉพาะเมื่อจำเป็น", en: "Use a proxy only when necessary"},
-      "settings.guide_proxy_body": {th: "เปิด Proxy ก่อนกดเริ่ม แล้วกรอกประเภท Host และ Port; Username/Password ใส่เมื่อผู้ให้บริการกำหนด Proxy จะผูกกับบัญชี LINE นี้เท่านั้น กรอกผิดจะทำให้ QR หรือการส่งข้อความล้มเหลว", en: "Enable Proxy before starting and enter its type, host, and port; add username and password only when required. It applies only to this LINE account, and incorrect values can break QR login or sending."},
+      "settings.guide_proxy_title": {th: "ใช้ พร็อกซี เฉพาะเมื่อจำเป็น", en: "Use a proxy only when necessary"},
+      "settings.guide_proxy_body": {th: "เปิด พร็อกซี ก่อนกดเริ่ม แล้วกรอกประเภท Host และ Port; Username/Password ใส่เมื่อผู้ให้บริการกำหนด พร็อกซี จะผูกกับบัญชี LINE นี้เท่านั้น กรอกผิดจะทำให้ QR หรือการส่งข้อความล้มเหลว", en: "Enable Proxy before starting and enter its type, host, and port; add username and password only when required. It applies only to this LINE account, and incorrect values can break QR login or sending."},
       "settings.guide_manage_account_title": {th: "แก้ชื่อหรือลบบัญชี", en: "Rename or remove an account"},
       "settings.guide_manage_account_body": {th: "หากขึ้นว่าต้องเชื่อมต่อใหม่ ให้กด “เชื่อมต่อใหม่” และสแกนบัญชี LINE เดิมเพื่อเก็บงานกับการตั้งค่าไว้ แก้ชื่อได้โดยไม่เปลี่ยนชื่อจริงใน LINE ส่วนการลบจะลบเซสชันและพักงานของบัญชีนั้น", en: "If reconnect is required, choose Reconnect and scan the same LINE account to preserve jobs and settings. Renaming does not change the real LINE name; deleting removes the session and pauses that account's jobs."},
       "settings.guide_users_title": {th: "จัดการผู้ใช้และบทบาท", en: "Manage users and roles"},
       "settings.guide_users_body": {th: "เมนูนี้แสดงเฉพาะผู้มีสิทธิ์ ผู้ใช้ใหม่มีพื้นที่ส่วนตัวแบบคลีนและต้องเพิ่ม LINE ของตนเอง กำหนดบทบาทตามงานที่ต้องทำ และปิดใช้งานบัญชีแทนการลบเมื่อยังต้องเก็บประวัติ", en: "This menu appears only with permission. New users receive a clean private workspace and add their own LINE account. Assign the least role needed and disable a user instead of deleting when history must be retained."},
       "settings.guide_roles_title": {th: "เลือกบทบาทอย่างไร", en: "Choosing a role"},
-      "settings.guide_admin_body": {th: "เหมาะกับเจ้าของพื้นที่หรือผู้ดูแลที่ต้องตั้งค่าบัญชี ผู้ใช้ บอท API และ AI ภายในขอบเขตที่ระบบอนุญาต", en: "For workspace owners or administrators who configure accounts, users, bots, APIs, and AI within their permitted scope."},
+      "settings.guide_admin_body": {th: "เหมาะกับเจ้าของพื้นที่หรือผู้ดูแลที่ต้องตั้งค่าบัญชี ผู้ใช้ ระบบ API และ AI ภายในขอบเขตที่ระบบอนุญาต", en: "For workspace owners or administrators who configure accounts, users, bots, APIs, and AI within their permitted scope."},
       "settings.guide_operator_body": {th: "เหมาะกับผู้ปฏิบัติงานที่ต้องอ่าน ส่งข้อความ และดูแลตารางส่ง แต่ไม่ควรเปลี่ยนการตั้งค่าระบบหรือจัดการสมาชิก", en: "For operators who read and send messages and manage schedules, without changing system settings or members."},
-      "settings.guide_viewer_body": {th: "เหมาะกับผู้ตรวจสอบที่ต้องดูข้อมูลและ Log โดยไม่แก้ไขหรือส่งข้อความ", en: "For reviewers who need read-only access to information and logs without editing or sending."},
+      "settings.guide_viewer_body": {th: "เหมาะกับผู้ตรวจสอบที่ต้องดูข้อมูลและ บันทึกการทำงาน โดยไม่แก้ไขหรือส่งข้อความ", en: "For reviewers who need read-only access to information and logs without editing or sending."},
       "settings.guide_isolation_title": {th: "ข้อมูลของสมาชิกแยกจากกัน", en: "Member data is isolated"},
-      "settings.guide_isolation_body": {th: "บัญชี LINE, Pattern, ตารางส่ง, Incoming API, AI Settings และ Knowledge ของผู้ใช้หนึ่งจะไม่ถูกแชร์ให้อีกผู้ใช้โดยอัตโนมัติ God ใช้หน้าจัดการระบบเพื่อตรวจรายละเอียดได้", en: "One user's LINE accounts, patterns, schedules, Incoming APIs, AI settings, and knowledge are not automatically shared with another user. God can inspect details from system management."},
+      "settings.guide_isolation_body": {th: "บัญชี LINE, ข้อความสำเร็จรูป, ตารางส่ง, API รับข้อความ, ตั้งค่า AI และ ข้อมูลร้าน ของผู้ใช้หนึ่งจะไม่ถูกแชร์ให้อีกผู้ใช้โดยอัตโนมัติ ผู้ดูแลระบบ ใช้หน้าจัดการระบบเพื่อตรวจรายละเอียดได้", en: "One user's LINE accounts, patterns, schedules, Incoming APIs, AI settings, and knowledge are not automatically shared with another user. God can inspect details from system management."},
       "settings.back": {th: "ย้อนกลับ", en: "Back"},
       "password.title": {th: "เปลี่ยนรหัสผ่าน", en: "Change Password"},
       "password.current": {th: "รหัสผ่านปัจจุบัน", en: "Current password"},
@@ -5149,12 +6129,12 @@ INDEX_HTML = r"""<!doctype html>
       "accounts.delete_title": {th: "ลบ {name}?", en: "Delete {name}?"},
       "accounts.delete_note": {th: "งานตั้งเวลาส่งของบัญชีนี้จะถูกหยุดชั่วคราว", en: "This account's scheduled jobs will be paused."},
       "accounts.also_line_logout": {th: "ออกจากระบบบน LINE ด้วย", en: "Also log out on LINE"},
-      "proxy.connect": {th: "เชื่อมต่อผ่าน Proxy", en: "Connect through proxy"},
-      "proxy.url": {th: "Proxy URL", en: "Proxy URL"},
+      "proxy.connect": {th: "เชื่อมต่อผ่าน พร็อกซี", en: "Connect through proxy"},
+      "proxy.url": {th: "พร็อกซี URL", en: "Proxy URL"},
       "proxy.hint": {th: "รองรับ HTTP, HTTPS, SOCKS5 และ SOCKS5H โดยใช้เฉพาะบัญชี LINE นี้", en: "Supports HTTP, HTTPS, SOCKS5, and SOCKS5H. This proxy is used only by this LINE account."},
-      "proxy.configured": {th: "เปิดใช้ Proxy", en: "Proxy enabled"},
-      "proxy.keep_existing": {th: "เว้นว่างเพื่อใช้ Proxy เดิม", en: "Leave blank to keep the current proxy"},
-      "proxy.required": {th: "กรุณากรอก Proxy URL", en: "Enter a proxy URL."},
+      "proxy.configured": {th: "เปิดใช้ พร็อกซี", en: "Proxy enabled"},
+      "proxy.keep_existing": {th: "เว้นว่างเพื่อใช้ พร็อกซี เดิม", en: "Leave blank to keep the current proxy"},
+      "proxy.required": {th: "กรุณากรอก พร็อกซี URL", en: "Enter a proxy URL."},
       "users.title": {th: "ผู้ใช้และสิทธิ์", en: "Users & Access"},
       "users.subtitle": {th: "กำหนดบทบาทและเลือกบัญชี LINE ที่ผู้ใช้แต่ละคนเข้าถึงได้", en: "Assign roles and choose which LINE accounts each user can access."},
       "users.create": {th: "สร้างผู้ใช้", en: "Create User"},
@@ -5166,13 +6146,13 @@ INDEX_HTML = r"""<!doctype html>
       "users.accounts": {th: "บัญชี LINE ที่เข้าถึงได้", en: "Accessible LINE accounts"},
       "users.all_accounts": {th: "ทุกบัญชี LINE", en: "All LINE accounts"},
       "users.no_accounts": {th: "ไม่มีบัญชี LINE", en: "No LINE accounts"},
-      "users.admin_all_note": {th: "เฉพาะ God เท่านั้นที่เข้าถึงทุกบัญชี ผู้ใช้อื่นเห็นเฉพาะบัญชีของตนเอง", en: "Only God can access every account; other users see only their own accounts."},
+      "users.admin_all_note": {th: "เฉพาะ ผู้ดูแลระบบ เท่านั้นที่เข้าถึงทุกบัญชี ผู้ใช้อื่นเห็นเฉพาะบัญชีของตนเอง", en: "Only God can access every account; other users see only their own accounts."},
       "users.disabled": {th: "ปิดใช้งาน", en: "disabled"},
-      "users.god_protected": {th: "บัญชี God จัดการได้โดย God เท่านั้น", en: "Only God can manage this account"},
+      "users.god_protected": {th: "บัญชี ผู้ดูแลระบบ จัดการได้โดย ผู้ดูแลระบบ เท่านั้น", en: "Only God can manage this account"},
       "users.details": {th: "รายละเอียด", en: "Details"},
       "users.detail_line": {th: "บัญชี LINE", en: "LINE accounts"},
-      "users.detail_patterns": {th: "แพทเทิร์น", en: "Patterns"},
-      "users.detail_schedules": {th: "งานบอท", en: "Bot schedules"},
+      "users.detail_patterns": {th: "ข้อความสำเร็จรูป", en: "Patterns"},
+      "users.detail_schedules": {th: "งานส่งตามเวลา", en: "Bot schedules"},
       "users.detail_ai": {th: "AI ที่ใช้งาน", en: "AI configuration"},
       "users.detail_empty": {th: "ไม่มีข้อมูล", en: "No data"},
       "users.ai_not_configured": {th: "ยังไม่ตั้ง API key", en: "API key not configured"},
@@ -5266,7 +6246,7 @@ INDEX_HTML = r"""<!doctype html>
       "notifications.new_messages": {th: "มีข้อความใหม่ {n} แชท", en: "New messages in {n} chats"},
       "chat.title": {th: "แชท", en: "Chat"},
       "chat.no_target": {th: "ยังไม่ได้เลือกปลายทาง", en: "No target selected"},
-      "chat.target_ph": {th: "รหัสภายใน (MID) หรือชื่อผู้ติดต่อ", en: "Target MID or contact name"},
+      "chat.target_ph": {th: "รหัสแชท หรือชื่อผู้ติดต่อ", en: "Target MID or contact name"},
       "chat.open": {th: "เปิด", en: "Open"},
       "chat.refresh": {th: "รีเฟรช", en: "Refresh"},
       "chat.message_ph": {th: "พิมพ์ข้อความ", en: "Message"},
@@ -5294,39 +6274,39 @@ INDEX_HTML = r"""<!doctype html>
       "chat.event.group_invite": {th: "{actor} เชิญ {member} เข้ากลุ่ม", en: "{actor} invited {member} to the group"},
       "chat.event.member_join": {th: "{member} เข้าร่วมกลุ่ม", en: "{member} joined the group"},
       "content.unsupported": {th: "[ข้อความที่ไม่รองรับ]", en: "[unsupported message]"},
-      "scheduler.title": {th: "ตัวตั้งเวลาส่ง / Scheduler", en: "Scheduler"},
-      "bot.nav_schedules": {th: "รายการบอท", en: "Schedules"},
+      "scheduler.title": {th: "ส่งตามเวลา", en: "Scheduler"},
+      "bot.nav_schedules": {th: "รายการงาน", en: "Schedules"},
       "bot.nav_new": {th: "ตั้งเวลาส่งใหม่", en: "New schedule"},
-      "bot.nav_patterns": {th: "แพทเทิร์น", en: "Patterns"},
-      "bot.nav_logs": {th: "Log", en: "Logs"},
+      "bot.nav_patterns": {th: "ข้อความสำเร็จรูป", en: "Patterns"},
+      "bot.nav_logs": {th: "บันทึกการทำงาน", en: "Logs"},
       "bot.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
-      "bot.guide_title": {th: "เริ่มใช้งานบอท", en: "Get started with Bot"},
+      "bot.guide_title": {th: "เริ่มใช้งานส่งตามเวลา", en: "Get started with Bot"},
       "bot.guide_subtitle": {th: "เลือกบัญชี LINE แล้วสร้างงานส่งข้อความอัตโนมัติตาม 5 ขั้นตอน", en: "Select a LINE account and create an automated message job in five steps."},
       "bot.guide_step_1_title": {th: "เลือกบัญชี LINE", en: "Select a LINE account"},
-      "bot.guide_step_1_body": {th: "เลือกบัญชีจากเมนูด้านบนก่อน งาน แพทเทิร์น และ Log ทั้งหมดจะใช้งานเฉพาะบัญชีที่เลือก", en: "Select an account from the top menu first. Jobs, patterns, and logs apply only to that account."},
-      "bot.guide_step_2_title": {th: "เตรียมแพทเทิร์นเมื่อจำเป็น", en: "Prepare patterns when needed"},
-      "bot.guide_step_2_body": {th: "สร้างหมวดหมู่และข้อความที่ใช้ซ้ำได้ หากเลือกตั้งแต่ 2 แพทเทิร์นขึ้นไป ระบบจะสุ่มใหม่ทุกครั้งที่ส่ง", en: "Create reusable categories and messages. When two or more patterns are selected, a new one is chosen randomly for every send."},
+      "bot.guide_step_1_body": {th: "เลือกบัญชีจากเมนูด้านบนก่อน งาน ข้อความสำเร็จรูป และ บันทึกการทำงาน ทั้งหมดจะใช้งานเฉพาะบัญชีที่เลือก", en: "Select an account from the top menu first. Jobs, patterns, and logs apply only to that account."},
+      "bot.guide_step_2_title": {th: "เตรียมข้อความสำเร็จรูปเมื่อจำเป็น", en: "Prepare patterns when needed"},
+      "bot.guide_step_2_body": {th: "สร้างหมวดหมู่และข้อความที่ใช้ซ้ำได้ หากเลือกตั้งแต่ 2 ข้อความสำเร็จรูปขึ้นไป ระบบจะสุ่มใหม่ทุกครั้งที่ส่ง", en: "Create reusable categories and messages. When two or more patterns are selected, a new one is chosen randomly for every send."},
       "bot.guide_step_3_title": {th: "เลือกปลายทางและเนื้อหา", en: "Choose targets and content"},
       "bot.guide_step_3_body": {th: "ตั้งชื่องาน เลือกรายชื่อหรือกลุ่ม แล้วเลือกส่งข้อความ รูปภาพ รูปจาก AI หรือข้อมูลที่ดึงจาก API", en: "Name the job, select contacts or groups, then choose text, an image, an AI image, or API content."},
       "bot.guide_step_4_title": {th: "กำหนดเวลาและขอบเขต", en: "Set the schedule and scope"},
       "bot.guide_step_4_body": {th: "เลือกส่งครั้งเดียวหรือส่งซ้ำ ระบุช่วงวันที่ ช่วงเวลารายวัน ระยะห่างเป็นนาที และจำนวนครั้งสูงสุดได้", en: "Choose one-time or repeated delivery, with a date range, daily time window, interval, and optional maximum sends."},
       "bot.guide_step_5_title": {th: "ทดสอบแล้วติดตามผล", en: "Test and monitor"},
-      "bot.guide_step_5_body": {th: "ใช้ “ส่งเดี๋ยวนี้” ทดสอบก่อนเปิดงานซ้ำ จากนั้นตรวจสถานะและรายละเอียดทุก action ในหน้า Log", en: "Use Send now before enabling a repeated job, then review its status and every action in Logs."},
-      "bot.guide_step_6_title": {th: "ปล่อยให้บอททำงานบนเซิร์ฟเวอร์", en: "Let the bot run on the server"},
+      "bot.guide_step_5_body": {th: "ใช้ “ส่งตอนนี้” ทดสอบก่อนเปิดงานซ้ำ จากนั้นตรวจสถานะและรายละเอียดทุก action ในหน้า บันทึกการทำงาน", en: "Use Send now before enabling a repeated job, then review its status and every action in Logs."},
+      "bot.guide_step_6_title": {th: "ปล่อยให้งานส่งตามเวลาทำงานบนเซิร์ฟเวอร์", en: "Let the bot run on the server"},
       "bot.guide_step_6_body": {th: "เมื่อสถานะงานเป็น “ทำงานอยู่” สามารถปิดหน้าเว็บได้ ตัว Worker บนเซิร์ฟเวอร์จะตรวจเวลาและส่งต่อเอง แต่โปรแกรม LinePassport และเซสชัน LINE ต้องยังออนไลน์", en: "When a job is Running, you may close the web page. The server worker checks the schedule and sends it, but LinePassport and the LINE session must remain online."},
       "bot.guide_open_schedule": {th: "สร้างตารางส่ง", en: "Create schedule"},
-      "bot.guide_open_patterns": {th: "จัดการแพทเทิร์น", en: "Manage patterns"},
-      "bot.guide_open_logs": {th: "เปิด Log", en: "Open logs"},
-      "bot.guide_content_title": {th: "เนื้อหาที่บอทส่งได้", en: "Content the bot can send"},
+      "bot.guide_open_patterns": {th: "จัดการข้อความสำเร็จรูป", en: "Manage patterns"},
+      "bot.guide_open_logs": {th: "เปิด บันทึกการทำงาน", en: "Open logs"},
+      "bot.guide_content_title": {th: "เนื้อหาที่ส่งได้", en: "Content the bot can send"},
       "bot.guide_content_hint": {th: "เลือกแหล่งเนื้อหาให้เหมาะกับงานแต่ละแบบ", en: "Choose the content source that fits each job."},
-      "bot.guide_text_title": {th: "ข้อความและแพทเทิร์น", en: "Text and patterns"},
-      "bot.guide_text_body": {th: "พิมพ์ข้อความโดยตรงหรือใช้แพทเทิร์น พร้อมตัวแปรสุ่ม {1D}, {2D}, {3D}, {date}, {time} และ {rand:1-100}", en: "Write text directly or use patterns with {1D}, {2D}, {3D}, {date}, {time}, and {rand:1-100} variables."},
+      "bot.guide_text_title": {th: "ข้อความและข้อความสำเร็จรูป", en: "Text and patterns"},
+      "bot.guide_text_body": {th: "พิมพ์ข้อความโดยตรงหรือใช้ข้อความสำเร็จรูป พร้อมตัวแปรสุ่ม {1D}, {2D}, {3D}, {date}, {time} และ {rand:1-100}", en: "Write text directly or use patterns with {1D}, {2D}, {3D}, {date}, {time}, and {rand:1-100} variables."},
       "bot.guide_image_title": {th: "รูปภาพ", en: "Images"},
       "bot.guide_image_body": {th: "อัปโหลดไฟล์จากเครื่องหรือระบุ URL รูปภาพที่ระบบเข้าถึงได้", en: "Upload an image from the device or provide an image URL the server can access."},
       "bot.guide_ai_title": {th: "รูปภาพจาก AI", en: "AI images"},
-      "bot.guide_ai_body": {th: "ตั้งค่า Provider, Model และ API Key ก่อนใช้งาน Prompt แบบเต็มจะถูกส่งไปยังผู้ให้บริการและบันทึกใน Log", en: "Configure the provider, model, and API key first. The full prompt is sent to the provider and recorded in Logs."},
+      "bot.guide_ai_body": {th: "ตั้งค่า Provider, Model และ API Key ก่อนใช้งาน Prompt แบบเต็มจะถูกส่งไปยังผู้ให้บริการและบันทึกใน บันทึกการทำงาน", en: "Configure the provider, model, and API key first. The full prompt is sent to the provider and recorded in Logs."},
       "bot.guide_api_title": {th: "ข้อความหรือรูปจาก API", en: "Text or images from an API"},
-      "bot.guide_api_body": {th: "รองรับ GET และ POST JSON บอทจะเรียก API ใหม่ในแต่ละรอบแล้วนำข้อความหรือรูปที่ได้รับไปส่ง", en: "GET and POST JSON are supported. The bot calls the API on each run and sends the returned text or image."},
+      "bot.guide_api_body": {th: "รองรับ GET และ POST JSON ระบบจะเรียก API ใหม่ในแต่ละรอบแล้วนำข้อความหรือรูปที่ได้รับไปส่ง", en: "GET and POST JSON are supported. The bot calls the API on each run and sends the returned text or image."},
       "bot.guide_open_ai": {th: "ตั้งค่า AI สร้างรูป", en: "Configure AI images"},
       "bot.guide_repeat_title": {th: "ตัวอย่างงานส่งซ้ำ", en: "Repeated job example"},
       "bot.guide_repeat_hint": {th: "ระบบจะส่งเฉพาะวันที่และช่วงเวลาที่กำหนด", en: "Messages are sent only inside the configured dates and daily window."},
@@ -5342,21 +6322,21 @@ INDEX_HTML = r"""<!doctype html>
       "bot.guide_limit_body": {th: "เพดานจำนวนครั้งของงาน ใช้ป้องกันส่งเกินที่ตั้งใจ หากไม่แน่ใจควรกำหนดไว้และตรวจผลก่อนเพิ่มจำนวน", en: "A safety cap for the job. Set one when unsure, review the results, and only then increase it."},
       "bot.guide_notes_title": {th: "ข้อควรรู้ก่อนเปิดใช้งาน", en: "Before enabling a job"},
       "bot.guide_account_title": {th: "แยกตามบัญชี LINE", en: "Isolated by LINE account"},
-      "bot.guide_account_body": {th: "การเลือกบัญชีใหม่จะเปลี่ยนชุดงาน แพทเทิร์น และ Log โดยไม่ไปรบกวนบัญชีอื่น", en: "Switching accounts changes the jobs, patterns, and logs without affecting another LINE account."},
+      "bot.guide_account_body": {th: "การเลือกบัญชีใหม่จะเปลี่ยนชุดงาน ข้อความสำเร็จรูป และ บันทึกการทำงาน โดยไม่ไปรบกวนบัญชีอื่น", en: "Switching accounts changes the jobs, patterns, and logs without affecting another LINE account."},
       "bot.guide_test_title": {th: "ทดสอบก่อนส่งซ้ำ", en: "Test before repeating"},
-      "bot.guide_test_body": {th: "ตรวจปลายทาง ข้อความ รูปภาพ และการเข้ารหัสด้วย “ส่งเดี๋ยวนี้” ก่อนตั้งช่วงเวลายาว", en: "Verify targets, text, images, and encryption with Send now before scheduling a long period."},
+      "bot.guide_test_body": {th: "ตรวจปลายทาง ข้อความ รูปภาพ และการเข้ารหัสด้วย “ส่งตอนนี้” ก่อนตั้งช่วงเวลายาว", en: "Verify targets, text, images, and encryption with Send now before scheduling a long period."},
       "bot.guide_error_title": {th: "เมื่อเกิดข้อผิดพลาด", en: "When an error occurs"},
-      "bot.guide_error_body": {th: "หยุดงาน ตรวจรายละเอียดใน Log แล้วใช้ “เคลียร์งานค้าง” เฉพาะกรณีสถานะค้างหรือเกิด error", en: "Pause the job, review Logs, and use Clear stuck jobs only when a job remains stuck or errors."},
+      "bot.guide_error_body": {th: "หยุดงาน ตรวจรายละเอียดใน บันทึกการทำงาน แล้วใช้ “เคลียร์งานค้าง” เฉพาะกรณีสถานะค้างหรือเกิด error", en: "Pause the job, review Logs, and use Clear stuck jobs only when a job remains stuck or errors."},
       "bot.guide_paused_title": {th: "สถานะหยุดและทำต่อ", en: "Pause and resume"},
       "bot.guide_paused_body": {th: "“หยุด” จะพักงานโดยไม่ลบการตั้งค่า กด “ทำต่อ” เพื่อให้คำนวณเวลารอบถัดไปใหม่ ส่วน “ลบ” จะลบงานถาวร", en: "Pause stops a job without deleting its settings. Resume recalculates the next run, while Delete permanently removes the job."},
       "bot.guide_ai_prompt_title": {th: "Prompt สร้างรูปต้องสั่งให้สร้างรูปชัดเจน", en: "Make image prompts explicitly request an image"},
-      "bot.guide_ai_prompt_body": {th: "ระบุหัวข้อ ฉาก สไตล์ และสิ่งที่ไม่ต้องการให้ชัด ระบบจะส่งคำสั่งสร้างรูปพร้อม Prompt แบบเต็มและเก็บไว้ใน Log เพื่อใช้ตรวจสอบ", en: "Describe the subject, scene, style, and exclusions clearly. The system sends an image-generation instruction with the full prompt and stores it in Logs for review."},
+      "bot.guide_ai_prompt_body": {th: "ระบุหัวข้อ ฉาก สไตล์ และสิ่งที่ไม่ต้องการให้ชัด ระบบจะส่งคำสั่งสร้างรูปพร้อม Prompt แบบเต็มและเก็บไว้ใน บันทึกการทำงาน เพื่อใช้ตรวจสอบ", en: "Describe the subject, scene, style, and exclusions clearly. The system sends an image-generation instruction with the full prompt and stores it in Logs for review."},
       "bot.guide_stuck_title": {th: "เคลียร์งานค้างใช้เมื่อจำเป็นเท่านั้น", en: "Clear stuck jobs only when necessary"},
       "bot.guide_stuck_body": {th: "ปุ่มนี้ปลดสถานะรันที่ค้างหลังโปรเซสหยุดหรือเกิด error ไม่ได้ลบงานและไม่ควรกดระหว่างงานกำลังส่งจริง", en: "This releases a run left stuck after a process stop or error. It does not delete the job and should not be used while a real send is in progress."},
       "scheduler.jobs": {th: "{n} งาน", en: "{n} jobs"},
       "scheduler.new": {th: "+ ตั้งเวลาส่งใหม่", en: "+ New scheduled message"},
       "scheduler.name_ph": {th: "ชื่องาน", en: "Job name"},
-      "scheduler.target_ph": {th: "รหัสภายใน (MID) หรือชื่อผู้ติดต่อ", en: "Target MID or contact name"},
+      "scheduler.target_ph": {th: "รหัสแชท หรือชื่อผู้ติดต่อ", en: "Target MID or contact name"},
       "scheduler.source_text": {th: "ข้อความ", en: "Text"},
       "scheduler.source_image": {th: "URL รูปภาพ", en: "Image URL"},
       "scheduler.source_ai_image": {th: "รูปภาพจาก AI", en: "AI image"},
@@ -5387,43 +6367,43 @@ INDEX_HTML = r"""<!doctype html>
       "scheduler.save_edit": {th: "บันทึกการแก้ไข", en: "Save changes"},
       "scheduler.edit": {th: "แก้ไข", en: "Edit"},
       "scheduler.pick_target": {th: "— เลือกผู้รับ —", en: "— Select recipient —"},
-      "scheduler.pick_pattern": {th: "— เลือกแพทเทิร์นข้อความ —", en: "— Select message pattern —"},
-      "scheduler.save_pattern": {th: "บันทึกเป็นแพทเทิร์น", en: "Save as pattern"},
-      "scheduler.del_pattern": {th: "ลบแพทเทิร์นที่เลือก", en: "Delete selected pattern"},
-      "scheduler.pattern_name_prompt": {th: "ตั้งชื่อแพทเทิร์น", en: "Pattern name"},
-      "scheduler.no_patterns": {th: "ยังไม่มีแพทเทิร์น — เพิ่มที่ปุ่ม ‘แพทเทิร์นข้อความ’ ด้านบน", en: "No patterns — add via the ‘Message patterns’ button above"},
-      "scheduler.no_patterns_manage": {th: "ยังไม่มีแพทเทิร์น เพิ่มด้านบนได้เลย", en: "No patterns yet — add one above"},
-      "scheduler.patterns_menu": {th: "แพทเทิร์นข้อความ", en: "Message patterns"},
-      "scheduler.patterns_title": {th: "จัดการแพทเทิร์นข้อความ", en: "Manage message patterns"},
-      "scheduler.lbl_pattern_name": {th: "ชื่อแพทเทิร์น", en: "Pattern name"},
+      "scheduler.pick_pattern": {th: "— เลือกข้อความสำเร็จรูป —", en: "— Select message pattern —"},
+      "scheduler.save_pattern": {th: "บันทึกเป็นข้อความสำเร็จรูป", en: "Save as pattern"},
+      "scheduler.del_pattern": {th: "ลบข้อความสำเร็จรูปที่เลือก", en: "Delete selected pattern"},
+      "scheduler.pattern_name_prompt": {th: "ตั้งชื่อข้อความสำเร็จรูป", en: "Pattern name"},
+      "scheduler.no_patterns": {th: "ยังไม่มีข้อความสำเร็จรูป — เพิ่มที่ปุ่ม ‘ข้อความสำเร็จรูป’ ด้านบน", en: "No patterns — add via the ‘Message patterns’ button above"},
+      "scheduler.no_patterns_manage": {th: "ยังไม่มีข้อความสำเร็จรูป เพิ่มด้านบนได้เลย", en: "No patterns yet — add one above"},
+      "scheduler.patterns_menu": {th: "ข้อความสำเร็จรูป", en: "Message patterns"},
+      "scheduler.patterns_title": {th: "จัดการข้อความสำเร็จรูป", en: "Manage message patterns"},
+      "scheduler.lbl_pattern_name": {th: "ชื่อข้อความสำเร็จรูป", en: "Pattern name"},
       "scheduler.lbl_pattern_text": {th: "ข้อความ", en: "Message text"},
       "scheduler.pattern_name_ph": {th: "เช่น โปรโมชั่น A", en: "e.g. Promo A"},
-      "scheduler.add_pattern": {th: "เพิ่มแพทเทิร์น", en: "Add pattern"},
-      "scheduler.add_pattern_new": {th: "+ เพิ่มแพทเทิร์น", en: "+ Add pattern"},
+      "scheduler.add_pattern": {th: "เพิ่มข้อความสำเร็จรูป", en: "Add pattern"},
+      "scheduler.add_pattern_new": {th: "+ เพิ่มข้อความสำเร็จรูป", en: "+ Add pattern"},
       "scheduler.back_schedules": {th: "← กลับ", en: "← Back"},
-      "toast.pattern_name_required": {th: "ต้องตั้งชื่อแพทเทิร์น", en: "Pattern name is required"},
+      "toast.pattern_name_required": {th: "ต้องตั้งชื่อข้อความสำเร็จรูป", en: "Pattern name is required"},
       "common.close": {th: "ปิด", en: "Close"},
       "scheduler.lbl_name": {th: "ชื่องาน", en: "Job name"},
       "scheduler.lbl_target": {th: "ส่งถึงใคร", en: "Send to"},
       "scheduler.lbl_source": {th: "ประเภทเนื้อหา", en: "Content type"},
       "scheduler.lbl_message": {th: "ข้อความ", en: "Message"},
-      "scheduler.lbl_patterns": {th: "แพทเทิร์นข้อความ — ติ๊กเพื่อใช้ (เลือก 2+ ระบบสุ่มให้ทุกครั้ง)", en: "Message patterns — tick to use (2+ → random each send)"},
+      "scheduler.lbl_patterns": {th: "ข้อความสำเร็จรูป — ติ๊กเพื่อใช้ (เลือก 2+ ระบบสุ่มให้ทุกครั้ง)", en: "Message patterns — tick to use (2+ → random each send)"},
       "scheduler.lbl_image": {th: "รูป (URL / พาธ)", en: "Image (URL / path)"},
       "scheduler.lbl_mode": {th: "โหมด", en: "Mode"},
       "scheduler.lbl_api_method": {th: "เมธอด", en: "Method"},
       "scheduler.lbl_api_url": {th: "API URL", en: "API URL"},
       "scheduler.lbl_api_body": {th: "POST body (JSON)", en: "POST body (JSON)"},
       "scheduler.lbl_ai_prompt": {th: "คำสั่งสร้างรูปด้วย AI", en: "AI image prompt"},
-      "scheduler.ai_prompt_ph": {th: "อธิบายรูปที่จะให้บอทสร้าง", en: "Describe the image for the bot to generate"},
-      "scheduler.ai_prompt_hint": {th: "บอทจะส่งคำสั่งนี้ไปให้ AI แล้วส่งรูปที่ได้กลับมา หรือจะติ๊กแพทเทิร์นข้อความด้านล่างเพื่อสุ่มคำสั่งก็ได้ — ตั้งค่า API Key ที่แท็บ AI", en: "The bot sends this prompt to the AI and posts the returned image — or tick message patterns below to randomise the prompt. Set your API key in the AI tab."},
-      "toast.pattern_saved": {th: "บันทึกแพทเทิร์นแล้ว", en: "Pattern saved"},
-      "toast.pattern_deleted": {th: "ลบแพทเทิร์นแล้ว", en: "Pattern deleted"},
-      "confirm.delete_pattern": {th: "ลบแพทเทิร์นนี้?", en: "Delete this pattern?"},
+      "scheduler.ai_prompt_ph": {th: "อธิบายรูปที่จะให้ระบบสร้าง", en: "Describe the image for the bot to generate"},
+      "scheduler.ai_prompt_hint": {th: "ระบบจะส่งคำสั่งนี้ไปให้ AI แล้วส่งรูปที่ได้กลับมา หรือจะติ๊กข้อความสำเร็จรูปด้านล่างเพื่อสุ่มคำสั่งก็ได้ — ตั้งค่า API Key ที่แท็บ AI", en: "The bot sends this prompt to the AI and posts the returned image — or tick message patterns below to randomise the prompt. Set your API key in the AI tab."},
+      "toast.pattern_saved": {th: "บันทึกข้อความสำเร็จรูปแล้ว", en: "Pattern saved"},
+      "toast.pattern_deleted": {th: "ลบข้อความสำเร็จรูปแล้ว", en: "Pattern deleted"},
+      "confirm.delete_pattern": {th: "ลบข้อความสำเร็จรูปนี้?", en: "Delete this pattern?"},
       "scheduler.none": {th: "ยังไม่มีตารางเวลาสำหรับบัญชีนี้", en: "No schedules for this account"},
       "scheduler.default_name": {th: "ข้อความตามเวลา", en: "Scheduled message"},
       "scheduler.pause": {th: "หยุด", en: "Pause"},
       "scheduler.resume": {th: "ทำต่อ", en: "Resume"},
-      "scheduler.run_now": {th: "ส่งเดี๋ยวนี้", en: "Run now"},
+      "scheduler.run_now": {th: "ส่งตอนนี้", en: "Run now"},
       "scheduler.delete": {th: "ลบ", en: "Delete"},
       "scheduler.enabled": {th: "ทำงานอยู่", en: "enabled"},
       "scheduler.paused": {th: "หยุดชั่วคราว", en: "paused"},
@@ -5454,16 +6434,16 @@ INDEX_HTML = r"""<!doctype html>
       "tools.guide_step_1_title": {th: "เลือกบัญชี LINE ให้ถูกต้อง", en: "Select the correct LINE account"},
       "tools.guide_step_1_body": {th: "ผลลัพธ์และการเรียก Endpoint ใช้เซสชันของบัญชีที่เลือกด้านบนเท่านั้น หากเปลี่ยนบัญชี ให้ตรวจชื่ออีกครั้งก่อนกดทำงาน", en: "Results and endpoint calls use only the account selected at the top. After switching accounts, verify the name before running a tool."},
       "tools.guide_step_2_title": {th: "ค้นหาผู้ใช้จาก LINE ID", en: "Find a user by LINE ID"},
-      "tools.guide_step_2_body": {th: "กรอก LINE ID ที่ผู้ใช้ตั้งไว้ เช่น ton123 แล้วกด “ค้นหาผู้ใช้” ถ้าพบ ระบบจะแสดงข้อมูลดิบแบบ JSON ซึ่งอาจมี MID ชื่อที่แสดง และสถานะรูปโปรไฟล์", en: "Enter the user's public LINE ID, such as ton123, and select Find User. When found, raw JSON may include the MID, display name, and profile image status."},
+      "tools.guide_step_2_body": {th: "กรอก LINE ID ที่ผู้ใช้ตั้งไว้ เช่น ton123 แล้วกด “ค้นหาผู้ใช้” ถ้าพบ ระบบจะแสดงข้อมูลดิบแบบ JSON ซึ่งอาจมี รหัสแชท ชื่อที่แสดง และสถานะรูปโปรไฟล์", en: "Enter the user's public LINE ID, such as ton123, and select Find User. When found, raw JSON may include the MID, display name, and profile image status."},
       "tools.guide_step_3_title": {th: "อ่านผลลัพธ์ในกล่อง JSON", en: "Read the JSON result"},
-      "tools.guide_step_3_body": {th: "ผลลัพธ์ที่สำเร็จมักเป็น object หรือ array ส่วนข้อผิดพลาดจะแสดงข้อความจาก LINE โดยตรง ไม่ควรนำ MID, token หรือข้อมูลภายในไปเผยแพร่", en: "A successful result is usually an object or array; errors show the LINE response. Do not publish MIDs, tokens, or internal data."},
+      "tools.guide_step_3_body": {th: "ผลลัพธ์ที่สำเร็จมักเป็น object หรือ array ส่วนข้อผิดพลาดจะแสดงข้อความจาก LINE โดยตรง ไม่ควรนำ รหัสแชท, token หรือข้อมูลภายในไปเผยแพร่", en: "A successful result is usually an object or array; errors show the LINE response. Do not publish MIDs, tokens, or internal data."},
       "tools.guide_step_4_title": {th: "เรียก Endpoint เฉพาะเมื่อทราบคำสั่ง", en: "Call an endpoint only when you know the command"},
       "tools.guide_step_4_body": {th: "ใส่ชื่อ Endpoint และอาร์กิวเมนต์เป็น JSON array ที่ถูกต้อง เช่น [] หรือ [\"Uxxxxxxxx\"] ฟังก์ชันนี้ส่งคำสั่งระดับต่ำไปยัง LINE ควรใช้เพื่อทดสอบหรือแก้ปัญหาโดยผู้ดูแลเท่านั้น", en: "Enter the endpoint key and a valid JSON array such as [] or [\"Uxxxxxxxx\"]. This sends a low-level LINE command and should be used only by an administrator for testing or troubleshooting."},
       "tools.guide_open": {th: "เปิดหน้าเครื่องมือ", en: "Open Tools"},
       "tools.guide_terms_title": {th: "ตัวอย่างและความหมาย", en: "Examples and terminology"},
       "tools.guide_line_id_title": {th: "LINE ID", en: "LINE ID"},
-      "tools.guide_line_id_body": {th: "ชื่อที่ผู้ใช้ตั้งเพื่อให้ค้นหาได้ ไม่ใช่ชื่อที่แสดง และไม่ใช่ MID ภายใน", en: "A public ID configured by the user for search. It is not the display name or the internal MID."},
-      "tools.guide_mid_title": {th: "MID", en: "MID"},
+      "tools.guide_line_id_body": {th: "ชื่อที่ผู้ใช้ตั้งเพื่อให้ค้นหาได้ ไม่ใช่ชื่อที่แสดง และไม่ใช่ รหัสแชท ภายใน", en: "A public ID configured by the user for search. It is not the display name or the internal MID."},
+      "tools.guide_mid_title": {th: "รหัสแชท", en: "MID"},
       "tools.guide_mid_body": {th: "รหัสภายในของ LINE มักขึ้นต้นด้วย U สำหรับผู้ใช้, C สำหรับกลุ่ม หรือ R สำหรับห้องแชท", en: "LINE's internal identifier, usually starting with U for a user, C for a group, or R for a chat room."},
       "tools.guide_args_title": {th: "JSON array", en: "JSON array"},
       "tools.guide_args_body": {th: "รายการอาร์กิวเมนต์ต้องใช้วงเล็บเหลี่ยมและเครื่องหมายคำพูดแบบ JSON เช่น [\"U123\", 20] ห้ามใช้ข้อความธรรมดาที่ไม่ใช่ JSON", en: "Arguments must use JSON brackets and quotes, for example [\"U123\", 20]. Plain text that is not valid JSON is rejected."},
@@ -5473,15 +6453,15 @@ INDEX_HTML = r"""<!doctype html>
       "tools.guide_invalid_json_title": {th: "JSON ไม่ถูกต้อง", en: "Invalid JSON"},
       "tools.guide_invalid_json_body": {th: "ตรวจวงเล็บ เครื่องหมายคำพูด และเครื่องหมายจุลภาค แล้วเริ่มทดสอบจาก [] ก่อน", en: "Check brackets, quotes, and commas, and start by testing with [] first."},
       "tools.guide_permission_title": {th: "ปุ่มกดไม่ได้", en: "Buttons are disabled"},
-      "tools.guide_permission_body": {th: "ต้องเลือกบัญชี LINE และผู้ใช้ต้องมีสิทธิ์เครื่องมือ หากไม่มีสิทธิ์ให้ Admin หรือ God ปรับบทบาทให้", en: "A LINE account must be selected and your user must have the Tools permission. Ask an Admin or God to change the role when necessary."},
+      "tools.guide_permission_body": {th: "ต้องเลือกบัญชี LINE และผู้ใช้ต้องมีสิทธิ์เครื่องมือ หากไม่มีสิทธิ์ให้ ผู้ดูแล ปรับบทบาทให้", en: "A LINE account must be selected and your user must have the Tools permission. Ask an Admin or God to change the role when necessary."},
       "common.confirm": {th: "ยืนยัน", en: "Confirm"},
       "common.back": {th: "กลับ", en: "Back"},
       "common.next": {th: "ถัดไป", en: "Next"},
       "common.refresh": {th: "รีเฟรช", en: "Refresh"},
-      "incoming_api.title": {th: "Incoming API", en: "Incoming API"},
+      "incoming_api.title": {th: "API รับข้อความ", en: "Incoming API"},
       "incoming_api.subtitle": {th: "สร้างลิงก์ที่ปลอดภัยให้ระบบภายนอกส่งข้อความเข้า LINE", en: "Create secure links for external systems to send LINE messages."},
       "incoming_api.guide": {th: "วิธีใช้", en: "Usage guide"},
-      "incoming_api.guide_title": {th: "วิธีใช้ Incoming API", en: "Incoming API usage guide"},
+      "incoming_api.guide_title": {th: "วิธีใช้ API รับข้อความ", en: "Incoming API usage guide"},
       "incoming_api.guide_subtitle": {th: "เลือกลิงก์เพื่อรับตัวอย่างคำขอที่นำไปใช้ได้ทันที", en: "Choose a link to get ready-to-use request examples."},
       "incoming_api.guide_choose_link": {th: "ลิงก์ API ที่ใช้ในตัวอย่าง", en: "API link used in the examples"},
       "incoming_api.guide_example_link": {th: "ตัวอย่าง — ยังไม่ได้เลือกลิงก์", en: "Example — no link selected"},
@@ -5490,7 +6470,7 @@ INDEX_HTML = r"""<!doctype html>
       "incoming_api.guide_start_2": {th: "เลือกรายชื่อหรือกลุ่มอย่างน้อยหนึ่งปลายทาง แต่ไม่เกิน 20 ปลายทาง ทุกคำขอหนึ่งครั้งจะส่งเนื้อหาเดียวกันไปยังทุกปลายทางที่เลือก", en: "Choose at least one contact or group, up to 20 targets. One request sends the same content to every selected target."},
       "incoming_api.guide_start_3": {th: "ตรวจรูปแบบคำขอ: GET ใช้ส่งข้อความอย่างเดียว ส่วน POST ส่งข้อความ รูปจาก URL หรือรูป Base64 ได้ เปิดการเข้ารหัสเมื่อปลายทางรองรับและต้องการเท่านั้น", en: "Review request formats: GET sends text only, while POST can send text, an image URL, or a Base64 image. Enable encryption only when it is required and supported by the target."},
       "incoming_api.guide_start_4": {th: "ตรวจสรุปแล้วกดสร้าง จากนั้นคัดลอก Endpoint URL ไปเก็บในระบบภายนอก URL มี token ลับอยู่แล้วจึงไม่ต้องใช้ cookie เข้าสู่ระบบหรือ header เพิ่มเติม", en: "Review and create the link, then store the Endpoint URL in the external system. The URL already contains a secret token, so no login cookie or extra header is required."},
-      "incoming_api.guide_start_5": {th: "ทดสอบข้อความสั้นไปยังปลายทางทดสอบก่อนใช้งานจริง แล้วตรวจ HTTP status, JSON response และหน้า Log ว่าทุกปลายทางสำเร็จ", en: "Send a short message to a test target first, then check the HTTP status, JSON response, and Logs to confirm that every target succeeded."},
+      "incoming_api.guide_start_5": {th: "ทดสอบข้อความสั้นไปยังปลายทางทดสอบก่อนใช้งานจริง แล้วตรวจ HTTP status, JSON response และหน้า บันทึกการทำงาน ว่าทุกปลายทางสำเร็จ", en: "Send a short message to a test target first, then check the HTTP status, JSON response, and Logs to confirm that every target succeeded."},
       "incoming_api.guide_secret": {th: "เก็บ Endpoint URL เหมือนรหัสผ่าน ผู้ที่มี URL สามารถส่งข้อความไปยังปลายทางที่ตั้งค่าไว้ได้", en: "Treat the Endpoint URL like a password. Anyone who has it can send to the configured targets."},
       "incoming_api.guide_beginner_title": {th: "เริ่มทดสอบแบบง่ายที่สุด", en: "The easiest ways to test"},
       "incoming_api.guide_browser_title": {th: "ทดสอบ GET จากเบราว์เซอร์", en: "Test GET in a browser"},
@@ -5519,7 +6499,7 @@ INDEX_HTML = r"""<!doctype html>
       "incoming_api.guide_rotate_title": {th: "สร้าง URL ใหม่เมื่อสงสัยว่ารั่ว", en: "Rotate a URL if it may be exposed"},
       "incoming_api.guide_rotate_body": {th: "ปุ่ม “สร้าง URL ใหม่” จะยกเลิก URL เดิมทันที ต้องนำ URL ใหม่ไปเปลี่ยนในทุกระบบที่เรียกใช้งาน", en: "Rotate URL invalidates the old URL immediately. Replace it in every external system that calls the API."},
       "incoming_api.guide_error_check_title": {th: "เมื่อ API ตอบ error", en: "When the API returns an error"},
-      "incoming_api.guide_error_check_body": {th: "ตรวจ HTTP status และ response body ก่อน จากนั้นดูหน้า Log หมวด API เพื่อแยกว่า request ไม่ถูกต้อง ลิงก์ถูกปิด เรียกถี่เกิน หรือ LINE ส่งไปยังบางปลายทางไม่สำเร็จ", en: "Check the HTTP status and response body, then review the API logs to distinguish an invalid request, disabled link, rate limit, or LINE delivery failure for individual targets."},
+      "incoming_api.guide_error_check_body": {th: "ตรวจ HTTP status และ response body ก่อน จากนั้นดูหน้า บันทึกการทำงาน หมวด API เพื่อแยกว่า request ไม่ถูกต้อง ลิงก์ถูกปิด เรียกถี่เกิน หรือ LINE ส่งไปยังบางปลายทางไม่สำเร็จ", en: "Check the HTTP status and response body, then review the API logs to distinguish an invalid request, disabled link, rate limit, or LINE delivery failure for individual targets."},
       "incoming_api.create": {th: "+ สร้างลิงก์ API", en: "+ Create API link"},
       "incoming_api.wizard_title": {th: "สร้างลิงก์ API", en: "Create API link"},
       "incoming_api.wizard_subtitle": {th: "ลิงก์จะใช้งานได้เฉพาะบัญชี LINE และปลายทางที่กำหนด", en: "The link is limited to the selected LINE account and targets."},
@@ -5603,8 +6583,8 @@ INDEX_HTML = r"""<!doctype html>
       "errors.ai_quota": {th: "โควต้า Google Gemini หมด — รุ่นฟรีมักสร้างรูปไม่ได้ (โควต้า = 0) ต้องเปิดการเรียกเก็บเงิน (billing) บนคีย์ Google หรือรอสักครู่แล้วลองใหม่", en: "Google Gemini quota exceeded — the free tier often can't generate images (quota 0). Enable billing on your Google API key, or try again later."},
       "errors.fal_quota": {th: "เครดิตหรือโควต้า fal.ai ไม่เพียงพอ โปรดตรวจสอบ Billing และยอดคงเหลือของบัญชี fal.ai", en: "fal.ai credit or quota is insufficient. Check billing and the available balance on your fal.ai account."},
       "errors.ai_key_rejected": {th: "API Key ถูกปฏิเสธหรือไม่มีสิทธิ์ใช้งาน — ตรวจสอบคีย์และสิทธิ์การใช้งานของผู้ให้บริการ", en: "The API key was rejected or lacks access — check the key and your provider access."},
-      "errors.assistant_not_configured": {th: "ยังไม่ได้ตั้งค่า Ollama และโมเดล AI ที่หน้า God", en: "Ollama and an AI model have not been configured on the God page."},
-      "errors.invalid_auto_reply_setting": {th: "ค่าตั้งตอบ LINE อัตโนมัติไม่ถูกต้อง", en: "Automatic LINE reply settings are invalid."},
+      "errors.assistant_not_configured": {th: "ยังไม่ได้ตั้งค่า Ollama และโมเดล AI ที่หน้าผู้ดูแลระบบ", en: "Ollama and an AI model have not been configured on the God page."},
+      "errors.invalid_auto_reply_setting": {th: "ค่าตั้งตอบอัตโนมัติไม่ถูกต้อง", en: "Automatic LINE reply settings are invalid."},
       "errors.auto_reply_group_required": {th: "เลือกอย่างน้อย 1 กลุ่ม หรือเปลี่ยนเป็นทุกกลุ่ม", en: "Select at least one group or choose All groups."},
       "errors.email_invalid": {th: "กรอกอีเมลให้ถูกต้อง", en: "Enter a valid email address."},
       "errors.email_exists": {th: "อีเมลนี้มีบัญชีอยู่แล้ว", en: "An account with this email already exists."},
@@ -5649,36 +6629,36 @@ INDEX_HTML = r"""<!doctype html>
       "confirm.run_now": {th: "ส่งข้อความตอนนี้เลยหรือไม่?", en: "Send this message right now?"},
       "confirm.delete_schedule": {th: "ลบตารางเวลานี้?", en: "Delete this schedule?"},
       "confirm.delete_user": {th: "ลบผู้ใช้ {name}?", en: "Delete user {name}?"},
-      "confirm.clear_bot_logs": {th: "ล้าง Log ทั้งหมดของบัญชีนี้?", en: "Clear all logs for this account?"},
-      "botlog.title": {th: "Log ทั้งหมด", en: "Activity Log"},
-      "botlog.subtitle": {th: "รวมทุก action จากบอท API AI และการตอบกลับอัตโนมัติของบัญชี LINE ที่เลือก", en: "All Bot, API, AI, and automatic reply activity for the selected LINE account."},
-      "botlog.nav_logs": {th: "รายการ Log", en: "Log entries"},
+      "confirm.clear_bot_logs": {th: "ล้าง บันทึกการทำงาน ทั้งหมดของบัญชีนี้?", en: "Clear all logs for this account?"},
+      "botlog.title": {th: "บันทึกการทำงาน ทั้งหมด", en: "Activity Log"},
+      "botlog.subtitle": {th: "รวมทุก action จากระบบ API AI และการตอบกลับอัตโนมัติของบัญชี LINE ที่เลือก", en: "All Bot, API, AI, and automatic reply activity for the selected LINE account."},
+      "botlog.nav_logs": {th: "รายการ บันทึกการทำงาน", en: "Log entries"},
       "botlog.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
-      "botlog.guide_title": {th: "วิธีอ่าน Log", en: "How to read Logs"},
-      "botlog.guide_subtitle": {th: "ใช้ Log เพื่อตรวจว่าระบบรับงาน ทำขั้นตอนไหนสำเร็จ และหยุดที่จุดใด", en: "Use Logs to see whether work was accepted, which steps succeeded, and where it stopped."},
+      "botlog.guide_title": {th: "วิธีอ่าน บันทึกการทำงาน", en: "How to read Logs"},
+      "botlog.guide_subtitle": {th: "ใช้ บันทึกการทำงาน เพื่อตรวจว่าระบบรับงาน ทำขั้นตอนไหนสำเร็จ และหยุดที่จุดใด", en: "Use Logs to see whether work was accepted, which steps succeeded, and where it stopped."},
       "botlog.guide_step_1_title": {th: "เลือกบัญชี LINE ที่ต้องการตรวจ", en: "Select the LINE account to inspect"},
-      "botlog.guide_step_1_body": {th: "Log แยกตามบัญชี LINE เสมอ ถ้าไม่พบเหตุการณ์ ให้ตรวจชื่อบัญชีในเมนูด้านบนก่อน เพราะการเปลี่ยนบัญชีจะเปลี่ยนชุด Log ทันที", en: "Logs are always isolated by LINE account. If an event is missing, check the account selected at the top because switching accounts changes the log set immediately."},
+      "botlog.guide_step_1_body": {th: "บันทึกการทำงาน แยกตามบัญชี LINE เสมอ ถ้าไม่พบเหตุการณ์ ให้ตรวจชื่อบัญชีในเมนูด้านบนก่อน เพราะการเปลี่ยนบัญชีจะเปลี่ยนชุด บันทึกการทำงาน ทันที", en: "Logs are always isolated by LINE account. If an event is missing, check the account selected at the top because switching accounts changes the log set immediately."},
       "botlog.guide_step_2_title": {th: "เริ่มจากรายการล่าสุด", en: "Start with the newest entries"},
       "botlog.guide_step_2_body": {th: "รายการใหม่อยู่ด้านบนและรีเฟรชเบื้องหลังอัตโนมัติขณะเปิดหน้านี้ ป้าย [OK] หมายถึงขั้นตอนสำเร็จ ส่วน [ERR] หมายถึงขั้นตอนนั้นผิดพลาด", en: "New entries appear first and refresh automatically while this page is open. [OK] means that step succeeded; [ERR] means it failed."},
       "botlog.guide_step_3_title": {th: "กรองให้เหลือเหตุการณ์ที่เกี่ยวข้อง", en: "Filter to the relevant events"},
-      "botlog.guide_step_3_body": {th: "พิมพ์ชื่องาน ชื่อปลายทาง หรือข้อความผิดพลาดในช่องค้นหา แล้วเลือกหมวดหมู่ Bot, AI, API หรือ System และเลือกดูเฉพาะ Success หรือ Error ได้", en: "Search by job, target, or error text, then filter by Bot, AI, API, or System and by Success or Error."},
+      "botlog.guide_step_3_body": {th: "พิมพ์ชื่องาน ชื่อปลายทาง หรือข้อความผิดพลาดในช่องค้นหา แล้วเลือกหมวดหมู่ ส่งตามเวลา, AI, API หรือ System และเลือกดูเฉพาะ Success หรือ Error ได้", en: "Search by job, target, or error text, then filter by Bot, AI, API, or System and by Success or Error."},
       "botlog.guide_step_4_title": {th: "เปิดรายละเอียดและอ่านตามเวลา", en: "Open details and follow the timeline"},
       "botlog.guide_step_4_body": {th: "งานหนึ่งครั้งอาจมีหลายบรรทัด เช่น รับงาน → เตรียมเนื้อหา → ส่งรายการ → สำเร็จหรือผิดพลาด ให้เทียบเวลา ชื่องาน และปลายทางเดียวกันเพื่อดูเส้นทางทั้งหมด", en: "One run may have several entries, such as accepted, content prepared, item sent, and success or error. Match time, job, and target to follow the full path."},
       "botlog.guide_step_5_title": {th: "แก้สาเหตุก่อนลองใหม่", en: "Fix the cause before retrying"},
-      "botlog.guide_step_5_body": {th: "อ่านข้อความผิดพลาดแบบเต็ม แก้การเชื่อมต่อ เซสชัน API Key Prompt หรือข้อมูลปลายทาง แล้วจึงกดส่งใหม่ การกด “ล้าง Log” ลบเฉพาะประวัติและไม่ได้แก้ข้อผิดพลาด", en: "Read the full error, fix the connection, session, API key, prompt, or target, and then retry. Clear Logs only removes history; it does not fix an error."},
-      "botlog.guide_open": {th: "เปิดรายการ Log", en: "Open log entries"},
+      "botlog.guide_step_5_body": {th: "อ่านข้อความผิดพลาดแบบเต็ม แก้การเชื่อมต่อ เซสชัน API Key Prompt หรือข้อมูลปลายทาง แล้วจึงกดส่งใหม่ การกด “ล้าง บันทึกการทำงาน” ลบเฉพาะประวัติและไม่ได้แก้ข้อผิดพลาด", en: "Read the full error, fix the connection, session, API key, prompt, or target, and then retry. Clear Logs only removes history; it does not fix an error."},
+      "botlog.guide_open": {th: "เปิดรายการ บันทึกการทำงาน", en: "Open log entries"},
       "botlog.guide_categories_title": {th: "แต่ละหมวดบอกอะไร", en: "What each category contains"},
-      "botlog.guide_category_bot_title": {th: "Bot", en: "Bot"},
+      "botlog.guide_category_bot_title": {th: "ส่งตามเวลา", en: "Bot"},
       "botlog.guide_category_bot_body": {th: "การสร้าง แก้ไข หยุด และรันตารางส่ง รวมการเตรียมข้อความ รูป และการส่งแต่ละปลายทาง", en: "Creating, editing, pausing, and running schedules, including preparing content and sending to each target."},
       "botlog.guide_category_ai_title": {th: "AI", en: "AI"},
-      "botlog.guide_category_ai_body": {th: "การสร้างรูปด้วย AI และการตอบ LINE อัตโนมัติ ตั้งแต่รับข้อความ สร้างคำตอบ จนส่งกลับสำเร็จ", en: "AI image generation and automatic LINE replies, from receiving a message to generating and sending the answer."},
+      "botlog.guide_category_ai_body": {th: "การสร้างรูปด้วย AI และการตอบอัตโนมัติ ตั้งแต่รับข้อความ สร้างคำตอบ จนส่งกลับสำเร็จ", en: "AI image generation and automatic LINE replies, from receiving a message to generating and sending the answer."},
       "botlog.guide_category_api_title": {th: "API", en: "API"},
-      "botlog.guide_category_api_body": {th: "การสร้างหรือแก้ลิงก์ Incoming API คำขอที่เข้ามา และผลส่งข้อความหรือรูปไปยังแต่ละปลายทาง", en: "Creating or updating Incoming API links, received requests, and text or image delivery results for each target."},
+      "botlog.guide_category_api_body": {th: "การสร้างหรือแก้ลิงก์ API รับข้อความ คำขอที่เข้ามา และผลส่งข้อความหรือรูปไปยังแต่ละปลายทาง", en: "Creating or updating Incoming API links, received requests, and text or image delivery results for each target."},
       "botlog.guide_category_system_title": {th: "System", en: "System"},
       "botlog.guide_category_system_body": {th: "เหตุการณ์ทั่วไปของระบบที่ไม่อยู่ในสามหมวดข้างต้น เช่น การจัดการข้อมูลหรือการเชื่อมต่อ", en: "General system activity outside the other categories, such as data management or connection events."},
       "botlog.guide_errors_title": {th: "ข้อผิดพลาดที่พบบ่อย", en: "Common errors"},
       "botlog.guide_session_body": {th: "เซสชัน LINE ใช้ไม่ได้ ให้ไปที่จัดการบัญชี LINE กดเชื่อมต่อใหม่ และสแกนบัญชีเดิมเพื่อเก็บงานกับการตั้งค่าไว้", en: "The LINE session is unavailable. Open LINE Account Management, choose Reconnect, and scan the same account to preserve jobs and settings."},
-      "botlog.guide_ssl_body": {th: "การเชื่อมต่ออัปโหลดสื่อถูกตัด ลองใหม่ ตรวจ Proxy, DNS และเครือข่ายของเซิร์ฟเวอร์ หรือทดสอบด้วยไฟล์ที่เล็กลง", en: "The media upload connection was interrupted. Retry, check the server proxy, DNS, and network, or test with a smaller file."},
+      "botlog.guide_ssl_body": {th: "การเชื่อมต่ออัปโหลดสื่อถูกตัด ลองใหม่ ตรวจ พร็อกซี, DNS และเครือข่ายของเซิร์ฟเวอร์ หรือทดสอบด้วยไฟล์ที่เล็กลง", en: "The media upload connection was interrupted. Retry, check the server proxy, DNS, and network, or test with a smaller file."},
       "botlog.guide_auth_body": {th: "API Key หรือสิทธิ์ของบริการภายนอกไม่ถูกต้อง หมดอายุ หรือไม่มีเครดิต ให้ตรวจค่าที่หน้าตั้งค่าของฟังก์ชันนั้น", en: "The external API key or permission is invalid, expired, or out of credit. Check the settings for that feature."},
       "botlog.guide_ai_error_body": {th: "โมเดล AI ไม่สามารถสร้างรูปจาก Prompt นี้ได้ ให้ตรวจว่าเลือกโมเดลภาพ ไม่มีไฟล์อ้างอิงที่หาย และปรับ Prompt ให้ชัดเจนและปลอดภัย", en: "The AI model could not create an image from the prompt. Confirm it is an image model, no referenced attachment is missing, and revise the prompt to be clear and safe."},
       "botlog.guide_rate_body": {th: "เรียกบริการถี่เกินกำหนด ให้เว้นช่วง ลดจำนวนการส่ง หรือรอให้โควตากลับมาก่อนลองใหม่", en: "The service was called too frequently. Increase the interval, reduce sends, or wait for the quota to recover before retrying."},
@@ -5686,13 +6666,13 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.filtered_entries": {th: "แสดง {shown} จาก {total} รายการ", en: "Showing {shown} of {total}"},
       "botlog.refresh": {th: "รีเฟรช", en: "Refresh"},
       "botlog.clear": {th: "ล้าง log", en: "Clear"},
-      "botlog.none": {th: "ยังไม่มี Log สำหรับบัญชีนี้", en: "No activity log for this account yet"},
-      "botlog.no_results": {th: "ไม่พบ Log ที่ตรงกับตัวกรอง", en: "No logs match these filters"},
+      "botlog.none": {th: "ยังไม่มี บันทึกการทำงาน สำหรับบัญชีนี้", en: "No activity log for this account yet"},
+      "botlog.no_results": {th: "ไม่พบ บันทึกการทำงาน ที่ตรงกับตัวกรอง", en: "No logs match these filters"},
       "botlog.search": {th: "ค้นหา", en: "Search"},
       "botlog.search_ph": {th: "Action, ปลายทาง หรือรายละเอียด", en: "Action, target, or details"},
       "botlog.category": {th: "หมวดหมู่", en: "Category"},
       "botlog.category_all": {th: "ทุกหมวดหมู่", en: "All categories"},
-      "botlog.category_bot": {th: "บอท", en: "Bot"},
+      "botlog.category_bot": {th: "ระบบ", en: "Bot"},
       "botlog.category_ai": {th: "AI", en: "AI"},
       "botlog.category_api": {th: "API", en: "API"},
       "botlog.category_system": {th: "ระบบ", en: "System"},
@@ -5710,7 +6690,7 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.schedule.resume": {th: "เปิดตารางเวลา", en: "Schedule resumed"},
       "botlog.action.schedule.delete": {th: "ลบตารางเวลา", en: "Schedule deleted"},
       "botlog.action.schedule.clear_stuck": {th: "เคลียร์งานค้าง", en: "Stuck job cleared"},
-      "botlog.action.schedule.run.start": {th: "เริ่มรันบอท", en: "Bot run started"},
+      "botlog.action.schedule.run.start": {th: "เริ่มส่งตามเวลา", en: "Bot run started"},
       "botlog.action.schedule.run.success": {th: "ส่งสำเร็จ", en: "Send succeeded"},
       "botlog.action.schedule.run.error": {th: "ส่งผิดพลาด", en: "Send failed"},
       "botlog.action.content.text": {th: "เตรียมข้อความ", en: "Text prepared"},
@@ -5730,8 +6710,8 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.content.ai.error": {th: "สร้างรูป AI ผิดพลาด", en: "AI image generation failed"},
       "botlog.action.send.item.success": {th: "ส่งรายการสำเร็จ", en: "Item sent"},
       "botlog.action.send.item.error": {th: "ส่งรายการผิดพลาด", en: "Item send failed"},
-      "botlog.action.pattern.create": {th: "เพิ่มแพทเทิร์น", en: "Pattern created"},
-      "botlog.action.pattern.delete": {th: "ลบแพทเทิร์น", en: "Pattern deleted"},
+      "botlog.action.pattern.create": {th: "เพิ่มข้อความสำเร็จรูป", en: "Pattern created"},
+      "botlog.action.pattern.delete": {th: "ลบข้อความสำเร็จรูป", en: "Pattern deleted"},
       "botlog.action.logs.clear": {th: "ล้าง log", en: "Logs cleared"},
       "botlog.action.incoming_api.create": {th: "สร้างลิงก์ API", en: "API link created"},
       "botlog.action.incoming_api.update": {th: "แก้ไขลิงก์ API", en: "API link updated"},
@@ -5740,20 +6720,20 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.incoming_api.request": {th: "รับคำขอจาก API", en: "Incoming API request"},
       "botlog.action.incoming_api.send.success": {th: "API ส่งเนื้อหาสำเร็จ", en: "API content sent"},
       "botlog.action.incoming_api.send.error": {th: "API ส่งเนื้อหาผิดพลาด", en: "API content failed"},
-      "botlog.action.ai.auto_reply.settings": {th: "ตั้งค่าตอบ LINE อัตโนมัติ", en: "Auto reply settings changed"},
+      "botlog.action.ai.auto_reply.settings": {th: "ตั้งค่าตอบอัตโนมัติ", en: "Auto reply settings changed"},
       "botlog.action.ai.auto_reply.received": {th: "รับข้อความสำหรับ AI", en: "Message received for AI"},
       "botlog.action.ai.auto_reply.answered": {th: "AI สร้างคำตอบสำเร็จ", en: "AI answer generated"},
       "botlog.action.ai.auto_reply.unanswered": {th: "AI ตอบไม่ได้", en: "AI could not answer"},
       "botlog.action.ai.auto_reply.sent": {th: "ส่งคำตอบ AI สำเร็จ", en: "AI reply sent"},
       "botlog.action.ai.auto_reply.rate_limit": {th: "หยุดตอบข้อความถี่เกินกำหนด", en: "Auto reply rate limited"},
-      "botlog.action.ai.auto_reply.error": {th: "ตอบ LINE อัตโนมัติผิดพลาด", en: "Automatic LINE reply failed"},
-      "botlog.chat_contact": {th: "Contact", en: "Contact"},
+      "botlog.action.ai.auto_reply.error": {th: "ตอบอัตโนมัติผิดพลาด", en: "Automatic LINE reply failed"},
+      "botlog.chat_contact": {th: "เพื่อน", en: "Contact"},
       "botlog.chat_group": {th: "กลุ่ม", en: "Group"},
       "botlog.chat_unknown": {th: "แชท", en: "Chat"},
       "botlog.sender": {th: "ผู้ส่ง", en: "Sender"},
       "botlog.model": {th: "โมเดล", en: "Model"},
       "botlog.action.line.session.reauth_required": {th: "เซสชัน LINE ถูกยกเลิก", en: "LINE session requires reconnect"},
-      "toast.bot_logs_cleared": {th: "ล้าง Log ทั้งหมดแล้ว", en: "Activity logs cleared"}
+      "toast.bot_logs_cleared": {th: "ล้าง บันทึกการทำงาน ทั้งหมดแล้ว", en: "Activity logs cleared"}
     };
 
     const state = {
@@ -5828,7 +6808,8 @@ INDEX_HTML = r"""<!doctype html>
     };
 
     const BOT_BACKGROUND_REFRESH_MS = 3000;
-    const CONVERSATION_BACKGROUND_REFRESH_MS = 8000;
+    // Fallback poll used only while the /api/events stream is disconnected.
+    const CONVERSATION_BACKGROUND_REFRESH_MS = 30000;
 
     const $ = (id) => document.getElementById(id);
 
@@ -5837,15 +6818,15 @@ INDEX_HTML = r"""<!doctype html>
       "patterns.category": {th: "หมวดหมู่", en: "Category"},
       "patterns.categories_title": {th: "หมวดหมู่", en: "Categories"},
       "patterns.manage_title": {th: "จัดการหมวดหมู่", en: "Manage categories"},
-      "patterns.manage_hint": {th: "เพิ่ม แก้ไข หรือลบหมวดหมู่แพทเทิร์น", en: "Add, edit, or delete pattern categories"},
+      "patterns.manage_hint": {th: "เพิ่ม แก้ไข หรือลบหมวดหมู่ข้อความสำเร็จรูป", en: "Add, edit, or delete pattern categories"},
       "patterns.settings": {th: "ตั้งค่าหมวดหมู่", en: "Category settings"},
       "patterns.system": {th: "หมวดระบบ", en: "System category"},
       "patterns.edit_category": {th: "แก้ไขหมวดหมู่", en: "Edit category"},
       "patterns.category_updated": {th: "แก้ไขหมวดหมู่แล้ว", en: "Category updated"},
-      "patterns.create_title": {th: "สร้างแพทเทิร์นใหม่", en: "Create pattern"},
-      "patterns.edit_title": {th: "แก้ไขแพทเทิร์น", en: "Edit pattern"},
-      "patterns.updated": {th: "แก้ไขแพทเทิร์นแล้ว", en: "Pattern updated"},
-      "patterns.list_title": {th: "รายการแพทเทิร์น", en: "Patterns"},
+      "patterns.create_title": {th: "สร้างข้อความสำเร็จรูปใหม่", en: "Create pattern"},
+      "patterns.edit_title": {th: "แก้ไขข้อความสำเร็จรูป", en: "Edit pattern"},
+      "patterns.updated": {th: "แก้ไขข้อความสำเร็จรูปแล้ว", en: "Pattern updated"},
+      "patterns.list_title": {th: "รายการข้อความสำเร็จรูป", en: "Patterns"},
       "patterns.category_filter": {th: "กรองตามหมวดหมู่", en: "Filter by category"},
       "patterns.general": {th: "ทั่วไป", en: "General"},
       "patterns.all": {th: "ทุกหมวดหมู่", en: "All categories"},
@@ -5855,11 +6836,11 @@ INDEX_HTML = r"""<!doctype html>
       "patterns.category_name_ph": {th: "เช่น โปรโมชั่น", en: "e.g. Promotions"},
       "patterns.category_created": {th: "เพิ่มหมวดหมู่แล้ว", en: "Category created"},
       "patterns.category_deleted": {th: "ลบหมวดหมู่แล้ว", en: "Category deleted"},
-      "patterns.delete_category_confirm": {th: "ลบหมวดหมู่นี้? แพทเทิร์นในหมวดจะย้ายไปทั่วไป", en: "Delete this category? Its patterns will move to General."},
-      "botlog.action.pattern.category.create": {th: "เพิ่มหมวดหมู่แพทเทิร์น", en: "Pattern category created"},
-      "botlog.action.pattern.category.delete": {th: "ลบหมวดหมู่แพทเทิร์น", en: "Pattern category deleted"},
-      "botlog.action.pattern.category.update": {th: "แก้ไขหมวดหมู่แพทเทิร์น", en: "Pattern category updated"},
-      "botlog.action.pattern.update": {th: "แก้ไขแพทเทิร์น", en: "Pattern updated"},
+      "patterns.delete_category_confirm": {th: "ลบหมวดหมู่นี้? ข้อความสำเร็จรูปในหมวดจะย้ายไปทั่วไป", en: "Delete this category? Its patterns will move to General."},
+      "botlog.action.pattern.category.create": {th: "เพิ่มหมวดหมู่ข้อความสำเร็จรูป", en: "Pattern category created"},
+      "botlog.action.pattern.category.delete": {th: "ลบหมวดหมู่ข้อความสำเร็จรูป", en: "Pattern category deleted"},
+      "botlog.action.pattern.category.update": {th: "แก้ไขหมวดหมู่ข้อความสำเร็จรูป", en: "Pattern category updated"},
+      "botlog.action.pattern.update": {th: "แก้ไขข้อความสำเร็จรูป", en: "Pattern updated"},
       "gate.none_shared_title": {th: "ยังไม่มีบัญชี LINE", en: "No LINE account yet"},
       "gate.none_shared_body": {th: "เพิ่มบัญชี LINE ของคุณได้จากเมนูตั้งค่า", en: "Add your own LINE account from Settings."},
       "settings.subtitle_users": {th: "จัดการสมาชิก บทบาท และตรวจดูพื้นที่ใช้งานของแต่ละคน", en: "Manage members, roles, and inspect each private workspace."},
@@ -5930,11 +6911,12 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     // ---- top-level tabs -------------------------------------------------
-    const TABS = ["line", "assistant", "incoming-api", "tools", "bot", "logs"];
-    const BOT_PAGES = ["schedules", "schedule", "patterns", "pattern-categories", "ai-settings", "guide"];
+    const TABS = ["line", "assistant", "incoming-api", "tools", "bot", "logs", "kpi"];
+    const BOT_PAGES = ["schedules", "schedule", "wizard", "patterns", "pattern-categories", "ai-settings", "guide"];
     function setTab(tab) {
       if (!TABS.includes(tab)) tab = "line";
       if (tab === "incoming-api" && !hasPermission("manage_api")) tab = "line";
+      if (tab === "kpi" && !hasPermission("manage_accounts")) tab = "line";
       state.tab = tab;
       localStorage.setItem("okline.tab", tab);
       let activeTab = null;
@@ -5958,11 +6940,12 @@ INDEX_HTML = r"""<!doctype html>
       if (tab === "logs") loadBotLogs().catch(toastError);
       if (tab === "line") refreshConversationsInBackground();
       if (tab === "assistant") {
-        if (state.assistantView === "auto-reply") loadAssistantAutoReply().catch(toastError);
+        if (state.assistantView === "auto-reply") loadAssistantOverview().catch(toastError);
         else if (state.assistantView === "knowledge") loadAssistantKnowledge().catch(toastError);
         else if (state.assistantView === "chat") loadAssistant().catch(toastError);
       }
       if (tab === "incoming-api") loadIncomingApiLinks().catch(toastError);
+      if (tab === "kpi") loadKpi().catch(toastError);
     }
 
     function setBotPage(page) {
@@ -6479,22 +7462,30 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function setSettingsPane(pane) {
-      if (!["password", "accounts", "users", "guide"].includes(pane)) pane = "accounts";
-      $("passwordPane").classList.toggle("active", pane === "password");
-      $("accountsPane").classList.toggle("active", pane === "accounts");
-      $("usersPane").classList.toggle("active", pane === "users");
-      $("settingsGuidePane").classList.toggle("active", pane === "guide");
-      $("passwordTabButton").classList.toggle("active", pane === "password");
-      $("accountsTabButton").classList.toggle("active", pane === "accounts");
-      $("usersTabButton").classList.toggle("active", pane === "users");
-      $("settingsGuideTabButton").classList.toggle("active", pane === "guide");
-      const subtitleKey = pane === "password"
-        ? "settings.subtitle_password"
-        : (pane === "users"
-          ? "settings.subtitle_users"
-          : (pane === "guide" ? "settings.subtitle_guide" : "settings.subtitle_line_accounts"));
-      $("settingsSubtitle").textContent = t(subtitleKey);
+      if (!["password", "accounts", "users", "guide", "team", "ai", "kpi", "notify"].includes(pane)) pane = "accounts";
+      const panes = {
+        password: ["passwordPane", "passwordTabButton", "settings.subtitle_password"],
+        accounts: ["accountsPane", "accountsTabButton", "settings.subtitle_line_accounts"],
+        team: ["teamPane", "teamTabButton", "settings.subtitle_team"],
+        ai: ["aiSettingsPane", "aiTabButton", "settings.subtitle_ai"],
+        kpi: ["kpiSettingsPane", "kpiSettingsTabButton", "settings.subtitle_kpi"],
+        notify: ["notifySettingsPane", "notifySettingsTabButton", "settings.subtitle_notify"],
+        users: ["usersPane", "usersTabButton", "settings.subtitle_users"],
+        guide: ["settingsGuidePane", "settingsGuideTabButton", "settings.subtitle_guide"]
+      };
+      for (const [name, [paneId, buttonId]] of Object.entries(panes)) {
+        $(paneId).classList.toggle("active", pane === name);
+        $(buttonId).classList.toggle("active", pane === name);
+      }
+      $("settingsSubtitle").textContent = t(panes[pane][2]);
       if (pane === "accounts" || pane === "users") loadAccountManagement().catch(toastError);
+      if (pane === "team") loadTeam().catch(toastError);
+      if (pane === "ai") {
+        loadAiSettings();
+        loadAssistantBrain().then(() => renderBrainForm($("settingsBrainSlot"))).catch(toastError);
+      }
+      if (pane === "kpi") loadKpiSettingsForm().catch(toastError);
+      if (pane === "notify") renderNotifySettings();
     }
 
     async function changePassword() {
@@ -7080,7 +8071,10 @@ INDEX_HTML = r"""<!doctype html>
       state.target = mid;
       $("targetInput").value = mid;
       $("chatTitle").textContent = label || mid || t("chat.title");
-      $("targetLabel").textContent = label ? `${label} / ${mid}` : (mid || t("chat.no_target"));
+      const group = (state.groups || []).find((item) => item.mid === mid);
+      $("targetLabel").textContent = !mid
+        ? t("chat.no_target")
+        : (group ? t("groups.members", {n: group.memberCount || 0}) : t("chat.kind_friend"));
       $("scheduleTarget").value = mid || "";
       document.querySelectorAll(".line-row").forEach((row) => {
         row.classList.toggle("selected", row.dataset.mid === mid);
@@ -7206,13 +8200,18 @@ INDEX_HTML = r"""<!doctype html>
       list.replaceChildren();
       const search = $("contactSearch").value.trim().toLocaleLowerCase();
       const rows = currentConversationRows()
-        .filter(({item}) => !search || String(item.name || "").toLocaleLowerCase().includes(search))
+        .filter(({item}) => !search || String(item.name || "").toLocaleLowerCase().includes(search)
+          || String(item.mid || "").toLocaleLowerCase() === search)
         .sort((a, b) => compareConversationItems(a.item, b.item));
       for (const {item, kind} of rows) {
         const meta = kind === "group"
           ? t("groups.members", {n: item.memberCount || 0})
           : (item.statusMessage || "");
         list.appendChild(itemButton(item.name, item.mid, meta, item));
+      }
+      const rawSearch = $("contactSearch").value.trim();
+      if (looksLikeMid(rawSearch) && !rows.some(({item}) => item.mid === rawSearch)) {
+        list.prepend(itemButton(t("chat.open_mid"), rawSearch, rawSearch, {}));
       }
       if (!list.children.length) {
         listEmpty("allList", search ? "contacts.all_no_match" : "contacts.all_none");
@@ -7321,7 +8320,7 @@ INDEX_HTML = r"""<!doctype html>
 
     function initializeNotifications() {
       const saved = localStorage.getItem("linepassport.notifications");
-      state.notificationsEnabled = saved === "on"
+      state.notificationsEnabled = saved !== "off-by-user"
         && notificationsSupported()
         && Notification.permission === "granted";
       if (!state.notificationsEnabled && saved === "on") {
@@ -7496,7 +8495,7 @@ INDEX_HTML = r"""<!doctype html>
       const options = {
         body: contentLabel(item.lastMessage || {}),
         tag: `linepassport:${accountId}:${item.mid}`,
-        renotify: true,
+        renotify: false,
         silent: false,
         vibrate: [100, 60, 100],
         data
@@ -7523,8 +8522,9 @@ INDEX_HTML = r"""<!doctype html>
         primeConversationBaseline(accountId, conversations);
         return;
       }
-      const incoming = [];
-      const visibleAlerts = [];
+      const inFront = pageIsInFront();
+      const newRooms = [];
+      const backgroundAlerts = [];
       for (const item of conversations) {
         const mid = String(item.mid || "");
         const current = next.get(mid);
@@ -7533,26 +8533,38 @@ INDEX_HTML = r"""<!doctype html>
         const message = item.lastMessage || {};
         const changed = !previous || current.messageKey !== previous.messageKey;
         const isOwn = state.profile && message.from === state.profile.mid;
-        const isOpen = document.visibilityState === "visible"
-          && state.tab === "line"
-          && state.target === item.mid;
-        if (changed && current.unreadCount > 0 && !isOwn) {
-          incoming.push(item);
-          if (!isOpen) visibleAlerts.push(item);
-        }
+        const isOpen = inFront && state.tab === "line" && state.target === item.mid;
+        if (!changed || current.unreadCount <= 0 || isOwn || isOpen) continue;
+        // One soft sound per room that just started waiting, not per message.
+        if (!previous || previous.unreadCount <= 0) newRooms.push(item);
+        if (!inFront) backgroundAlerts.push(item);
       }
       state.conversationBaseline = next;
-      if (!incoming.length) return;
-      playNotificationSoundForItems(accountId, incoming);
-      if (!visibleAlerts.length) return;
-      if (visibleAlerts.length === 1) {
-        toast(t("notifications.new_message", {name: conversationName(visibleAlerts[0])}));
-      } else {
-        toast(t("notifications.new_messages", {n: visibleAlerts.length}));
+      if (!newRooms.length && !backgroundAlerts.length) return;
+      const working = insideWorkingTime();
+      if (inFront) {
+        // Visible and focused: toast + title badge + a soft sound, no pop-ups.
+        if (newRooms.length && working) {
+          playSoftSound();
+          toast(newRooms.length === 1
+            ? t("notifications.new_message", {name: conversationName(newRooms[0])})
+            : t("notifications.new_messages", {n: newRooms.length}));
+        }
+        return;
       }
-      for (const item of visibleAlerts.slice(0, 5)) {
-        showSystemNotification(accountId, item).catch(() => {});
+      if (!working) return;
+      if (newRooms.length) playSoftSound();
+      const now = Date.now();
+      const direct = [];
+      for (const item of backgroundAlerts) {
+        // Wait briefly when the AI may answer; checkEscalationsAndAiHolds() decides.
+        if (autoReplyCovers(item.mid)) {
+          if (!state.pendingAiCheck.has(item.mid)) state.pendingAiCheck.set(item.mid, now + 20000);
+        } else {
+          direct.push(item);
+        }
       }
+      dispatchBackgroundAlerts(accountId, direct);
     }
 
     async function refreshConversationsInBackground() {
@@ -7560,12 +8572,13 @@ INDEX_HTML = r"""<!doctype html>
       const accountId = selectedAccountId();
       if (!accountId || state.conversationLoading) return;
       if (!Array.isArray(state.contacts) && !Array.isArray(state.groups)) return;
-      const lineViewIsVisible = document.visibilityState === "visible" && state.tab === "line";
-      if (!state.notificationsEnabled && !lineViewIsVisible) return;
       state.conversationLoading = true;
       try {
         const data = await api(`/api/conversations?${accountQuery(accountId)}&limit=1000`);
         const conversations = data.conversations || [];
+        state.lastConversationsAt = Date.now();
+        renderFreshness();
+        trackUnreadRooms(conversations);
         processNewMessageNotifications(accountId, conversations);
         const signature = accountId + ":" + JSON.stringify(conversations);
         if (signature === state.conversationSignature) return;
@@ -7883,7 +8896,7 @@ INDEX_HTML = r"""<!doctype html>
       $("sendEncryptedButton").disabled = true;
       btn.textContent = t("common.working");
       try {
-        await post("/api/send", {accountId, to, text, encrypt});
+        await post("/api/send", {accountId, to, text, encrypt: Boolean(encrypt || state.forceEncrypt)});
         toast(t("toast.sent"));
         $("messageText").value = "";
         await loadMessages();
@@ -8260,6 +9273,10 @@ INDEX_HTML = r"""<!doctype html>
       }
       setAccountControls(false);
       setView("login");
+      // No separate "Start" step: request the QR straight away.
+      if ((reset || (state.loginStep || 1) === 1) && !$("beginAddAccountButton").disabled) {
+        startLogin().catch(toastError);
+      }
     }
 
     async function cancelLogin() {
@@ -9067,63 +10084,6 @@ INDEX_HTML = r"""<!doctype html>
       btn.textContent = count ? t("scheduler.clear_stuck_count", {n: count}) : t("scheduler.clear_stuck");
     }
 
-    function renderSchedules() {
-      $("scheduleCount").textContent = t("scheduler.jobs", {n: state.schedules.length});
-      updateClearStuckButton();
-      const list = $("schedulesList");
-      if (!list) return;
-      list.replaceChildren();
-      for (const job of state.schedules) {
-        const item = document.createElement("div");
-        item.className = "item schedule-item";
-
-        const title = document.createElement("strong");
-        title.textContent = job.name || t("scheduler.default_name");
-        const target = document.createElement("span");
-        target.className = "mono";
-        target.textContent = job.to;
-        const meta = document.createElement("span");
-        meta.className = "muted";
-        const src = t("scheduler.source_" + (job.contentSource || "text"));
-        const mode = t("scheduler.mode_" + (job.mode || "once"));
-        const rawStatus = String(job.status || "").toLowerCase();
-        const status = job.running || rawStatus === "running"
-          ? t("scheduler.running")
-          : rawStatus === "login required"
-            ? t("scheduler.login_required")
-          : rawStatus === "error" || job.lastError
-            ? t("scheduler.error")
-            : job.enabled ? t("scheduler.enabled") : t("scheduler.paused");
-        meta.textContent = `${src} · ${mode} · ${status} · ${t("scheduler.next")}: ${fmtEpoch(job.nextRunAt)}`;
-        const detail = document.createElement("span");
-        detail.className = "muted";
-        detail.textContent = job.lastError
-          ? `${t("scheduler.error")}: ${job.lastError}`
-          : `${t("scheduler.sent")}: ${job.sentCount || 0}${job.maxRuns ? "/" + job.maxRuns : ""}`;
-
-        const actions = document.createElement("div");
-        actions.className = "item-actions";
-        const toggle = document.createElement("button");
-        toggle.textContent = job.enabled ? t("scheduler.pause") : t("scheduler.resume");
-        toggle.addEventListener("click", () => toggleSchedule(job.id, !job.enabled).catch(toastError));
-        const run = document.createElement("button");
-        run.textContent = t("scheduler.run_now");
-        run.addEventListener("click", () => runScheduleNow(job.id).catch(toastError));
-        const del = document.createElement("button");
-        del.className = "danger";
-        del.textContent = t("scheduler.delete");
-        del.addEventListener("click", () => deleteSchedule(job.id).catch(toastError));
-        const edit = document.createElement("button");
-        edit.textContent = t("scheduler.edit");
-        edit.addEventListener("click", () => editSchedule(job));
-        actions.append(edit, toggle, run, del);
-
-        item.append(title, target, meta, detail, actions);
-        list.appendChild(item);
-      }
-      if (!list.children.length) list.appendChild(textSpan(t("scheduler.none"), "muted"));
-    }
-
     function botActionLabel(action) {
       const key = "botlog.action." + String(action || "");
       return I18N[key] ? t(key) : String(action || "-");
@@ -9616,7 +10576,7 @@ INDEX_HTML = r"""<!doctype html>
         if (item.sources && item.sources.length) {
           const sources = document.createElement("div");
           sources.className = "assistant-sources";
-          for (const source of item.sources) sources.appendChild(textSpan(`${source.name || "Knowledge"} (${Math.round(Number(source.score || 0) * 100)}%)`, "assistant-source"));
+          for (const source of item.sources) sources.appendChild(textSpan(`${source.name || t("kb.title")} (${Math.round(Number(source.score || 0) * 100)}%)`, "assistant-source"));
           entry.appendChild(sources);
         }
         root.appendChild(entry);
@@ -9637,7 +10597,7 @@ INDEX_HTML = r"""<!doctype html>
         row.className = "assistant-queue-row";
         const head = document.createElement("div");
         head.className = "assistant-queue-head";
-        head.append(textSpan(item.userName || "Member"), textSpan(item.createdAt || "", "assistant-queue-meta"));
+        head.append(textSpan(item.userName || t("kpi.role_staff")), textSpan(item.createdAt || "", "assistant-queue-meta"));
         const question = textSpan(item.question || "", "assistant-queue-question");
         const answer = document.createElement("textarea");
         answer.className = "answer-editor";
@@ -9990,10 +10950,9 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function assistantIndexModeLabel(mode) {
-      if (mode === "embedding") return "Vector index";
-      if (mode === "keyword") return "Keyword index";
+      if (mode === "embedding" || mode === "keyword") return t("kb.status_ok");
       if (mode === "empty") return "Empty";
-      return "Not indexed";
+      return t("kb.status_pending");
     }
 
     function clearAssistantSourceForm() {
@@ -10032,7 +10991,7 @@ INDEX_HTML = r"""<!doctype html>
         head.className = "assistant-source-row-head";
         const identity = document.createElement("div");
         identity.append(textSpan(source.name || "API", "strong"), textSpan(source.url || "", "muted mono"));
-        const status = textSpan(source.lastError || (source.lastSyncAt ? `Synced ${source.lastSyncAt}` : "Not synced"), source.lastError ? "pill error" : "pill");
+        const status = textSpan(source.lastError || (source.lastSyncAt ? t("kb.synced_at", {time: source.lastSyncAt}) : t("kb.not_synced")), source.lastError ? "pill error" : "pill");
         head.append(identity, status);
         const actions = document.createElement("div");
         actions.className = "row compact";
@@ -10058,9 +11017,9 @@ INDEX_HTML = r"""<!doctype html>
     function renderAssistantKnowledge(data) {
       state.assistantKnowledge = data || {};
       $("assistantKnowledgeMarkdown").value = data.knowledgeMarkdown || "";
-      $("assistantKnowledgeChunkCount").textContent = `${data.chunkCount || 0} chunks`;
+      $("assistantKnowledgeChunkCount").classList.add("hidden");
       $("assistantKnowledgeIndexMode").textContent = assistantIndexModeLabel(data.indexMode);
-      $("assistantKnowledgeState").textContent = data.indexError || (data.indexedAt ? `Indexed ${data.indexedAt}` : "");
+      $("assistantKnowledgeState").textContent = data.indexError || (data.indexedAt ? t("kb.saved_at", {time: data.indexedAt.replace("T", " ")}) : "");
       renderAssistantSources(data.apiSources || []);
     }
 
@@ -10987,9 +11946,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       }
     });
 
-    // Poll the open chat every ~10s while the tab is visible (item 12).
+    // Poll the open chat every ~10s only while live events are unavailable.
     setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible" || state.sseConnected) return;
       if (!state.activeAccountId || !state.target || state.sending || state.messageLoading) return;
       if ($("workspace").classList.contains("hidden")) return;
       loadMessages({silent: true}).catch(() => {});
@@ -11004,12 +11963,2555 @@ Response guidance: Say goodbye politely and invite the person to return with mor
 
     // Keep the visible operational view live without disturbing its scroll position.
     setInterval(refreshWorkspaceInBackground, BOT_BACKGROUND_REFRESH_MS);
-    setInterval(refreshConversationsInBackground, CONVERSATION_BACKGROUND_REFRESH_MS);
+    setInterval(() => {
+      if (!state.sseConnected) refreshConversationsInBackground();
+    }, CONVERSATION_BACKGROUND_REFRESH_MS);
     document.addEventListener("visibilitychange", () => {
       refreshConversationsInBackground();
       if (document.visibilityState !== "visible") return;
       refreshWorkspaceInBackground();
     });
+
+
+    // ===== UX plan: sidebar, account card, notifications, live updates =====
+    Object.assign(state, {
+      lastConversationsAt: 0,
+      conversationItemsByMid: new Map(),
+      notifyLastAt: new Map(),
+      notifyRecent: [],
+      digestLastAt: 0,
+      unreadSince: new Map(),
+      escalated: new Set(),
+      pendingAiCheck: new Map(),
+      eventSource: null,
+      sseConnected: false,
+      sseBackoffIndex: 0,
+      sseRetryTimer: null,
+      sseAccountId: "",
+      forceEncrypt: false,
+      presenceBusy: false,
+      presenceState: "",
+      presenceSentAt: 0,
+      lastInputAt: Date.now(),
+      kpiSettings: null,
+      kpiReport: null,
+      team: null,
+      assistantBrain: null
+    });
+
+    const SSE_BACKOFF_MS = [5000, 10000, 30000, 60000];
+    const FALLBACK_POLL_MS = 30000;
+    const NOTIFY_ROOM_COOLDOWN_MS = 120000;
+    const NOTIFY_DIGEST_WINDOW_MS = 60000;
+    const PRESENCE_HEARTBEAT_MS = 30000;
+    const PRESENCE_ACTIVE_INPUT_MS = 60000;
+    const PRESENCE_IDLE_MS = 15 * 60000;
+    const NOTIFY_SNOOZE_KEY = "okline.notifyBannerSnoozedUntil";
+    const NOTIFY_OUTSIDE_SHIFT_KEY = "okline.notifyOutsideShift";
+
+    function initialsOf(name) {
+      return String(name || "?").trim().charAt(0).toUpperCase() || "?";
+    }
+
+    // ---- sidebar account card ---------------------------------------------
+    function renderAccountCard() {
+      const accountId = state.activeAccountId || selectedAccountId();
+      const status = state.lastStatus || {};
+      const profile = state.profile || {};
+      const name = (accountId && (profile.displayName || accountLabel(accountId))) || t("profile.no_account");
+      $("accountCardName").textContent = name;
+      $("mobileAccountName").textContent = name;
+      $("accountCardAvatar").textContent = initialsOf(name);
+      let kind = "";
+      let label = "-";
+      if (accountId) {
+        if (status.loginRequired) { kind = "bad"; label = t("account.disconnected"); }
+        else if (status.authenticated) { kind = "ok"; label = t("account.connected"); }
+        else { kind = "bad"; label = t("account.disconnected"); }
+      }
+      for (const dot of [$("accountCardDot"), $("mobileAccountDot")]) {
+        dot.className = "status-dot" + (kind ? " " + kind : "");
+      }
+      $("accountCardStatus").textContent = label;
+      renderAccountPopover();
+    }
+
+    function renderAccountPopover() {
+      const pop = $("accountPopover");
+      pop.replaceChildren();
+      const current = state.activeAccountId || selectedAccountId();
+      for (const account of state.accounts || []) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.setAttribute("role", "option");
+        btn.setAttribute("aria-selected", String(account.id === current));
+        const avatar = document.createElement("span");
+        avatar.className = "avatar";
+        avatar.textContent = initialsOf(account.label || account.id);
+        const dot = document.createElement("span");
+        dot.className = "status-dot " + (account.sessionState === "reauth_required" || !account.tokenFileExists ? "bad" : "ok");
+        btn.append(avatar, textSpan(account.label || account.id), dot);
+        btn.addEventListener("click", () => {
+          closeAccountPopover();
+          if (account.id === current) return;
+          $("accountSelect").value = account.id;
+          selectAccount().catch(toastError);
+        });
+        pop.appendChild(btn);
+      }
+      if (hasPermission("manage_accounts")) {
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "add-account";
+        add.textContent = t("account.add");
+        add.addEventListener("click", () => { closeAccountPopover(); openAddAccount(); });
+        pop.appendChild(add);
+      }
+    }
+
+    function closeAccountPopover() {
+      $("accountPopover").classList.add("hidden");
+      $("accountCard").setAttribute("aria-expanded", "false");
+    }
+
+    function toggleAccountPopover() {
+      const pop = $("accountPopover");
+      renderAccountPopover();
+      const open = pop.classList.toggle("hidden") === false;
+      $("accountCard").setAttribute("aria-expanded", String(open));
+    }
+
+    // ---- browser notification banner (2.7) ----------------------------------
+    function notificationPermission() {
+      return notificationsSupported() ? Notification.permission : "unsupported";
+    }
+
+    function notifyBannerSnoozed() {
+      try {
+        return Number(localStorage.getItem(NOTIFY_SNOOZE_KEY) || 0) > Date.now();
+      } catch (_) { return false; }
+    }
+
+    function syncNotificationPermission() {
+      const permission = notificationPermission();
+      if (permission === "granted") {
+        if (!state.notificationsEnabled) {
+          state.notificationsEnabled = true;
+          localStorage.setItem("linepassport.notifications", "on");
+          syncNotificationButton();
+        }
+      } else if (state.notificationsEnabled) {
+        state.notificationsEnabled = false;
+        syncNotificationButton();
+      }
+      renderNotifyBanner();
+      renderNotifySettings();
+    }
+
+    function renderNotifyBanner() {
+      const banner = $("notifyBanner");
+      const permission = notificationPermission();
+      let show = false;
+      banner.classList.remove("warn", "bad");
+      if (permission === "default" && !notifyBannerSnoozed()) {
+        show = true;
+        banner.classList.add("warn");
+        $("notifyBannerText").textContent = t("notify.banner_default");
+        $("notifyBannerEnable").classList.remove("hidden");
+        $("notifyBannerLater").classList.remove("hidden");
+      } else if (permission === "denied") {
+        show = true;
+        banner.classList.add("bad");
+        $("notifyBannerText").textContent = t("notify.banner_denied");
+        $("notifyBannerEnable").classList.add("hidden");
+        $("notifyBannerLater").classList.add("hidden");
+      }
+      banner.classList.toggle("hidden", !show);
+    }
+
+    function renderNotifySettings() {
+      const permission = notificationPermission();
+      $("notifySettingsState").textContent = t("notify.state_" + permission);
+      $("notifySettingsEnable").classList.toggle("hidden", permission !== "default");
+      $("notifySettingsTest").disabled = permission !== "granted";
+      try {
+        $("notifyOutsideShift").checked = localStorage.getItem(NOTIFY_OUTSIDE_SHIFT_KEY) === "on";
+      } catch (_) { /* storage unavailable */ }
+    }
+
+    async function enableNotificationsFromBanner() {
+      if (!notificationsSupported()) return;
+      // Must run inside the click handler: browsers require a user gesture.
+      const permission = await Notification.requestPermission();
+      await unlockNotificationSound();
+      if (permission === "granted") {
+        state.notificationsEnabled = true;
+        localStorage.setItem("linepassport.notifications", "on");
+        syncNotificationButton();
+        toast(t("notifications.enabled"));
+      }
+      syncNotificationPermission();
+      sendPresence(true);
+    }
+
+    function snoozeNotifyBanner() {
+      try {
+        localStorage.setItem(NOTIFY_SNOOZE_KEY, String(Date.now() + 24 * 3600 * 1000));
+      } catch (_) { /* storage unavailable: hide for this page view only */ }
+      $("notifyBanner").classList.add("hidden");
+    }
+
+    // ---- notification policy (B3) -----------------------------------------
+    function pageIsInFront() {
+      return document.visibilityState === "visible" && document.hasFocus();
+    }
+
+    function timeInRule(rule, date) {
+      const day = (date.getDay() + 6) % 7;  // JS Sunday=0 -> Monday=0
+      const minutes = date.getHours() * 60 + date.getMinutes();
+      const [sh, sm] = String(rule.start || "00:00").split(":").map(Number);
+      const [eh, em] = String(rule.end || "00:00").split(":").map(Number);
+      const start = sh * 60 + sm;
+      const end = eh * 60 + em;
+      const days = rule.days || [];
+      if (end > start) return days.includes(day) && minutes >= start && minutes < end;
+      const yesterday = (day + 6) % 7;
+      return (days.includes(day) && minutes >= start) || (days.includes(yesterday) && minutes < end);
+    }
+
+    function insideWorkingTime(date = new Date()) {
+      const data = state.kpiSettings;
+      if (!data) return true;
+      try {
+        if (localStorage.getItem(NOTIFY_OUTSIDE_SHIFT_KEY) === "on") return true;
+      } catch (_) { /* default policy */ }
+      if (data.settings && data.settings.notifyOutsideHours) return true;
+      const shifts = data.myShifts || [];
+      if (shifts.length) return shifts.some((rule) => timeInRule(rule, date));
+      const hours = data.settings && data.settings.businessHours;
+      if (hours && hours.enabled) return timeInRule(hours, date);
+      return true;
+    }
+
+    function slaMs() {
+      const seconds = state.kpiSettings && state.kpiSettings.settings
+        ? Number(state.kpiSettings.settings.slaSeconds) : 300;
+      return Math.max(30, seconds || 300) * 1000;
+    }
+
+    function autoReplyCovers(mid) {
+      const data = state.assistantAutoReply;
+      if (!data || !data.enabled || !data.aiConfigured) return false;
+      const kind = String(mid || "").charAt(0).toLowerCase();
+      if (kind === "u") return data.contactsEnabled !== false;
+      if (data.groupsEnabled === false) return false;
+      if (data.groupReplyMode !== "selected") return true;
+      return (data.selectedGroupMids || []).includes(mid);
+    }
+
+    function playSoftSound() {
+      if (!state.notificationsEnabled) return;
+      unlockNotificationSound().then((ok) => {
+        if (!ok) return;
+        const context = state.notificationAudioContext;
+        const osc = context.createOscillator();
+        const gain = context.createGain();
+        const at = context.currentTime + 0.02;
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(880, at);
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(0.12, at + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.25);
+        osc.connect(gain);
+        gain.connect(context.destination);
+        osc.start(at);
+        osc.stop(at + 0.3);
+      }).catch(() => {});
+    }
+
+    async function showPolicyNotification(title, options) {
+      if (!state.notificationsEnabled || notificationPermission() !== "granted") return;
+      try {
+        if (state.notificationWorker) {
+          await state.notificationWorker.showNotification(title, options);
+          return;
+        }
+        const notice = new Notification(title, options);
+        notice.onclick = () => {
+          if (options.data && options.data.mid) openNotifiedConversation(options.data);
+          else window.focus();
+          notice.close();
+        };
+      } catch (_) { /* never break refresh because of a notification */ }
+    }
+
+    function notifyRoom(accountId, item, {escalate = false} = {}) {
+      const name = conversationName(item);
+      const unread = Math.max(1, Number(item.unreadCount) || 1);
+      return showPolicyNotification(
+        escalate ? t("notify.escalate_title", {name}) : t("notifications.new_message", {name}),
+        {
+          body: escalate
+            ? t("notify.escalate_body", {minutes: Math.round(slaMs() / 60000)})
+            : t("notify.n_new", {n: unread}),
+          tag: `linepassport:${accountId}:${item.mid}`,
+          renotify: false,
+          requireInteraction: escalate,
+          silent: !escalate,
+          data: {accountId, mid: item.mid, name}
+        }
+      );
+    }
+
+    function dispatchBackgroundAlerts(accountId, items) {
+      const now = Date.now();
+      state.notifyRecent = state.notifyRecent.filter((at) => now - at < NOTIFY_DIGEST_WINDOW_MS);
+      const due = items.filter((item) => now - (state.notifyLastAt.get(item.mid) || 0) >= NOTIFY_ROOM_COOLDOWN_MS);
+      if (!due.length) return;
+      if (state.notifyRecent.length + due.length > 3) {
+        if (now - state.digestLastAt < NOTIFY_DIGEST_WINDOW_MS) return;
+        state.digestLastAt = now;
+        const waiting = currentConversationItems().filter((item) => Number(item.unreadCount) > 0).length || due.length;
+        for (const item of due) state.notifyLastAt.set(item.mid, now);
+        showPolicyNotification(t("notify.digest_title", {n: waiting}), {
+          body: t("notify.digest_body"),
+          tag: "linepassport:digest",
+          renotify: false,
+          silent: false,
+          data: {accountId}
+        });
+        return;
+      }
+      for (const item of due) {
+        state.notifyLastAt.set(item.mid, now);
+        state.notifyRecent.push(now);
+        notifyRoom(accountId, item).catch(() => {});
+      }
+    }
+
+    function checkEscalationsAndAiHolds() {
+      const accountId = selectedAccountId();
+      if (!accountId || !state.notificationsEnabled) return;
+      const now = Date.now();
+      // Messages held back while the AI might answer them.
+      for (const [mid, dueAt] of [...state.pendingAiCheck.entries()]) {
+        if (now < dueAt) continue;
+        state.pendingAiCheck.delete(mid);
+        const item = state.conversationItemsByMid.get(mid);
+        const own = state.profile && item && item.lastMessage && item.lastMessage.from === state.profile.mid;
+        if (item && !own && Number(item.unreadCount) > 0 && !pageIsInFront() && insideWorkingTime()) {
+          dispatchBackgroundAlerts(accountId, [item]);
+        }
+      }
+      // A chat still unread past the reply target gets one louder reminder.
+      for (const [mid, since] of state.unreadSince.entries()) {
+        if (state.escalated.has(mid) || now - since < slaMs()) continue;
+        const item = state.conversationItemsByMid.get(mid);
+        if (!item || Number(item.unreadCount) <= 0) continue;
+        if (!insideWorkingTime()) continue;
+        state.escalated.add(mid);
+        playNotificationSound().catch(() => {});
+        if (!pageIsInFront()) notifyRoom(accountId, item, {escalate: true}).catch(() => {});
+        else toast(t("notify.escalate_title", {name: conversationName(item)}), true);
+      }
+    }
+
+    function trackUnreadRooms(conversations) {
+      const now = Date.now();
+      state.conversationItemsByMid = new Map((conversations || []).map((item) => [String(item.mid || ""), item]));
+      for (const item of conversations || []) {
+        const mid = String(item.mid || "");
+        const own = state.profile && item.lastMessage && item.lastMessage.from === state.profile.mid;
+        if (Number(item.unreadCount) > 0 && !own) {
+          if (!state.unreadSince.has(mid)) state.unreadSince.set(mid, now);
+        } else {
+          state.unreadSince.delete(mid);
+          state.escalated.delete(mid);
+          state.pendingAiCheck.delete(mid);
+        }
+      }
+      const badge = $("navChatBadge");
+      const waiting = [...state.unreadSince.keys()].length;
+      badge.textContent = waiting > 99 ? "99+" : String(waiting);
+      badge.classList.toggle("hidden", !waiting);
+    }
+
+    // ---- live updates over SSE with poll fallback (B4/B5) ---------------------
+    function stopEventStream() {
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+      }
+      clearTimeout(state.sseRetryTimer);
+      state.sseConnected = false;
+      state.sseAccountId = "";
+    }
+
+    function startEventStream() {
+      const accountId = selectedAccountId();
+      if (!accountId || typeof EventSource === "undefined") return;
+      if (state.eventSource && state.sseAccountId === accountId) return;
+      stopEventStream();
+      state.sseAccountId = accountId;
+      const source = new EventSource(`/api/events?${accountQuery(accountId)}`);
+      state.eventSource = source;
+      source.addEventListener("hello", () => {
+        state.sseConnected = true;
+        state.sseBackoffIndex = 0;
+      });
+      source.addEventListener("conversation_updated", () => {
+        state.sseConnected = true;
+        refreshConversationsInBackground();
+        if (state.target && !state.sending && !state.messageLoading
+            && !$("workspace").classList.contains("hidden")) {
+          loadMessages({silent: true}).catch(() => {});
+        }
+      });
+      source.onerror = () => {
+        // Close and retry ourselves so the delay grows 5 -> 10 -> 30 -> 60 s.
+        source.close();
+        if (state.eventSource !== source) return;
+        state.eventSource = null;
+        state.sseConnected = false;
+        const delay = SSE_BACKOFF_MS[Math.min(state.sseBackoffIndex, SSE_BACKOFF_MS.length - 1)];
+        state.sseBackoffIndex += 1;
+        clearTimeout(state.sseRetryTimer);
+        state.sseRetryTimer = setTimeout(() => {
+          state.sseAccountId = "";
+          startEventStream();
+        }, delay);
+      };
+    }
+
+    function renderFreshness() {
+      const chip = $("freshnessChip");
+      if (!state.lastConversationsAt || !selectedAccountId()) {
+        chip.hidden = true;
+        return;
+      }
+      chip.hidden = false;
+      const seconds = Math.max(0, Math.round((Date.now() - state.lastConversationsAt) / 1000));
+      chip.textContent = seconds < 60
+        ? t("fresh.seconds", {n: seconds})
+        : t("fresh.minutes", {n: Math.floor(seconds / 60)});
+      chip.classList.toggle("stale", seconds > 60);
+      chip.title = state.sseConnected ? t("fresh.live") : t("fresh.polling");
+    }
+
+    // ---- presence heartbeat (A3) & own status chip (F2) ----------------------
+    function computePresence() {
+      if (document.visibilityState === "hidden" || !document.hasFocus()) return "away";
+      if (state.presenceBusy) return "busy";
+      const sinceInput = Date.now() - state.lastInputAt;
+      if (sinceInput > PRESENCE_IDLE_MS) return "idle";
+      const waiting = [...state.unreadSince.keys()].some((mid) => mid.charAt(0).toLowerCase() === "u");
+      if (waiting || sinceInput < PRESENCE_ACTIVE_INPUT_MS) return "active";
+      return "standby";
+    }
+
+    function renderPresenceChip(presence) {
+      $("presenceDot").className = "status-dot " + presence;
+      $("presenceLabel").textContent = t("presence." + presence);
+      $("presenceChip").title = state.presenceBusy ? t("presence.chip_resume") : t("presence.chip_title");
+    }
+
+    async function sendPresence(force = false) {
+      if ($("appShell").classList.contains("app-hidden") || !state.currentUser) return;
+      const presence = computePresence();
+      renderPresenceChip(presence);
+      const changed = presence !== state.presenceState;
+      if (!force && !changed && Date.now() - state.presenceSentAt < PRESENCE_HEARTBEAT_MS) return;
+      state.presenceState = presence;
+      state.presenceSentAt = Date.now();
+      try {
+        await post("/api/presence", {state: presence, notification: notificationPermission(), ts: Date.now()});
+      } catch (_) { /* heartbeat is best effort */ }
+    }
+
+    function noteUserInput() {
+      const wasIdle = Date.now() - state.lastInputAt > PRESENCE_ACTIVE_INPUT_MS;
+      state.lastInputAt = Date.now();
+      if (wasIdle) sendPresence(true);
+    }
+
+    function togglePresenceBusy() {
+      state.presenceBusy = !state.presenceBusy;
+      toast(t(state.presenceBusy ? "presence.busy_on" : "presence.busy_off"));
+      sendPresence(true);
+    }
+
+    async function loadKpiSettings() {
+      const accountId = selectedAccountId();
+      if (!accountId) { state.kpiSettings = null; return; }
+      try {
+        state.kpiSettings = await api(`/api/kpi/settings?${accountQuery(accountId)}`);
+      } catch (_) { state.kpiSettings = null; }
+    }
+
+    // ---- chat helpers (C3) --------------------------------------------------
+    function looksLikeMid(value) {
+      return /^[ucr][0-9a-f]{32}$/i.test(String(value || "").trim());
+    }
+
+    function toggleConvoMenu(force) {
+      const menu = $("convoMenu");
+      const open = typeof force === "boolean" ? force : menu.classList.contains("hidden");
+      menu.classList.toggle("hidden", !open);
+      $("convoMenuButton").setAttribute("aria-expanded", String(open));
+      $("convoMenuEncrypt").setAttribute("aria-checked", String(state.forceEncrypt));
+      $("convoMenuEncrypt").textContent = t(state.forceEncrypt ? "chat.menu_encrypt_on" : "chat.menu_encrypt");
+    }
+
+    // ===== KPI page (F1) =====================================================
+    const PRESENCE_COLORS = {
+      active: "#06C755", standby: "#2E90FA", away: "#F79009", busy: "#7A5AF8", idle: "#98A2B3"
+    };
+
+    function fmtDuration(seconds) {
+      if (seconds === null || seconds === undefined) return "-";
+      const value = Math.max(0, Math.round(Number(seconds) || 0));
+      if (value < 60) return t("dur.seconds", {n: value});
+      if (value < 3600) return t("dur.minutes", {m: Math.floor(value / 60), s: value % 60});
+      return t("dur.hours", {h: Math.floor(value / 3600), m: Math.floor((value % 3600) / 60)});
+    }
+
+    function fmtPercent(value) {
+      return value === null || value === undefined ? "-" : `${Number(value).toFixed(0)}%`;
+    }
+
+    function kpiRange() {
+      const mode = $("kpiRange").value;
+      const now = new Date();
+      const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      if (mode === "7d") return {from: startOfDay(now).getTime() - 6 * 86400000, to: now.getTime()};
+      if (mode === "30d") return {from: startOfDay(now).getTime() - 29 * 86400000, to: now.getTime()};
+      if (mode === "custom" && $("kpiFrom").value && $("kpiTo").value) {
+        const from = new Date($("kpiFrom").value + "T00:00").getTime();
+        const to = new Date($("kpiTo").value + "T23:59:59").getTime();
+        return {from, to: Math.min(to, now.getTime())};
+      }
+      return {from: startOfDay(now).getTime(), to: now.getTime()};
+    }
+
+    function chatNameForMid(mid) {
+      const item = currentConversationItems().find((entry) => entry.mid === mid);
+      return item ? item.name : mid;
+    }
+
+    async function loadKpi() {
+      const accountId = selectedAccountId();
+      if (!accountId || !hasPermission("manage_accounts")) return;
+      const range = kpiRange();
+      const data = await api(`/api/kpi?${accountQuery(accountId)}&from=${range.from}&to=${range.to}`);
+      state.kpiReport = data;
+      renderKpi(data);
+    }
+
+    function kpiTile(label, value, sub, alert) {
+      const tile = document.createElement(alert ? "button" : "div");
+      tile.className = "ux-card kpi-tile" + (alert ? " alert" : "");
+      if (alert) tile.type = "button";
+      tile.append(textSpan(label, "ux-muted"), textSpan(value, "value"), textSpan(sub || "", "ux-muted"));
+      return tile;
+    }
+
+    function renderKpi(data) {
+      const tiles = $("kpiTiles");
+      tiles.replaceChildren();
+      const sum = data.tiles || {};
+      tiles.append(
+        kpiTile(t("kpi.tile_first"), fmtDuration(sum.avgResponseSeconds), t("kpi.tile_first_sub", {m: fmtDuration(sum.medianResponseSeconds)})),
+        kpiTile(t("kpi.tile_sla"), fmtPercent(sum.slaPercent), t("kpi.tile_sla_sub", {m: Math.round((data.slaSeconds || 300) / 60)})),
+        kpiTile(t("kpi.tile_chats"), String(sum.chats || 0), t("kpi.tile_chats_sub", {ai: (data.split || {}).ai || 0, human: (data.split || {}).human || 0}))
+      );
+      const pendingTile = kpiTile(t("kpi.tile_pending"), String(sum.pendingNow || 0), t("kpi.tile_pending_sub", {n: sum.overdueNow || 0}), (sum.pendingNow || 0) > 0);
+      if ((sum.pendingNow || 0) > 0) {
+        pendingTile.addEventListener("click", () => $("kpiPendingCard").scrollIntoView({behavior: "smooth"}));
+      }
+      tiles.appendChild(pendingTile);
+      $("navKpiBadge").textContent = String(sum.overdueNow || "");
+      $("navKpiBadge").classList.toggle("hidden", !(sum.overdueNow > 0));
+
+      const alert = $("kpiAwayAlert");
+      alert.textContent = data.awayAlerts ? t("kpi.away_alert", {n: data.awayAlerts}) : "";
+      alert.classList.toggle("hidden", !data.awayAlerts);
+
+      const table = $("kpiTable");
+      table.replaceChildren();
+      const head = document.createElement("tr");
+      for (const key of ["kpi.col_name", "kpi.col_chats", "kpi.col_first", "kpi.col_sla", "kpi.col_active", "kpi.col_away", "kpi.col_offline"]) {
+        const th = document.createElement("th");
+        th.textContent = t(key);
+        head.appendChild(th);
+      }
+      table.appendChild(head);
+      const rows = [...(data.perUser || [])];
+      rows.push({name: t("kpi.row_ai"), chats: (data.ai || {}).chats, avgResponseSeconds: (data.ai || {}).avgResponseSeconds, slaPercent: (data.ai || {}).slaPercent, isAi: true});
+      if ((data.lineApp || {}).chats) {
+        rows.push({name: t("kpi.row_phone"), chats: data.lineApp.chats, avgResponseSeconds: data.lineApp.avgResponseSeconds, slaPercent: data.lineApp.slaPercent, isAi: true});
+      }
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        const nameCell = document.createElement("td");
+        nameCell.append(textSpan(row.name || "-"));
+        if (row.role) nameCell.append(" ", textSpan(t("kpi.role_" + row.role), "badge"));
+        const slaCell = document.createElement("td");
+        const bar = document.createElement("div");
+        bar.className = "kpi-bar";
+        const fill = document.createElement("span");
+        fill.style.width = `${Math.max(0, Math.min(100, Number(row.slaPercent) || 0))}%`;
+        bar.appendChild(fill);
+        slaCell.append(textSpan(fmtPercent(row.slaPercent)), bar);
+        const presence = row.presence || {};
+        const cells = [
+          nameCell,
+          textCell(String(row.chats || 0)),
+          textCell(fmtDuration(row.avgResponseSeconds)),
+          slaCell,
+          textCell(row.isAi ? "-" : fmtDuration((presence.active || 0) + (presence.standby || 0))),
+          textCell(row.isAi ? "-" : fmtDuration(presence.away || 0)),
+          textCell(row.isAi ? "-" : fmtDuration(presence.offline))
+        ];
+        tr.append(...cells);
+        table.appendChild(tr);
+      }
+
+      renderKpiChart(data);
+      renderKpiPending(data);
+      renderKpiTimeline(data);
+    }
+
+    function textCell(text) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      return td;
+    }
+
+    function svgEl(tag, attrs) {
+      const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [key, value] of Object.entries(attrs || {})) el.setAttribute(key, String(value));
+      return el;
+    }
+
+    function renderKpiChart(data) {
+      const svg = $("kpiChart");
+      svg.replaceChildren();
+      const days = data.daily || [];
+      const width = svg.clientWidth || 600;
+      const height = 180;
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      const target = (data.slaSeconds || 300) / 60;
+      const values = days.map((d) => (d.avgResponseSeconds || 0) / 60);
+      const max = Math.max(target * 1.4, ...values, 1);
+      const pad = 24;
+      const plotH = height - pad - 8;
+      const barW = days.length ? Math.max(6, Math.min(40, (width - pad * 2) / days.length - 6)) : 0;
+      days.forEach((day, index) => {
+        const value = values[index];
+        const h = (value / max) * plotH;
+        const x = pad + index * ((width - pad * 2) / Math.max(1, days.length)) + 3;
+        const rect = svgEl("rect", {x, y: height - pad - h, width: barW, height: Math.max(1, h), rx: 3, fill: value > target ? "#F79009" : "#06C755"});
+        const title = svgEl("title");
+        title.textContent = `${day.date}: ${fmtDuration(day.avgResponseSeconds)} · ${fmtPercent(day.slaPercent)}`;
+        rect.appendChild(title);
+        svg.appendChild(rect);
+        if (days.length <= 14 || index % Math.ceil(days.length / 10) === 0) {
+          const label = svgEl("text", {x: x + barW / 2, y: height - 8, "text-anchor": "middle", "font-size": 10, fill: "currentColor"});
+          label.textContent = day.date.slice(5);
+          svg.appendChild(label);
+        }
+      });
+      const ty = height - pad - (target / max) * plotH;
+      svg.appendChild(svgEl("line", {x1: pad, x2: width - pad, y1: ty, y2: ty, stroke: "#D92D20", "stroke-dasharray": "4 4"}));
+      const label = svgEl("text", {x: width - pad, y: ty - 4, "text-anchor": "end", "font-size": 10, fill: "#D92D20"});
+      label.textContent = t("kpi.target_line", {m: Math.round(target)});
+      svg.appendChild(label);
+      if (!days.length) {
+        const empty = svgEl("text", {x: width / 2, y: height / 2, "text-anchor": "middle", fill: "currentColor", "font-size": 12});
+        empty.textContent = t("kpi.no_data");
+        svg.appendChild(empty);
+      }
+    }
+
+    function renderKpiPending(data) {
+      const root = $("kpiPendingList");
+      root.replaceChildren();
+      const items = data.pendingNow || [];
+      if (!items.length) {
+        root.appendChild(textSpan(t("kpi.pending_none"), "ux-muted"));
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "ux-row space";
+        row.style.padding = "6px 0";
+        const name = chatNameForMid(item.chatMid);
+        const badge = textSpan(fmtDuration(item.waitingSeconds), "badge " + (item.waitingSeconds > 1800 ? "bad" : "warn"));
+        const open = document.createElement("button");
+        open.type = "button";
+        open.textContent = t("kpi.open_chat");
+        open.addEventListener("click", () => {
+          setTab("line");
+          setTarget(item.chatMid, name);
+          loadMessages().catch(toastError);
+        });
+        row.append(textSpan(name), badge, open);
+        root.appendChild(row);
+      }
+    }
+
+    function renderKpiTimeline(data) {
+      const legend = $("kpiPresenceLegend");
+      legend.replaceChildren();
+      for (const [key, color] of Object.entries(PRESENCE_COLORS)) {
+        const item = document.createElement("span");
+        const swatch = document.createElement("i");
+        swatch.style.background = color;
+        item.append(swatch, t("presence." + key));
+        legend.appendChild(item);
+      }
+      const root = $("kpiTimeline");
+      root.replaceChildren();
+      const span = Math.max(1, (data.to || 0) - (data.from || 0));
+      for (const person of data.presence || []) {
+        const row = document.createElement("div");
+        row.className = "kpi-timeline-row";
+        const track = document.createElement("div");
+        track.className = "kpi-timeline-track";
+        for (const seg of person.segments || []) {
+          const bar = document.createElement("span");
+          bar.style.left = `${((seg.from - data.from) / span) * 100}%`;
+          bar.style.width = `${Math.max(0.2, ((seg.to - seg.from) / span) * 100)}%`;
+          bar.style.background = PRESENCE_COLORS[seg.state] || "#98A2B3";
+          bar.title = `${t("presence." + seg.state)} ${fmtTime(seg.from)}–${fmtTime(seg.to)}`;
+          track.appendChild(bar);
+        }
+        row.append(textSpan(person.name || "-"), track);
+        root.appendChild(row);
+      }
+      if (!root.children.length) root.appendChild(textSpan(t("kpi.no_data"), "ux-muted"));
+    }
+
+    function downloadKpiCsv() {
+      const data = state.kpiReport;
+      if (!data) return;
+      const rows = [["name", "role", "chats", "avg_first_response_s", "median_first_response_s", "sla_percent", "active_s", "standby_s", "away_s", "busy_s", "idle_s", "offline_s"]];
+      for (const row of data.perUser || []) {
+        const p = row.presence || {};
+        rows.push([row.name, row.role, row.chats, row.avgResponseSeconds ?? "", row.medianResponseSeconds ?? "", row.slaPercent ?? "", p.active || 0, p.standby || 0, p.away || 0, p.busy || 0, p.idle || 0, p.offline || 0]);
+      }
+      rows.push(["AI", "ai", (data.ai || {}).chats || 0, (data.ai || {}).avgResponseSeconds ?? "", "", (data.ai || {}).slaPercent ?? "", "", "", "", "", "", ""]);
+      rows.push([]);
+      rows.push(["date", "chats", "avg_first_response_s", "sla_percent"]);
+      for (const day of data.daily || []) rows.push([day.date, day.chats, day.avgResponseSeconds ?? "", day.slaPercent ?? ""]);
+      const csv = rows.map((row) => row.map((cell) => {
+        const text = String(cell ?? "");
+        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+      }).join(",")).join("\n");
+      const blob = new Blob(["﻿" + csv], {type: "text/csv;charset=utf-8"});
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `linepassport-kpi-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    }
+
+    // ===== Settings: team, AI brain, KPI & shifts (F3) =========================
+    const DAY_KEYS = ["day.mon", "day.tue", "day.wed", "day.thu", "day.fri", "day.sat", "day.sun"];
+
+    function buildDayPicker(root, selected, onChange) {
+      root.replaceChildren();
+      const chosen = new Set(selected || []);
+      DAY_KEYS.forEach((key, index) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = t(key);
+        btn.setAttribute("aria-pressed", String(chosen.has(index)));
+        btn.addEventListener("click", () => {
+          if (chosen.has(index)) chosen.delete(index); else chosen.add(index);
+          btn.setAttribute("aria-pressed", String(chosen.has(index)));
+          if (onChange) onChange([...chosen].sort());
+        });
+        root.appendChild(btn);
+      });
+      return () => [...chosen].sort();
+    }
+
+    async function loadTeam() {
+      if (!hasPermission("manage_accounts") || (state.currentUser && state.currentUser.teamOwnerId)) return;
+      state.team = await api("/api/team");
+      renderTeam();
+    }
+
+    function renderTeam() {
+      const data = state.team || {staff: [], accounts: []};
+      const box = $("teamNewAccounts");
+      box.replaceChildren();
+      for (const account of data.accounts || []) {
+        const label = document.createElement("label");
+        label.className = "checkbox-row";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = account.id;
+        input.checked = account.id === selectedAccountId();
+        label.append(input, textSpan(account.label || account.id));
+        box.appendChild(label);
+      }
+      const list = $("teamList");
+      list.replaceChildren();
+      if (!(data.staff || []).length) {
+        list.appendChild(textSpan(t("team.none"), "ux-muted"));
+        return;
+      }
+      for (const person of data.staff) {
+        const row = document.createElement("div");
+        row.className = "ux-card";
+        const head = document.createElement("div");
+        head.className = "ux-row space";
+        head.append(textSpan(`${person.displayName || person.email} · ${person.email}`), textSpan(person.active ? t("team.active") : t("team.disabled"), "badge " + (person.active ? "ok" : "")));
+        const accounts = document.createElement("div");
+        accounts.className = "ux-row";
+        const checks = [];
+        for (const account of data.accounts || []) {
+          const label = document.createElement("label");
+          label.className = "checkbox-row";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.value = account.id;
+          input.checked = (person.staffAccountIds || []).includes(account.id);
+          checks.push(input);
+          label.append(input, textSpan(account.label || account.id));
+          accounts.appendChild(label);
+        }
+        const actions = document.createElement("div");
+        actions.className = "ux-row";
+        const save = document.createElement("button");
+        save.type = "button";
+        save.textContent = t("common.save");
+        save.addEventListener("click", () => updateStaff({id: person.id, accountIds: checks.filter((c) => c.checked).map((c) => c.value)}).catch(toastError));
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.textContent = person.active ? t("team.disable") : t("team.enable");
+        toggle.addEventListener("click", () => updateStaff({id: person.id, active: !person.active}).catch(toastError));
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.textContent = t("team.reset_password");
+        reset.addEventListener("click", () => {
+          const password = prompt(t("team.new_password_prompt"));
+          if (password) updateStaff({id: person.id, password}).catch(toastError);
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "danger";
+        remove.textContent = t("team.remove");
+        remove.addEventListener("click", async () => {
+          if (!confirm(t("team.remove_confirm", {name: person.displayName || person.email}))) return;
+          state.team = await post("/api/team/delete", {id: person.id});
+          renderTeam();
+        });
+        actions.append(save, toggle, reset, remove);
+        row.append(head, accounts, actions);
+        list.appendChild(row);
+      }
+    }
+
+    async function createStaff() {
+      const accountIds = [...$("teamNewAccounts").querySelectorAll("input:checked")].map((input) => input.value);
+      const data = await post("/api/team/create", {
+        email: $("teamNewEmail").value.trim(),
+        displayName: $("teamNewName").value.trim(),
+        password: $("teamNewPassword").value,
+        accountIds
+      });
+      state.team = data;
+      $("teamNewEmail").value = "";
+      $("teamNewName").value = "";
+      $("teamNewPassword").value = "";
+      renderTeam();
+      toast(t("team.added"));
+    }
+
+    async function updateStaff(body) {
+      state.team = await post("/api/team/update", body);
+      renderTeam();
+      toast(t("common.saved"));
+    }
+
+    // AI brain form, rendered into the setup checklist and Settings → AI.
+    async function loadAssistantBrain() {
+      if (!hasPermission("ask_ai")) return null;
+      state.assistantBrain = await api("/api/assistant/settings");
+      return state.assistantBrain;
+    }
+
+    function brainSummary(data) {
+      if (!data || !data.configured) return t("brain.none");
+      if (data.provider === "gemini") return t("brain.summary_gemini", {model: data.chatModel});
+      if (data.source === "global") return t("brain.summary_global", {model: data.chatModel});
+      return t("brain.summary_ollama", {model: data.chatModel, url: data.baseUrl});
+    }
+
+    function renderBrainForm(slot) {
+      const data = state.assistantBrain || {};
+      slot.replaceChildren();
+      const form = document.createElement("div");
+      form.className = "ux-grid";
+      if (!data.canEdit) {
+        form.append(textSpan(brainSummary(data), "ux-muted"), textSpan(t("brain.owner_only"), "ux-muted"));
+        slot.appendChild(form);
+        return;
+      }
+      let provider = data.source === "tenant" ? data.provider : (data.globalAvailable ? "global" : "gemini");
+      const cards = document.createElement("div");
+      cards.className = "choice-grid";
+      const options = [["gemini", "brain.gemini", "brain.gemini_hint"], ["ollama", "brain.ollama", "brain.ollama_hint"]];
+      if (data.globalAvailable) options.push(["global", "brain.global", "brain.global_hint"]);
+      const fields = document.createElement("div");
+      fields.className = "ux-grid";
+      const keyInput = document.createElement("input");
+      keyInput.type = "password";
+      keyInput.autocomplete = "off";
+      keyInput.placeholder = data.hasApiKey && data.provider === "gemini" ? data.apiKeyPreview : "AIza…";
+      const keyLabel = document.createElement("label");
+      keyLabel.append(textSpan(t("brain.api_key")), keyInput);
+      const keyHint = textSpan(data.imageKeyAvailable ? t("brain.key_shared_hint") : t("brain.key_where"), "ux-muted");
+      const urlInput = document.createElement("input");
+      urlInput.value = data.provider === "ollama" && data.source === "tenant" ? data.baseUrl : (data.defaults || {}).ollamaBaseUrl || "http://127.0.0.1:11434";
+      const urlLabel = document.createElement("label");
+      urlLabel.append(textSpan(t("brain.ollama_url")), urlInput);
+      const modelInput = document.createElement("input");
+      const modelLabel = document.createElement("label");
+      modelLabel.append(textSpan(t("brain.model")), modelInput);
+      const embedInput = document.createElement("input");
+      const embedLabel = document.createElement("label");
+      embedLabel.append(textSpan(t("brain.embedding_model")), embedInput);
+      const advanced = document.createElement("details");
+      advanced.className = "ux-advanced";
+      const summary = document.createElement("summary");
+      summary.textContent = t("brain.advanced");
+      const strict = document.createElement("input");
+      strict.type = "checkbox";
+      strict.checked = Boolean(data.strictKnowledge);
+      const strictLabel = document.createElement("label");
+      strictLabel.className = "checkbox-row";
+      strictLabel.append(strict, textSpan(t("brain.strict")));
+      advanced.append(summary, modelLabel, embedLabel, strictLabel);
+
+      function syncFields() {
+        cards.querySelectorAll(".choice-card").forEach((card) => card.setAttribute("aria-pressed", String(card.dataset.provider === provider)));
+        keyLabel.hidden = provider !== "gemini";
+        keyHint.hidden = provider !== "gemini";
+        urlLabel.hidden = provider !== "ollama";
+        advanced.hidden = provider === "global";
+        const defaults = data.defaults || {};
+        if (provider === "gemini") {
+          modelInput.value = data.provider === "gemini" && data.source === "tenant" ? data.chatModel : defaults.geminiChatModel || "";
+          embedInput.value = data.provider === "gemini" && data.source === "tenant" ? data.embeddingModel : defaults.geminiEmbeddingModel || "";
+        } else if (provider === "ollama") {
+          modelInput.value = data.provider === "ollama" && data.source === "tenant" ? data.chatModel : "";
+          embedInput.value = data.provider === "ollama" && data.source === "tenant" ? data.embeddingModel : "";
+          advanced.open = true;
+        }
+      }
+      for (const [value, labelKey, hintKey] of options) {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "choice-card";
+        card.dataset.provider = value;
+        const title = document.createElement("strong");
+        title.textContent = t(labelKey) + (value === "gemini" ? ` · ${t("brain.recommended")}` : "");
+        card.append(title, textSpan(t(hintKey)));
+        card.addEventListener("click", () => { provider = value; syncFields(); });
+        cards.appendChild(card);
+      }
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "primary";
+      save.textContent = t("brain.save_test");
+      const result = textSpan("", "ux-muted");
+      save.addEventListener("click", async () => {
+        save.disabled = true;
+        result.textContent = t("brain.testing");
+        try {
+          const saved = await post("/api/assistant/settings", {
+            provider,
+            apiKey: keyInput.value.trim(),
+            baseUrl: urlInput.value.trim(),
+            chatModel: modelInput.value.trim(),
+            embeddingModel: embedInput.value.trim(),
+            strictKnowledge: strict.checked,
+            test: true
+          });
+          state.assistantBrain = saved;
+          const test = saved.test || {};
+          result.textContent = test.ok ? t("brain.test_ok") : t("brain.test_failed", {error: test.error || ""});
+          result.className = test.ok ? "badge ok" : "badge bad";
+          keyInput.value = "";
+          refreshAssistantSetup();
+        } catch (err) {
+          result.textContent = "";
+          toastError(err);
+        } finally {
+          save.disabled = false;
+        }
+      });
+      fields.append(keyLabel, keyHint, urlLabel, advanced);
+      const actions = document.createElement("div");
+      actions.className = "ux-row";
+      actions.append(save, result);
+      form.append(cards, fields, actions);
+      slot.appendChild(form);
+      syncFields();
+    }
+
+    async function loadKpiSettingsForm() {
+      await loadKpiSettings();
+      renderKpiSettingsForm();
+    }
+
+    function renderKpiSettingsForm() {
+      const data = state.kpiSettings;
+      const pane = $("kpiSettingsPane");
+      if (!data) {
+        $("kpiSettingsAccountLabel").textContent = t("errors.no_account");
+        return;
+      }
+      const settings = data.settings || {};
+      $("kpiSettingsAccountLabel").textContent = accountLabel(data.accountId);
+      $("kpiSlaMinutes").value = String(Math.round((settings.slaSeconds || 300) / 60));
+      const hours = settings.businessHours || {};
+      $("kpiBusinessEnabled").checked = Boolean(hours.enabled);
+      $("kpiBusinessStart").value = hours.start || "09:00";
+      $("kpiBusinessEnd").value = hours.end || "18:00";
+      state.kpiBusinessDays = buildDayPicker($("kpiBusinessDays"), hours.days || [0, 1, 2, 3, 4, 5]);
+      const list = $("kpiShiftList");
+      list.replaceChildren();
+      state.kpiShiftReaders = [];
+      for (const member of data.members || []) {
+        const rule = ((settings.shifts || {})[member.id] || [])[0] || null;
+        const row = document.createElement("div");
+        row.className = "ux-row";
+        const enabled = document.createElement("input");
+        enabled.type = "checkbox";
+        enabled.checked = Boolean(rule);
+        enabled.style.width = "auto";
+        const dayRoot = document.createElement("div");
+        dayRoot.className = "day-picker";
+        const readDays = buildDayPicker(dayRoot, rule ? rule.days : [0, 1, 2, 3, 4]);
+        const start = document.createElement("input");
+        start.type = "time";
+        start.value = rule ? rule.start : "09:00";
+        start.style.width = "auto";
+        const end = document.createElement("input");
+        end.type = "time";
+        end.value = rule ? rule.end : "18:00";
+        end.style.width = "auto";
+        row.append(enabled, textSpan(member.name, "strong"), dayRoot, start, textSpan("–"), end);
+        list.appendChild(row);
+        state.kpiShiftReaders.push(() => [member.id, enabled.checked ? [{days: readDays(), start: start.value, end: end.value}] : []]);
+      }
+      pane.querySelectorAll("input, button").forEach((el) => { el.disabled = !data.canEdit; });
+    }
+
+    async function saveKpiSettings() {
+      const data = state.kpiSettings;
+      if (!data) return;
+      const shifts = Object.fromEntries((state.kpiShiftReaders || []).map((read) => read()).filter(([, rules]) => rules.length));
+      state.kpiSettings = await post("/api/kpi/settings", {
+        accountId: data.accountId,
+        settings: {
+          slaSeconds: Math.round(Number($("kpiSlaMinutes").value || 5) * 60),
+          businessHours: {
+            enabled: $("kpiBusinessEnabled").checked,
+            days: state.kpiBusinessDays ? state.kpiBusinessDays() : [0, 1, 2, 3, 4, 5],
+            start: $("kpiBusinessStart").value || "09:00",
+            end: $("kpiBusinessEnd").value || "18:00"
+          },
+          shifts,
+          notifyOutsideHours: Boolean(data.settings && data.settings.notifyOutsideHours)
+        }
+      });
+      renderKpiSettingsForm();
+      toast(t("common.saved"));
+    }
+
+    // ===== Auto reply: setup checklist, hero, shop topics, test chat (E2-E5) ===
+    function refreshAssistantSetup() {
+      const brain = state.assistantBrain;
+      const knowledge = state.assistantKnowledge || {};
+      const auto = state.assistantAutoReply || {};
+      const step1 = Boolean(brain && brain.configured);
+      const topics = (knowledge.sections || []).filter((section) => String(section.body || "").trim());
+      const step2 = topics.length > 0;
+      let step3 = false;
+      try { step3 = localStorage.getItem("okline.assistantTried") === "yes"; } catch (_) { step3 = false; }
+      const ready = step1 && step2 && step3;
+      const setup = $("assistantSetup");
+      setup.classList.toggle("hidden", ready || Boolean(auto.enabled));
+      [["setupStep1", step1], ["setupStep2", step2], ["setupStep3", step3]].forEach(([id, done], index, all) => {
+        const el = $(id);
+        el.classList.toggle("done", done);
+        const firstOpen = all.findIndex(([, d]) => !d);
+        el.classList.toggle("current", !done && firstOpen === index);
+      });
+      if (!setup.classList.contains("hidden") && !step1) renderBrainForm($("setupBrainSlot"));
+      else $("setupBrainSlot").replaceChildren(textSpan(brainSummary(brain), "ux-muted"));
+      const heroSwitch = $("assistantHeroSwitch");
+      heroSwitch.checked = Boolean(auto.enabled);
+      heroSwitch.disabled = !(auto.enabled || (step1 && (step2 || auto.enabled))) || !selectedAccountId() || !hasPermission("ask_ai");
+      $("assistantHeroTitle").textContent = t(auto.enabled ? "hero.on" : "hero.off");
+      $("assistantHeroStats").textContent = auto.enabled || auto.replyCount
+        ? t("hero.stats", {n: auto.replyCount || 0})
+        : (step1 ? t("hero.ready_hint") : t("hero.setup_hint"));
+      const runtimeState = (auto.runtime || {}).state || "off";
+      const badge = $("assistantHeroBadge");
+      badge.textContent = assistantAutoReplyRuntimeLabel(runtimeState);
+      badge.className = "badge " + (["error", "login_required"].includes(runtimeState) ? "bad" : (auto.enabled ? "ok" : ""));
+      $("heroBrainSummary").textContent = brainSummary(brain);
+      $("heroKnowledgeSummary").textContent = topics.length
+        ? t("hero.knowledge_summary", {n: topics.length, names: topics.slice(0, 3).map((s) => s.title || t("kb.untitled")).join(", ")})
+        : t("hero.knowledge_empty");
+    }
+
+    async function loadAssistantOverview() {
+      await Promise.allSettled([
+        loadAssistantBrain(),
+        loadAssistantKnowledge(),
+        loadAssistantAutoReply()
+      ]);
+      refreshAssistantSetup();
+    }
+
+    const KB_PRESETS = [
+      ["kb.preset_hours", "kb.preset_hours_ph"],
+      ["kb.preset_menu", "kb.preset_menu_ph"],
+      ["kb.preset_order", "kb.preset_order_ph"],
+      ["kb.preset_handoff", "kb.preset_handoff_ph"]
+    ];
+
+    function kbSectionsFromState() {
+      const sections = ((state.assistantKnowledge || {}).sections || []).map((s) => ({...s}));
+      const titles = new Set(sections.map((s) => s.title));
+      for (const [titleKey, phKey] of KB_PRESETS) {
+        const title = t(titleKey);
+        if (!titles.has(title)) sections.push({id: "", title, body: "", placeholder: t(phKey), preset: true});
+      }
+      return sections;
+    }
+
+    function renderKbTopics() {
+      const root = $("kbTopics");
+      root.replaceChildren();
+      state.kbDraft = kbSectionsFromState();
+      state.kbDraft.forEach((section, index) => root.appendChild(kbTopicEditor(section, index)));
+      const data = state.assistantKnowledge || {};
+      const badge = $("kbStatus");
+      if (data.indexError) { badge.textContent = t("kb.status_error"); badge.className = "badge bad"; }
+      else if (data.indexMode === "needs-reindex") { badge.textContent = t("kb.status_pending"); badge.className = "badge warn"; }
+      else if ((data.chunkCount || 0) > 0) { badge.textContent = t("kb.status_ok"); badge.className = "badge ok"; }
+      else { badge.textContent = t("kb.status_empty"); badge.className = "badge"; }
+    }
+
+    function kbTopicEditor(section, index) {
+      const details = document.createElement("details");
+      details.className = "kb-topic";
+      details.open = !String(section.body || "").trim() ? index < 1 : false;
+      const summary = document.createElement("summary");
+      const titleText = textSpan(section.title || t("kb.untitled"));
+      const filled = String(section.body || "").trim();
+      const filledBadge = textSpan(filled ? t("kb.filled") : t("kb.empty"), "badge " + (filled ? "ok" : ""));
+      summary.append(titleText, filledBadge);
+      const body = document.createElement("div");
+      body.className = "kb-topic-body";
+      const title = document.createElement("input");
+      title.value = section.title || "";
+      title.maxLength = 120;
+      title.placeholder = t("kb.topic_title_ph");
+      title.addEventListener("input", () => {
+        state.kbDraft[index].title = title.value;
+        titleText.textContent = title.value || t("kb.untitled");
+        scheduleKbAutosave();
+      });
+      const text = document.createElement("textarea");
+      text.value = section.body || "";
+      text.placeholder = section.placeholder || t("kb.topic_body_ph");
+      text.addEventListener("input", () => {
+        state.kbDraft[index].body = text.value;
+        const hasText = Boolean(text.value.trim());
+        filledBadge.textContent = hasText ? t("kb.filled") : t("kb.empty");
+        filledBadge.className = "badge " + (hasText ? "ok" : "");
+        scheduleKbAutosave();
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger";
+      remove.textContent = t("kb.remove_topic");
+      remove.addEventListener("click", () => {
+        state.kbDraft.splice(index, 1);
+        state.assistantKnowledge.sections = state.kbDraft.filter((s) => !s.preset || String(s.body || "").trim());
+        saveKbTopics().then(renderKbTopics).catch(toastError);
+      });
+      body.append(title, text, remove);
+      details.append(summary, body);
+      return details;
+    }
+
+    function scheduleKbAutosave() {
+      $("kbSaveState").textContent = t("kb.unsaved");
+      clearTimeout(state.kbAutosaveTimer);
+      // Debounced save: every save re-indexes the shop data for the AI.
+      state.kbAutosaveTimer = setTimeout(() => saveKbTopics().catch(toastError), 2000);
+    }
+
+    async function saveKbTopics() {
+      clearTimeout(state.kbAutosaveTimer);
+      const sections = (state.kbDraft || [])
+        .filter((s) => String(s.body || "").trim() || (!s.preset && String(s.title || "").trim()))
+        .map((s) => ({id: s.id || "", title: String(s.title || "").trim(), body: String(s.body || "")}));
+      $("kbSaveState").textContent = t("kb.saving");
+      const data = await post("/api/assistant/knowledge", {sections});
+      const openStates = [...$("kbTopics").querySelectorAll("details")].map((d) => d.open);
+      state.assistantKnowledge = data;
+      renderAssistantKnowledge(data);
+      // Keep what the person is typing in place: only refresh ids and badges.
+      const drafts = kbSectionsFromState();
+      drafts.forEach((section, index) => {
+        if (state.kbDraft[index] && !state.kbDraft[index].id) state.kbDraft[index].id = section.id;
+      });
+      $("kbSaveState").textContent = t("kb.saved_at", {time: fmtTime(Date.now())});
+      const badge = $("kbStatus");
+      badge.textContent = data.indexError ? t("kb.status_error") : t("kb.status_ok");
+      badge.className = "badge " + (data.indexError ? "bad" : "ok");
+      if (openStates.length !== drafts.length) renderKbTopics();
+      refreshAssistantSetup();
+    }
+
+    function addKbTopic() {
+      state.kbDraft = state.kbDraft || kbSectionsFromState();
+      state.kbDraft.push({id: "", title: "", body: ""});
+      const editor = kbTopicEditor(state.kbDraft[state.kbDraft.length - 1], state.kbDraft.length - 1);
+      editor.open = true;
+      $("kbTopics").appendChild(editor);
+      editor.querySelector("input").focus();
+    }
+
+    function addStarterTopic() {
+      state.kbDraft = state.kbDraft || kbSectionsFromState();
+      if (state.kbDraft.some((s) => s.title === t("kb.starter_title"))) {
+        toast(t("assistant.knowledge_already_generated"));
+        return;
+      }
+      const body = assistantStarterKnowledge().replace(ASSISTANT_STARTER_KNOWLEDGE_MARKER, "").replace(/^#{1,2} .*$/gm, (line) => line.replace(/^#+\s*/, "• ")).trim();
+      state.kbDraft.push({id: "", title: t("kb.starter_title"), body});
+      const editor = kbTopicEditor(state.kbDraft[state.kbDraft.length - 1], state.kbDraft.length - 1);
+      editor.open = true;
+      $("kbTopics").appendChild(editor);
+      scheduleKbAutosave();
+    }
+
+    function kbBubble(text, kind, source) {
+      const bubble = document.createElement("div");
+      bubble.className = "kb-bubble " + kind;
+      bubble.textContent = text;
+      if (source) bubble.appendChild(source);
+      $("kbChatLog").appendChild(bubble);
+      $("kbChatLog").scrollTop = $("kbChatLog").scrollHeight;
+      return bubble;
+    }
+
+    async function askKbChat() {
+      const input = $("kbChatInput");
+      const question = input.value.trim();
+      if (!question) return;
+      input.value = "";
+      kbBubble(question, "me");
+      const waiting = kbBubble(t("kb.thinking"), "ai");
+      try {
+        const data = await post("/api/assistant/ask", {question});
+        const item = data.question || {};
+        waiting.remove();
+        try { localStorage.setItem("okline.assistantTried", "yes"); } catch (_) { /* optional */ }
+        if (item.answer) {
+          const names = [...new Set((item.sources || []).map((s) => s.name).filter(Boolean))];
+          kbBubble(item.answer, "ai", textSpan(names.length ? t("kb.answered_from", {names: names.join(", ")}) : t("kb.answered_general"), "kb-source"));
+        } else {
+          const source = document.createElement("span");
+          source.className = "kb-source";
+          const add = document.createElement("button");
+          add.type = "button";
+          add.className = "link-button";
+          add.textContent = t("kb.add_answer");
+          add.addEventListener("click", () => prefillUnanswered(item));
+          source.append(t("kb.no_info") + " · ", add);
+          kbBubble(t("kb.handoff"), "ai none", source);
+        }
+        refreshAssistantSetup();
+        loadKbUnanswered().catch(() => {});
+      } catch (err) {
+        waiting.remove();
+        toastError(err);
+      }
+    }
+
+    async function loadKbUnanswered() {
+      if (!hasPermission("ask_ai")) return;
+      const data = await api("/api/assistant/unanswered/mine?limit=200");
+      renderKbUnanswered(data.questions || []);
+    }
+
+    function renderKbUnanswered(items) {
+      const root = $("kbUnansweredList");
+      root.replaceChildren();
+      $("kbUnansweredCount").textContent = String(items.length);
+      $("kbUnansweredCount").className = "badge " + (items.length ? "warn" : "");
+      if (!items.length) {
+        root.appendChild(textSpan(t("kb.unanswered_none"), "ux-muted"));
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "unanswered-item";
+        row.dataset.questionId = item.id;
+        const meta = textSpan(`${item.source === "line_auto_reply" ? t("kb.from_line") : t("kb.from_test")} · ${fmtTime(Date.parse(item.createdAt) || 0)}`, "ux-muted");
+        const question = textSpan(item.question, "strong");
+        const answer = document.createElement("textarea");
+        answer.rows = 2;
+        answer.placeholder = t("kb.answer_ph");
+        const actions = document.createElement("div");
+        actions.className = "ux-row";
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "primary";
+        save.textContent = t("kb.save_to_shop");
+        save.addEventListener("click", async () => {
+          if (!answer.value.trim()) return toast(t("assistant.answer_required"), true);
+          save.disabled = true;
+          try {
+            const data = await post("/api/assistant/knowledge/faq", {question: item.question, answer: answer.value.trim(), questionId: item.id});
+            state.assistantKnowledge = data;
+            renderAssistantKnowledge(data);
+            renderKbTopics();
+            toast(t("kb.saved_to_shop"));
+            await loadKbUnanswered();
+          } catch (err) { toastError(err); } finally { save.disabled = false; }
+        });
+        const dismiss = document.createElement("button");
+        dismiss.type = "button";
+        dismiss.textContent = t("kb.dismiss");
+        dismiss.addEventListener("click", async () => {
+          const data = await post("/api/assistant/unanswered/dismiss", {id: item.id});
+          renderKbUnanswered(data.questions || []);
+        });
+        actions.append(save, dismiss);
+        row.append(meta, question, answer, actions);
+        root.appendChild(row);
+      }
+    }
+
+    function prefillUnanswered(item) {
+      loadKbUnanswered().then(() => {
+        const row = $("kbUnansweredList").querySelector(`[data-question-id="${CSS.escape(item.id || "")}"]`);
+        const target = row || $("kbUnansweredCard");
+        target.scrollIntoView({behavior: "smooth", block: "center"});
+        const box = row && row.querySelector("textarea");
+        if (box) box.focus();
+      }).catch(toastError);
+    }
+
+    // ===== Scheduled sends: list (D1) and 3-step wizard (D2-D4) ================
+    // Thai-friendly variables shown in the editor, mapped to stored tokens.
+    const WIZARD_VARS = [
+      ["{date}", "var.date"],
+      ["{time}", "var.time"],
+      ["{name}", "var.name"],
+      ["{rand:1-100}", "var.rand"]
+    ];
+
+    function varsToDisplay(text) {
+      let out = String(text || "");
+      for (const [token, key] of WIZARD_VARS) out = out.split(token).join(`{${t(key)}}`);
+      return out;
+    }
+
+    function varsToTokens(text) {
+      let out = String(text || "");
+      for (const [token, key] of WIZARD_VARS) {
+        for (const lang of ["th", "en"]) {
+          const entry = I18N[key];
+          const label = entry ? entry[lang] : "";
+          if (!label) continue;
+          out = out.split(`{${label}}`).join(token);
+          // Accept a plain hyphen where the label uses an en dash.
+          out = out.split(`{${label.replace("–", "-")}}`).join(token);
+        }
+      }
+      return out;
+    }
+
+    function previewWizardText(text, targetName) {
+      return previewPlaceholders(varsToTokens(text)).split("{name}").join(targetName || t("var.name"));
+    }
+
+    function conversationLookup(mid) {
+      const all = [...(state.contacts || []), ...(state.groups || [])];
+      return all.find((item) => item.mid === mid) || null;
+    }
+
+    function jobTargetName(job) {
+      const found = conversationLookup(job.to);
+      return (found && found.name) || job.targetName || job.to;
+    }
+
+    function jobScheduleLabel(job) {
+      if (job.mode === "once") {
+        const at = String(job.runAt || "").replace("T", " ");
+        return t("jobs.when_once", {at: at ? isoToDmy(at.slice(0, 10)) + " " + at.slice(11, 16) : "-"});
+      }
+      const days = (job.weekdays || []);
+      const dayText = !days.length
+        ? t("jobs.every_day")
+        : (days.join(",") === "0,1,2,3,4" ? t("jobs.weekdays") : (days.join(",") === "0,1,2,3,4,5" ? t("jobs.mon_sat") : days.map((d) => t(DAY_KEYS[d])).join(" ")));
+      if (Number(job.intervalMinutes) >= 1440) return `${dayText} ${job.windowStart}`;
+      return t("jobs.when_window", {days: dayText, start: job.windowStart, end: job.windowEnd, n: job.intervalMinutes});
+    }
+
+    function jobStatus(job) {
+      const raw = String(job.status || "").toLowerCase();
+      if (job.running || raw === "running") return ["running", "info"];
+      if (raw === "login required") return ["login_required", "bad"];
+      if (raw === "error" || job.lastError) return ["error", "bad"];
+      if (raw === "completed") return ["completed", ""];
+      if (!job.enabled) return ["paused", ""];
+      return ["waiting", "ok"];
+    }
+
+    function jobPreview(job) {
+      const source = job.contentSource || "text";
+      if (source === "text") {
+        const texts = (job.patternTexts || []).length ? job.patternTexts : [job.text];
+        return varsToDisplay(texts[0] || "") + (texts.length > 1 ? ` (+${texts.length - 1})` : "");
+      }
+      if (source === "image") return t("wizard.type_image") + (job.imageName ? ` · ${job.imageName}` : "");
+      if (source === "ai_image") return t("wizard.type_ai_image") + " · " + (job.aiPrompt || (job.patternTexts || [])[0] || "");
+      return t("wizard.type_api") + " · " + (job.apiUrl || "");
+    }
+
+    function renderSchedules() {
+      $("scheduleCount").textContent = t("scheduler.jobs", {n: state.schedules.length});
+      updateClearStuckButton();
+      const list = $("schedulesList");
+      if (!list) return;
+      list.replaceChildren();
+      const banners = $("jobErrorBanners");
+      banners.replaceChildren();
+      const failing = state.schedules.filter((job) => ["error", "login_required"].includes(jobStatus(job)[0]));
+      for (const job of failing) {
+        const banner = document.createElement("div");
+        banner.className = "job-error-banner";
+        const [status] = jobStatus(job);
+        banner.appendChild(textSpan(t("jobs.failed_banner", {name: job.name || t("scheduler.default_name"), error: status === "login_required" ? t("scheduler.login_required") : (job.lastError || t("scheduler.error"))})));
+        const fix = document.createElement("button");
+        fix.type = "button";
+        fix.className = "primary";
+        if (status === "login_required") {
+          fix.textContent = t("jobs.reconnect");
+          fix.addEventListener("click", () => {
+            const account = state.accounts.find((a) => a.id === job.accountId);
+            openAddAccount(true, account || null);
+          });
+        } else {
+          fix.textContent = t("jobs.retry");
+          fix.addEventListener("click", () => runScheduleNow(job.id).catch(toastError));
+        }
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = t("scheduler.edit");
+        edit.addEventListener("click", () => openScheduleWizard(job));
+        banner.append(fix, edit);
+        banners.appendChild(banner);
+      }
+      const ordered = [...state.schedules].sort((a, b) => {
+        const rank = (job) => (["error", "login_required"].includes(jobStatus(job)[0]) ? 0 : (job.enabled ? 1 : 2));
+        return rank(a) - rank(b) || (a.nextRunAt || Infinity) - (b.nextRunAt || Infinity);
+      });
+      for (const job of ordered) {
+        const item = document.createElement("div");
+        item.className = "item schedule-item";
+        item.classList.add("ux-card", "job-card");
+        const name = jobTargetName(job);
+        const avatar = document.createElement("span");
+        avatar.className = "avatar";
+        avatar.textContent = initialsOf(name);
+        const main = document.createElement("div");
+        main.className = "job-card-main";
+        const titleRow = document.createElement("div");
+        titleRow.className = "ux-row";
+        const [statusKey, statusKind] = jobStatus(job);
+        titleRow.append(textSpan(name, "strong"), textSpan(t("jobs.status_" + statusKey), "badge " + statusKind));
+        const when = textSpan(`${jobScheduleLabel(job)}${job.enabled && job.nextRunAt ? " · " + t("jobs.next", {at: fmtEpoch(job.nextRunAt)}) : ""}`, "ux-muted");
+        const preview = textSpan(jobPreview(job), "preview");
+        const history = document.createElement("div");
+        history.className = "job-history";
+        const recent = (job.history || []).slice(-3).reverse();
+        if (recent.length) {
+          history.appendChild(textSpan(t("jobs.recent"), "ux-muted"));
+          for (const entry of recent) {
+            const mark = textSpan(entry.ok ? "✓" : "✗", entry.ok ? "ok" : "bad");
+            mark.title = `${String(entry.at || "").replace("T", " ")}${entry.error ? " · " + entry.error : ""}`;
+            history.appendChild(mark);
+          }
+        } else {
+          history.appendChild(textSpan(t("jobs.never_sent"), "ux-muted"));
+        }
+        main.append(titleRow, when, preview, history);
+        const side = document.createElement("div");
+        side.className = "job-card-side";
+        const sw = document.createElement("label");
+        sw.className = "switch";
+        sw.title = job.enabled ? t("scheduler.pause") : t("scheduler.resume");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = Boolean(job.enabled);
+        input.disabled = !hasPermission("schedule");
+        input.setAttribute("aria-label", t("jobs.toggle_label", {name: job.name || name}));
+        input.addEventListener("change", () => toggleSchedule(job.id, input.checked).catch(toastError));
+        sw.append(input, document.createElement("span"));
+        side.append(sw, jobKebab(job));
+        item.append(avatar, main, side);
+        list.appendChild(item);
+      }
+      if (!list.children.length) {
+        const empty = document.createElement("div");
+        empty.className = "ux-card";
+        empty.append(textSpan(t("jobs.empty"), "ux-muted"));
+        list.appendChild(empty);
+      }
+    }
+
+    function jobKebab(job) {
+      const wrap = document.createElement("div");
+      wrap.className = "kebab-wrap";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "icon-ghost";
+      btn.setAttribute("aria-haspopup", "menu");
+      btn.setAttribute("aria-label", t("convo.menu"));
+      btn.textContent = "⋯";
+      const menu = document.createElement("div");
+      menu.className = "kebab-menu hidden";
+      menu.setAttribute("role", "menu");
+      const add = (key, fn, cls) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.setAttribute("role", "menuitem");
+        item.textContent = t(key);
+        if (cls) item.className = cls;
+        item.disabled = !hasPermission("schedule");
+        item.addEventListener("click", () => { menu.classList.add("hidden"); fn(); });
+        menu.appendChild(item);
+      };
+      add("scheduler.edit", () => openScheduleWizard(job));
+      add("wizard.test", () => sendScheduleTest(job).catch(toastError));
+      add("jobs.send_now", () => runScheduleNow(job.id).catch(toastError));
+      add("scheduler.delete", () => deleteSchedule(job.id).catch(toastError), "danger");
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        document.querySelectorAll(".kebab-menu").forEach((m) => { if (m !== menu) m.classList.add("hidden"); });
+        menu.classList.toggle("hidden");
+      });
+      wrap.append(btn, menu);
+      return wrap;
+    }
+
+    // ---- wizard ---------------------------------------------------------------
+    function newWizardDraft() {
+      const tomorrow = new Date(Date.now() + 86400000);
+      const pad = (n) => String(n).padStart(2, "0");
+      return {
+        id: null,
+        to: "",
+        targetName: "",
+        targetTab: "people",
+        type: "text",
+        text: "",
+        extras: [],
+        patternIds: [],
+        imageData: "",
+        imageName: "",
+        imageUrl: "",
+        aiPrompt: "",
+        apiMethod: "GET",
+        apiUrl: "",
+        apiBody: "",
+        freq: "daily",
+        date: `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`,
+        time: "09:00",
+        days: [0, 1, 2, 3, 4],
+        windowStart: "09:00",
+        windowEnd: "18:00",
+        interval: 60,
+        maxRuns: "",
+        activeFrom: "",
+        activeUntil: "",
+        encrypt: false,
+        name: "",
+        nameTouched: false,
+        step: 1
+      };
+    }
+
+    function draftFromJob(job) {
+      const draft = newWizardDraft();
+      const texts = (job.patternTexts || []).filter((x) => String(x).trim());
+      Object.assign(draft, {
+        id: job.id,
+        to: job.to,
+        targetName: jobTargetName(job),
+        targetTab: (state.groups || []).some((g) => g.mid === job.to) ? "groups" : "people",
+        type: job.contentSource || "text",
+        text: varsToDisplay(job.contentSource === "text" ? (texts[0] || job.text || "") : (job.text || "")),
+        extras: job.contentSource === "text" ? texts.slice(1).map(varsToDisplay) : [],
+        patternIds: (job.patternIds || []).slice(),
+        imageUrl: job.imageSource || "",
+        imageName: job.imageName || "",
+        aiPrompt: job.aiPrompt || (job.contentSource === "ai_image" ? texts[0] || "" : ""),
+        apiMethod: job.apiMethod || "GET",
+        apiUrl: job.apiUrl || "",
+        apiBody: job.apiBody || "",
+        encrypt: Boolean(job.encrypt),
+        name: job.name || "",
+        nameTouched: true,
+        activeFrom: job.activeFrom || "",
+        activeUntil: job.activeUntil || "",
+        maxRuns: job.maxRuns ? String(job.maxRuns) : ""
+      });
+      if (job.mode === "once") {
+        draft.freq = "once";
+        const [date, time] = String(job.runAt || "").split("T");
+        draft.date = date || draft.date;
+        draft.time = (time || "09:00").slice(0, 5);
+      } else if (Number(job.intervalMinutes) >= 1440) {
+        draft.freq = (job.weekdays || []).length ? "weekly" : "daily";
+        draft.days = (job.weekdays || []).length ? job.weekdays.slice() : draft.days;
+        draft.time = job.windowStart || "09:00";
+      } else {
+        draft.freq = "custom";
+        draft.days = (job.weekdays || []).length ? job.weekdays.slice() : [0, 1, 2, 3, 4, 5, 6];
+        draft.windowStart = job.windowStart || "09:00";
+        draft.windowEnd = job.windowEnd || "18:00";
+        draft.interval = job.intervalMinutes || 60;
+      }
+      return draft;
+    }
+
+    function openScheduleWizard(job, preset) {
+      state.wizard = job ? draftFromJob(job) : newWizardDraft();
+      if (preset && preset.to) {
+        state.wizard.to = preset.to;
+        state.wizard.targetName = preset.name || preset.to;
+        state.wizard.targetTab = preset.to.charAt(0).toLowerCase() === "u" ? "people" : "groups";
+      }
+      $("wizardTitle").textContent = t(job ? "wizard.title_edit" : "wizard.title_new");
+      setTab("bot");
+      setBotPage("wizard");
+      fillWizardInputs();
+      setWizardStep(state.wizard.to && !job ? 2 : 1);
+    }
+
+    function fillWizardInputs() {
+      const d = state.wizard;
+      $("wizardText").value = d.text;
+      $("wizardImageUrl").value = d.imageUrl;
+      $("wizardImageName").textContent = d.imageName || "";
+      $("wizardAiPrompt").value = d.aiPrompt;
+      $("wizardApiMethod").value = d.apiMethod;
+      $("wizardApiUrl").value = d.apiUrl;
+      $("wizardApiBody").value = d.apiBody;
+      $("wizardDate").value = d.date;
+      $("wizardTime").value = d.time;
+      $("wizardWindowStart").value = d.windowStart;
+      $("wizardWindowEnd").value = d.windowEnd;
+      $("wizardInterval").value = String(d.interval);
+      $("wizardMaxRuns").value = d.maxRuns;
+      $("wizardActiveFrom").value = d.activeFrom;
+      $("wizardActiveUntil").value = d.activeUntil;
+      $("wizardRangeDetails").open = Boolean(d.activeFrom || d.activeUntil);
+      $("wizardEncrypt").checked = d.encrypt;
+      $("wizardName").value = d.name;
+      $("wizardTargetSearch").value = "";
+      setWizardTargetTab(d.targetTab);
+      renderWizardVars();
+      renderWizardExtras();
+      buildDayPicker($("wizardDays"), d.days, (days) => { state.wizard.days = days; updateWizardSummary(); });
+      syncWizardType();
+      syncWizardFreq();
+    }
+
+    function setWizardStep(step) {
+      const d = state.wizard;
+      d.step = Math.max(1, Math.min(3, step));
+      document.querySelectorAll("[data-wizard-pane]").forEach((pane) => { pane.hidden = Number(pane.dataset.wizardPane) !== d.step; });
+      document.querySelectorAll("[data-wizard-step]").forEach((btn) => {
+        const value = Number(btn.dataset.wizardStep);
+        btn.classList.toggle("done", value < d.step);
+        if (value === d.step) btn.setAttribute("aria-current", "step"); else btn.removeAttribute("aria-current");
+      });
+      $("wizardPrev").classList.toggle("hidden", d.step === 1);
+      $("wizardNext").classList.toggle("hidden", d.step === 3);
+      $("wizardSave").classList.toggle("hidden", d.step !== 3);
+      $("wizardSave").textContent = t(d.id ? "wizard.save_edit" : "wizard.save");
+      updateWizardSummary();
+    }
+
+    function wizardStepError(step) {
+      const d = state.wizard;
+      if (step >= 1 && !d.to) return "wizard.err_target";
+      if (step >= 2) {
+        if (d.type === "text" && !d.text.trim() && !d.extras.some((x) => x.trim())) return "wizard.err_text";
+        if (d.type === "image" && !d.imageData && !d.imageUrl.trim()) return "wizard.err_image";
+        if (d.type === "ai_image" && !d.aiPrompt.trim()) return "wizard.err_ai";
+        if (d.type === "api" && !d.apiUrl.trim()) return "wizard.err_api";
+      }
+      if (step >= 3) {
+        if (d.freq === "once" && (!d.date || !d.time)) return "wizard.err_when";
+        if (d.freq === "weekly" && !d.days.length) return "wizard.err_days";
+      }
+      return "";
+    }
+
+    function moveWizard(delta) {
+      const d = state.wizard;
+      if (delta > 0) {
+        const error = wizardStepError(d.step);
+        if (error) return toast(t(error), true);
+      }
+      setWizardStep(d.step + delta);
+    }
+
+    function setWizardTargetTab(tab) {
+      state.wizard.targetTab = tab;
+      document.querySelectorAll("#wizardTargetTabs .subtab").forEach((b) => {
+        const on = b.dataset.wtab === tab;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", String(on));
+      });
+      renderWizardTargets();
+    }
+
+    function renderWizardTargets() {
+      const d = state.wizard;
+      const root = $("wizardTargetList");
+      root.replaceChildren();
+      const search = $("wizardTargetSearch").value.trim().toLocaleLowerCase();
+      const items = (d.targetTab === "groups" ? state.groups : state.contacts) || [];
+      const rows = items.filter((item) => !search || String(item.name || "").toLocaleLowerCase().includes(search) || item.mid === search);
+      for (const item of rows.slice(0, 300)) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.setAttribute("aria-pressed", String(item.mid === d.to));
+        const avatar = document.createElement("span");
+        avatar.className = "avatar";
+        avatar.textContent = initialsOf(item.name);
+        btn.append(avatar, textSpan(item.name || item.mid));
+        btn.addEventListener("click", () => {
+          d.to = item.mid;
+          d.targetName = item.name || item.mid;
+          renderWizardTargets();
+          updateWizardSummary();
+          setWizardStep(2);
+        });
+        root.appendChild(btn);
+      }
+      if (!rows.length) root.appendChild(textSpan(t(items.length ? "contacts.no_match" : "jobs.load_contacts_first"), "ux-muted"));
+    }
+
+    function renderWizardVars() {
+      const root = $("wizardVarChips");
+      root.replaceChildren();
+      for (const [, key] of WIZARD_VARS) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "ph-chip";
+        chip.textContent = `{${t(key)}}`;
+        chip.title = t(key + "_hint");
+        chip.addEventListener("click", () => {
+          const box = state.wizardLastTextBox || $("wizardText");
+          insertAtCursor(box, `{${t(key)}}`);
+          box.dispatchEvent(new Event("input"));
+        });
+        root.appendChild(chip);
+      }
+    }
+
+    function renderWizardExtras() {
+      const d = state.wizard;
+      const root = $("wizardExtraMessages");
+      root.replaceChildren();
+      d.extras.forEach((text, index) => {
+        const wrap = document.createElement("label");
+        wrap.className = "extra-message";
+        const head = document.createElement("span");
+        head.className = "ux-row space";
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "link-button";
+        remove.textContent = t("common.remove");
+        remove.addEventListener("click", () => { d.extras.splice(index, 1); renderWizardExtras(); updateWizardSummary(); });
+        head.append(textSpan(t("wizard.version", {n: index + 2})), remove);
+        const box = document.createElement("textarea");
+        box.rows = 3;
+        box.value = text;
+        box.addEventListener("focus", () => { state.wizardLastTextBox = box; });
+        box.addEventListener("input", () => { d.extras[index] = box.value; updateWizardSummary(); });
+        wrap.append(head, box);
+        root.appendChild(wrap);
+      });
+      $("wizardAddExtra").textContent = t("wizard.add_extra_n", {n: d.extras.length + 2});
+    }
+
+    function syncWizardType() {
+      const d = state.wizard;
+      document.querySelectorAll("[data-wizard-type]").forEach((card) => card.setAttribute("aria-pressed", String(card.dataset.wizardType === d.type)));
+      document.querySelectorAll("[data-wizard-fields]").forEach((box) => { box.hidden = box.dataset.wizardFields !== d.type; });
+      const imageType = d.type === "image" || d.type === "ai_image";
+      $("wizardEncrypt").disabled = imageType;
+      if (imageType) { d.encrypt = false; $("wizardEncrypt").checked = false; }
+      updateWizardSummary();
+    }
+
+    function syncWizardFreq() {
+      const d = state.wizard;
+      document.querySelectorAll("[data-wizard-freq]").forEach((card) => card.setAttribute("aria-pressed", String(card.dataset.wizardFreq === d.freq)));
+      document.querySelectorAll("[data-wizard-when]").forEach((el) => {
+        el.hidden = !el.dataset.wizardWhen.split(" ").includes(d.freq);
+      });
+      updateWizardSummary();
+    }
+
+    function wizardWhenText() {
+      const d = state.wizard;
+      if (d.freq === "once") return t("jobs.when_once", {at: `${isoToDmy(d.date)} ${d.time}`});
+      const job = {
+        mode: "repeat",
+        weekdays: d.freq === "daily" ? [] : d.days,
+        intervalMinutes: d.freq === "custom" ? d.interval : 1440,
+        windowStart: d.freq === "custom" ? d.windowStart : d.time,
+        windowEnd: d.windowEnd
+      };
+      return jobScheduleLabel(job);
+    }
+
+    function wizardAutoName() {
+      const d = state.wizard;
+      const what = d.type === "text"
+        ? (d.text.trim().split("\n")[0] || t("wizard.type_text")).slice(0, 24)
+        : t("wizard.type_" + d.type);
+      return `${what} → ${d.targetName || "?"}`;
+    }
+
+    function updateWizardSummary() {
+      const d = state.wizard;
+      if (!d) return;
+      $("wizardSumTo").textContent = d.targetName || "-";
+      const what = $("wizardSumWhat");
+      if (d.type === "text") what.textContent = previewWizardText(d.text || "", d.targetName) || "-";
+      else if (d.type === "image") what.textContent = d.imageName || d.imageUrl || t("wizard.type_image");
+      else if (d.type === "ai_image") what.textContent = `${t("wizard.type_ai_image")}: ${d.aiPrompt || "-"}`;
+      else what.textContent = `${t("wizard.type_api")}: ${d.apiUrl || "-"}`;
+      if (d.type === "text" && d.extras.some((x) => x.trim())) {
+        what.textContent += `\n\n${t("wizard.random_versions", {n: 1 + d.extras.filter((x) => x.trim()).length})}`;
+      }
+      $("wizardSumWhen").textContent = wizardWhenText();
+      if (!d.nameTouched) {
+        d.name = wizardAutoName();
+        $("wizardName").value = d.name;
+      }
+    }
+
+    function wizardPayload(accountId) {
+      const d = state.wizard;
+      const texts = [d.text, ...d.extras].map((x) => varsToTokens(x)).filter((x) => x.trim());
+      const repeat = d.freq !== "once";
+      const payload = {
+        name: (d.name || wizardAutoName()).trim().slice(0, 120),
+        accountId,
+        to: d.to,
+        targetName: d.targetName,
+        contentSource: d.type,
+        text: d.type === "text" ? (texts[0] || "") : "",
+        patternTexts: d.type === "text" && texts.length > 1 ? texts : [],
+        patternIds: d.type === "text" && texts.length > 1 ? d.patternIds : [],
+        imageSource: d.type === "image" ? d.imageUrl.trim() : "",
+        imageData: d.type === "image" ? d.imageData : "",
+        imageName: d.type === "image" ? d.imageName : "",
+        aiPrompt: d.type === "ai_image" ? d.aiPrompt : "",
+        apiMethod: d.apiMethod,
+        apiUrl: d.type === "api" ? d.apiUrl.trim() : "",
+        apiBody: d.type === "api" ? d.apiBody : "",
+        encrypt: d.type === "image" || d.type === "ai_image" ? false : d.encrypt,
+        mode: repeat ? "repeat" : "once",
+        runAt: repeat ? "" : `${d.date}T${d.time}`,
+        windowStart: d.freq === "custom" ? d.windowStart : d.time,
+        windowEnd: d.freq === "custom" ? d.windowEnd : addMinutes(d.time, 1),
+        intervalMinutes: d.freq === "custom" ? Math.max(1, Number(d.interval) || 60) : 1440,
+        weekdays: d.freq === "weekly" || d.freq === "custom" ? d.days : [],
+        activeFrom: repeat ? d.activeFrom : "",
+        activeUntil: repeat ? d.activeUntil : "",
+        maxRuns: repeat && d.maxRuns ? Number(d.maxRuns) : 0,
+        enabled: true
+      };
+      return payload;
+    }
+
+    function addMinutes(hhmm, minutes) {
+      const [h, m] = String(hhmm || "09:00").split(":").map(Number);
+      const total = (h * 60 + m + minutes) % 1440;
+      return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+    }
+
+    // Extra message versions are kept as reusable patterns in "General".
+    async function syncWizardPatterns(payload) {
+      const d = state.wizard;
+      if (payload.contentSource !== "text" || payload.patternTexts.length < 2) return payload;
+      const ids = [];
+      for (let index = 0; index < payload.patternTexts.length; index += 1) {
+        const text = payload.patternTexts[index];
+        const name = `${payload.name.slice(0, 90)} · ${t("wizard.version", {n: index + 1})}`;
+        const existing = d.patternIds[index];
+        try {
+          if (existing && (state.patterns || []).some((p) => p.id === existing)) {
+            await post("/api/patterns/update", {id: existing, name, text, accountId: payload.accountId});
+            ids.push(existing);
+          } else {
+            const created = await post("/api/patterns/create", {name, text, accountId: payload.accountId});
+            const pattern = created.pattern || (created.patterns || []).find((p) => p.name === name);
+            if (pattern && pattern.id) ids.push(pattern.id);
+          }
+        } catch (_) { /* the job still works from patternTexts */ }
+      }
+      payload.patternIds = ids;
+      return payload;
+    }
+
+    async function saveWizard() {
+      const accountId = requireAccount();
+      if (!accountId) return;
+      for (const step of [1, 2, 3]) {
+        const error = wizardStepError(step);
+        if (error) { setWizardStep(step); return toast(t(error), true); }
+      }
+      const button = $("wizardSave");
+      button.disabled = true;
+      try {
+        await loadPatterns();
+        const payload = await syncWizardPatterns(wizardPayload(accountId));
+        if (state.wizard.id) {
+          await post("/api/schedules/update", {...payload, id: state.wizard.id});
+        } else {
+          await post("/api/schedules/create", payload);
+        }
+        toast(t(state.wizard.id ? "wizard.updated" : "wizard.created"));
+        setBotPage("schedules");
+        // A background refresh may have started before the save; reload after it.
+        while (state.scheduleLoading) await new Promise((resolve) => setTimeout(resolve, 100));
+        await loadSchedules();
+      } finally {
+        button.disabled = false;
+        applyPermissions();
+      }
+    }
+
+    async function sendScheduleTest(job) {
+      const accountId = requireAccount();
+      if (!accountId) return;
+      let payload;
+      if (job) {
+        payload = {...job, accountId};
+      } else {
+        const error = wizardStepError(2);
+        if (error) return toast(t(error), true);
+        payload = wizardPayload(accountId);
+        payload.mode = "once";
+        payload.runAt = `${state.wizard.date || "2000-01-01"}T${state.wizard.time || "00:00"}`;
+        payload.to = payload.to || "self";
+      }
+      const button = $("wizardTest");
+      button.disabled = true;
+      try {
+        await post("/api/schedules/test", payload);
+        toast(t("wizard.test_sent"));
+      } finally {
+        button.disabled = false;
+        applyPermissions();
+      }
+    }
+
+    async function handleWizardImage(file) {
+      if (!file) return;
+      if (file.size > 30 * 1024 * 1024) return toast(t("errors.file_too_large"), true);
+      state.wizard.imageData = await fileToBase64(file);
+      state.wizard.imageName = file.name;
+      $("wizardImageName").textContent = file.name;
+      updateWizardSummary();
+    }
+
+    // ===== UX plan wiring =======================================================
+    Object.assign(I18N, {
+      "tabs.line": {th: "แชท", en: "Chat"},
+      "tabs.assistant": {th: "ตอบอัตโนมัติ", en: "Auto reply"},
+      "tabs.bot": {th: "ส่งตามเวลา", en: "Scheduled sends"},
+      "tabs.kpi": {th: "KPI พนักงาน", en: "Staff KPI"},
+      "tabs.settings": {th: "ตั้งค่า", en: "Settings"},
+      "tabs.dev_group": {th: "สำหรับนักพัฒนา", en: "For developers"},
+      "tabs.incoming_api": {th: "API รับข้อความ", en: "Incoming API"},
+      "tabs.tools": {th: "เครื่องมือ", en: "Tools"},
+      "tabs.logs": {th: "บันทึกการทำงาน", en: "Activity log"},
+      "contacts.tab_people": {th: "เพื่อน", en: "Friends"},
+      "contacts.tab_groups": {th: "กลุ่ม", en: "Groups"},
+      "account.connected": {th: "เชื่อมต่อแล้ว", en: "Connected"},
+      "account.disconnected": {th: "หลุด — ต้องเชื่อมต่อใหม่", en: "Disconnected — reconnect"},
+      "account.add": {th: "+ เพิ่มบัญชี LINE", en: "+ Add LINE account"},
+      "notify.banner_enable": {th: "เปิดแจ้งเตือน", en: "Turn on notifications"},
+      "notify.banner_later": {th: "ไว้ทีหลัง", en: "Later"},
+      "notify.banner_default": {th: "เปิดแจ้งเตือนเพื่อไม่พลาดข้อความลูกค้า แม้สลับไปหน้าอื่น", en: "Turn on notifications so you don't miss customers while you're in another tab."},
+      "notify.banner_denied": {th: "เบราว์เซอร์บล็อกการแจ้งเตือนอยู่ — กดไอคอนแม่กุญแจข้างช่อง URL → การแจ้งเตือน → อนุญาต แล้วรีเฟรชหน้า", en: "Notifications are blocked — click the lock icon next to the address bar → Notifications → Allow, then reload."},
+      "notify.state_granted": {th: "เปิดอยู่ — เบราว์เซอร์นี้จะแจ้งเตือนข้อความลูกค้า", en: "On — this browser will alert you about customer messages."},
+      "notify.state_default": {th: "ยังไม่ได้เปิด", en: "Not turned on yet."},
+      "notify.state_denied": {th: "ถูกบล็อก — ปลดได้ที่ไอคอนแม่กุญแจข้างช่อง URL", en: "Blocked — allow it from the lock icon next to the address bar."},
+      "notify.state_unsupported": {th: "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน", en: "This browser doesn't support notifications."},
+      "notify.test": {th: "ทดลองแจ้งเตือน", en: "Send a test"},
+      "notify.test_title": {th: "ทดลองแจ้งเตือน LinePassport", en: "LinePassport test notification"},
+      "notify.test_body": {th: "ถ้าเห็นข้อความนี้ แปลว่าแจ้งเตือนใช้งานได้", en: "If you can see this, notifications work."},
+      "notify.outside_shift": {th: "แจ้งเตือนฉันนอกกะด้วย", en: "Also notify me outside my shift"},
+      "notify.policy": {th: "ขณะเปิดหน้านี้อยู่ จะมีเสียงเบา ๆ 1 ครั้งต่อห้องที่มีข้อความใหม่ เมื่อสลับไปหน้าอื่น จะเด้งได้ไม่เกิน 1 ครั้งต่อห้องใน 2 นาที ถ้าลูกค้าทักพร้อมกันหลายคนจะรวมเป็นใบเดียว และเด้งเตือนซ้ำ 1 ครั้งเมื่อรอเกินเวลาที่ตั้งไว้ ถ้า AI ตอบแล้วจะไม่เด้ง", en: "While this page is in front you hear one soft sound per new chat. When it's hidden you get at most one notification per chat every 2 minutes, a single summary when many customers write at once, and one louder reminder when a chat waits past the reply target. No alert when the AI already replied."},
+      "notify.settings_title": {th: "การแจ้งเตือนในเบราว์เซอร์", en: "Browser notifications"},
+      "notify.escalate_title": {th: "{name} รอตอบนานแล้ว", en: "{name} has been waiting"},
+      "notify.escalate_body": {th: "รอเกิน {minutes} นาที", en: "Waiting more than {minutes} min"},
+      "notify.n_new": {th: "{n} ข้อความใหม่", en: "{n} new message(s)"},
+      "notify.digest_title": {th: "ลูกค้า {n} คนรอตอบ", en: "{n} customers waiting"},
+      "notify.digest_body": {th: "เปิด LinePassport เพื่อตอบ", en: "Open LinePassport to reply"},
+      "fresh.seconds": {th: "อัปเดตล่าสุด {n} วิที่แล้ว", en: "Updated {n}s ago"},
+      "fresh.minutes": {th: "อัปเดตล่าสุด {n} นาทีที่แล้ว", en: "Updated {n} min ago"},
+      "fresh.live": {th: "เชื่อมต่อแบบสด", en: "Live connection"},
+      "fresh.polling": {th: "กำลังเชื่อมต่อใหม่ — ตรวจทุก 30 วินาที", en: "Reconnecting — checking every 30 seconds"},
+      "presence.active": {th: "กำลังตอบ", en: "Replying"},
+      "presence.standby": {th: "สแตนด์บาย", en: "Standby"},
+      "presence.away": {th: "สลับไปหน้าอื่น", en: "Switched away"},
+      "presence.busy": {th: "ติดงานอื่น", en: "On other work"},
+      "presence.idle": {th: "ไม่มีการใช้งาน", en: "Idle"},
+      "presence.offline": {th: "ไม่ได้เปิด", en: "Offline"},
+      "presence.chip_title": {th: "สถานะของคุณ — กดเพื่อตั้งเป็น “ติดงานอื่น”", en: "Your status — click to set \"On other work\""},
+      "presence.chip_resume": {th: "กดเพื่อกลับมารับแชท", en: "Click to resume taking chats"},
+      "presence.busy_on": {th: "ตั้งสถานะเป็นติดงานอื่นแล้ว", en: "Status set to On other work"},
+      "presence.busy_off": {th: "กลับมารับแชทแล้ว", en: "Back to taking chats"},
+      "presence.explain_title": {th: "สถานะพนักงานคืออะไร", en: "What staff status means"},
+      "presence.explain_active": {th: "กำลังตอบ: เปิดหน้านี้และอยู่หน้าจอ มีแชทรอตอบ หรือพิมพ์/คลิกภายใน 1 นาที", en: "Replying: this tab is open and focused, and a chat is waiting or you typed in the last minute."},
+      "presence.explain_standby": {th: "สแตนด์บาย: เปิดหน้านี้และอยู่หน้าจอ แต่ไม่มีแชทรอ", en: "Standby: tab open and focused, nothing waiting."},
+      "presence.explain_away": {th: "สลับไปหน้าอื่น: แท็บอื่นหรือโปรแกรมอื่นอยู่ด้านหน้า", en: "Switched away: another tab or app is in front."},
+      "presence.explain_idle": {th: "ไม่มีการใช้งาน: ไม่ได้พิมพ์หรือคลิกเกิน 15 นาที", en: "Idle: no typing or clicks for 15 minutes."},
+      "presence.explain_busy": {th: "ติดงานอื่น: พนักงานกดตั้งเอง", en: "On other work: set by the staff member."},
+      "presence.explain_offline": {th: "ไม่ได้เปิด: ไม่มีหน้าเว็บเปิดอยู่เกิน 2 นาที", en: "Offline: no page open for 2 minutes."},
+      "presence.explain_visible": {th: "ทุกคนเห็นสถานะของตัวเองที่หัวแชทเสมอ และนับเฉพาะในกะ", en: "Everyone always sees their own status in the chat header; only shift time is counted."},
+      "chat.send": {th: "ส่ง", en: "Send"},
+      "chat.menu_encrypt": {th: "เข้ารหัสข้อความในห้องนี้", en: "Encrypt messages in this chat"},
+      "chat.menu_encrypt_on": {th: "✓ เข้ารหัสข้อความในห้องนี้", en: "✓ Encrypt messages in this chat"},
+      "chat.menu_schedule": {th: "ตั้งเวลาส่งให้ห้องนี้", en: "Schedule a message to this chat"},
+      "chat.menu_copy_id": {th: "คัดลอกรหัสแชท", en: "Copy chat ID"},
+      "chat.kind_friend": {th: "แชทส่วนตัว", en: "Direct chat"},
+      "chat.open_mid": {th: "เปิดแชทด้วยรหัสนี้", en: "Open chat with this ID"},
+      "chat.target_ph": {th: "ค้นหาชื่อ หรือวางรหัสแชท", en: "Search a name or paste a chat ID"},
+      "contacts.search_ph": {th: "ค้นหาชื่อ หรือวางรหัสแชท", en: "Search a name or paste a chat ID"},
+      "kpi.title": {th: "KPI พนักงานตอบลูกค้า", en: "Staff response KPI"},
+      "kpi.subtitle": {th: "นับเฉพาะแชทส่วนตัวที่ลูกค้าทักก่อน ไม่นับกลุ่มและงานส่งตามเวลา", en: "Customer chats only. Groups and scheduled sends are not counted."},
+      "kpi.range_today": {th: "วันนี้", en: "Today"},
+      "kpi.range_7d": {th: "7 วัน", en: "Last 7 days"},
+      "kpi.range_30d": {th: "30 วัน", en: "Last 30 days"},
+      "kpi.range_custom": {th: "กำหนดเอง", en: "Custom"},
+      "kpi.csv": {th: "ดาวน์โหลด CSV", en: "Download CSV"},
+      "kpi.settings": {th: "ตั้งค่า KPI", en: "KPI settings"},
+      "kpi.per_user": {th: "รายคน", en: "By staff member"},
+      "kpi.daily": {th: "เวลาตอบครั้งแรกรายวัน", en: "First response time per day"},
+      "kpi.pending_title": {th: "ค้างตอบตอนนี้", en: "Waiting for a reply now"},
+      "kpi.presence_title": {th: "เวลาอยู่หน้าจอ", en: "Screen time"},
+      "kpi.tile_first": {th: "เวลาตอบครั้งแรกเฉลี่ย", en: "Avg first response"},
+      "kpi.tile_first_sub": {th: "ค่ากลาง {m}", en: "Median {m}"},
+      "kpi.tile_sla": {th: "ตอบภายในเป้า", en: "Answered within target"},
+      "kpi.tile_sla_sub": {th: "เป้า {m} นาที", en: "Target {m} min"},
+      "kpi.tile_chats": {th: "แชทที่ลูกค้าทัก", en: "Customer chats"},
+      "kpi.tile_chats_sub": {th: "คนตอบ {human} · AI {ai}", en: "Staff {human} · AI {ai}"},
+      "kpi.tile_pending": {th: "ค้างตอบตอนนี้", en: "Waiting now"},
+      "kpi.tile_pending_sub": {th: "เกิน 30 นาที {n} ห้อง", en: "{n} over 30 min"},
+      "kpi.away_alert": {th: "ลูกค้าทัก {n} ครั้งตอนพนักงานสลับไปหน้าอื่น", en: "Customers wrote {n} times while staff were in another tab"},
+      "kpi.col_name": {th: "พนักงาน", en: "Staff"},
+      "kpi.col_chats": {th: "แชทที่รับ", en: "Chats"},
+      "kpi.col_first": {th: "ตอบครั้งแรกเฉลี่ย", en: "Avg first reply"},
+      "kpi.col_sla": {th: "ภายในเป้า", en: "Within target"},
+      "kpi.col_active": {th: "อยู่หน้าจอ", en: "On screen"},
+      "kpi.col_away": {th: "สลับไปหน้าอื่น", en: "Switched away"},
+      "kpi.col_offline": {th: "ไม่ได้เปิด (ในกะ)", en: "Offline (in shift)"},
+      "kpi.row_ai": {th: "AI ตอบอัตโนมัติ", en: "AI auto reply"},
+      "kpi.row_phone": {th: "ตอบจากแอป LINE บนมือถือ", en: "Replied from the LINE app"},
+      "kpi.role_owner": {th: "เจ้าของ", en: "Owner"},
+      "kpi.role_staff": {th: "พนักงาน", en: "Staff"},
+      "kpi.target_line": {th: "เป้า {m} นาที", en: "Target {m} min"},
+      "kpi.no_data": {th: "ยังไม่มีข้อมูลในช่วงนี้", en: "No data for this period yet"},
+      "kpi.pending_none": {th: "ไม่มีแชทค้าง", en: "No chats waiting"},
+      "kpi.open_chat": {th: "เปิดแชท", en: "Open chat"},
+      "kpi.sla_label": {th: "เป้าเวลาตอบ (นาที)", en: "Reply target (minutes)"},
+      "kpi.business_hours": {th: "นับเฉพาะเวลาทำการ", en: "Count only during business hours"},
+      "kpi.shifts_title": {th: "กะของพนักงาน", en: "Shifts"},
+      "kpi.shifts_hint": {th: "เวลาอยู่หน้าจอและการแจ้งเตือนนับเฉพาะในกะของแต่ละคน ถ้าไม่ตั้งกะจะใช้เวลาทำการ", en: "Screen time and notifications count only inside each person's shift. No shift = business hours."},
+      "dur.seconds": {th: "{n} วิ", en: "{n}s"},
+      "dur.minutes": {th: "{m} นาที {s} วิ", en: "{m}m {s}s"},
+      "dur.hours": {th: "{h} ชม. {m} นาที", en: "{h}h {m}m"},
+      "day.mon": {th: "จ", en: "Mo"},
+      "day.tue": {th: "อ", en: "Tu"},
+      "day.wed": {th: "พ", en: "We"},
+      "day.thu": {th: "พฤ", en: "Th"},
+      "day.fri": {th: "ศ", en: "Fr"},
+      "day.sat": {th: "ส", en: "Sa"},
+      "day.sun": {th: "อา", en: "Su"},
+      "team.title": {th: "ทีมงาน", en: "Team"},
+      "team.subtitle": {th: "พนักงานเข้าระบบด้วยอีเมลของตัวเองและตอบลูกค้าจากบัญชี LINE ของคุณ ทุกข้อความที่ตอบจะนับเป็น KPI ของคนนั้น", en: "Staff sign in with their own email and reply from your LINE account. Each reply is credited to them in KPI."},
+      "team.add": {th: "เพิ่มพนักงาน", en: "Add staff member"},
+      "team.accounts": {th: "บัญชี LINE ที่ใช้ได้", en: "LINE accounts they can use"},
+      "team.none": {th: "ยังไม่มีพนักงาน", en: "No staff yet"},
+      "team.active": {th: "ใช้งานอยู่", en: "Active"},
+      "team.disabled": {th: "ปิดใช้งาน", en: "Disabled"},
+      "team.disable": {th: "ปิดใช้งาน", en: "Disable"},
+      "team.enable": {th: "เปิดใช้งาน", en: "Enable"},
+      "team.reset_password": {th: "ตั้งรหัสผ่านใหม่", en: "Reset password"},
+      "team.new_password_prompt": {th: "รหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร)", en: "New password (at least 8 characters)"},
+      "team.remove": {th: "ลบ", en: "Remove"},
+      "team.remove_confirm": {th: "ลบ {name} ออกจากทีม?", en: "Remove {name} from the team?"},
+      "team.added": {th: "เพิ่มพนักงานแล้ว", en: "Staff member added"},
+      "common.saved": {th: "บันทึกแล้ว", en: "Saved"},
+      "common.remove": {th: "ลบ", en: "Remove"},
+      "common.help": {th: "วิธีใช้", en: "Help"},
+      "settings.nav_team": {th: "ทีมงาน", en: "Team"},
+      "settings.nav_ai": {th: "AI", en: "AI"},
+      "settings.nav_kpi": {th: "KPI และกะ", en: "KPI & shifts"},
+      "settings.nav_notify": {th: "การแจ้งเตือน", en: "Notifications"},
+      "settings.subtitle_team": {th: "เพิ่มพนักงานที่ช่วยตอบลูกค้า", en: "Add staff who help answer customers."},
+      "settings.subtitle_ai": {th: "เลือก AI ที่ใช้ตอบลูกค้าและ AI สร้างรูป", en: "Choose the AI that answers customers and the picture AI."},
+      "settings.subtitle_kpi": {th: "เป้าเวลาตอบ เวลาทำการ และกะของพนักงาน", en: "Reply target, business hours and staff shifts."},
+      "settings.subtitle_notify": {th: "ตั้งค่าการแจ้งเตือนของเบราว์เซอร์นี้", en: "Notification settings for this browser."},
+      "brain.title": {th: "AI ที่ใช้ตอบลูกค้า", en: "AI for auto reply"},
+      "brain.subtitle": {th: "เลือกว่าใครเป็นคนคิดคำตอบ ใช้ร่วมกันทุกคนที่ดูแลบัญชี LINE ของคุณ", en: "Choose what answers your customers. Shared by everyone on your LINE accounts."},
+      "brain.none": {th: "ยังไม่ได้เลือก AI", en: "No AI chosen yet"},
+      "brain.summary_gemini": {th: "Gemini ({model}) ด้วย API key ของร้าน", en: "Gemini ({model}) with the shop's API key"},
+      "brain.summary_global": {th: "AI ส่วนกลางที่ผู้ดูแลระบบตั้งไว้ ({model})", en: "Shared AI set up by the administrator ({model})"},
+      "brain.summary_ollama": {th: "Ollama ({model}) ที่ {url}", en: "Ollama ({model}) at {url}"},
+      "brain.owner_only": {th: "เฉพาะเจ้าของบัญชีเท่านั้นที่เปลี่ยน AI ได้", en: "Only the account owner can change the AI."},
+      "brain.gemini": {th: "Gemini", en: "Gemini"},
+      "brain.gemini_hint": {th: "ใส่ API key จาก Google AI Studio ใช้ได้ทันที", en: "Paste an API key from Google AI Studio. Works right away."},
+      "brain.ollama": {th: "Ollama บนเครื่อง", en: "Ollama on your computer"},
+      "brain.ollama_hint": {th: "ต้องติดตั้ง Ollama และโหลดโมเดลเอง", en: "Install Ollama and pull a model yourself."},
+      "brain.global": {th: "AI ส่วนกลาง", en: "Shared AI"},
+      "brain.global_hint": {th: "ใช้ที่ผู้ดูแลระบบตั้งไว้ให้", en: "Use the one your administrator set up."},
+      "brain.recommended": {th: "แนะนำ", en: "Recommended"},
+      "brain.api_key": {th: "API key ของ Gemini", en: "Gemini API key"},
+      "brain.key_shared_hint": {th: "เว้นว่างไว้เพื่อใช้ key เดียวกับ AI สร้างรูป", en: "Leave blank to use the same key as the picture AI."},
+      "brain.key_where": {th: "สร้าง key ฟรีที่ aistudio.google.com → Get API key", en: "Create a free key at aistudio.google.com → Get API key."},
+      "brain.ollama_url": {th: "ที่อยู่ Ollama", en: "Ollama address"},
+      "brain.model": {th: "โมเดลสำหรับตอบ", en: "Chat model"},
+      "brain.embedding_model": {th: "โมเดลสำหรับค้นข้อมูลร้าน (ไม่บังคับ)", en: "Search model (optional)"},
+      "brain.advanced": {th: "ตัวเลือกขั้นสูง", en: "Advanced options"},
+      "brain.strict": {th: "ตอบเฉพาะจากข้อมูลร้าน (ถ้าไม่มีให้ส่งต่อให้คน)", en: "Answer only from shop info (otherwise hand over to staff)"},
+      "brain.save_test": {th: "บันทึกและทดสอบ", en: "Save and test"},
+      "brain.testing": {th: "กำลังทดสอบ…", en: "Testing…"},
+      "brain.test_ok": {th: "เชื่อมต่อได้ ✓", en: "Connected ✓"},
+      "brain.test_failed": {th: "เชื่อมต่อไม่ได้: {error}", en: "Could not connect: {error}"},
+      "setup.title": {th: "ตั้งค่าตอบอัตโนมัติ 3 ขั้น", en: "Set up auto reply in 3 steps"},
+      "setup.subtitle": {th: "สวิตช์จะเปิดได้เมื่อทำครบทั้ง 3 ขั้น", en: "The switch turns on once all three are done."},
+      "setup.step1": {th: "เลือกสมอง AI", en: "Choose the AI brain"},
+      "setup.step1_hint": {th: "ใส่ Gemini API key ง่ายที่สุด หรือใช้ Ollama บนเครื่องของคุณ", en: "A Gemini API key is easiest. Ollama runs on your own computer."},
+      "setup.step2": {th: "ใส่ข้อมูลร้าน", en: "Add your shop info"},
+      "setup.step2_hint": {th: "เวลาเปิด–ปิด เมนูและราคา วิธีสั่งและจ่าย", en: "Opening hours, menu and prices, how to order and pay."},
+      "setup.step3": {th: "ทดลองคุย", en: "Try a conversation"},
+      "setup.step3_hint": {th: "ถามแบบที่ลูกค้าถาม แล้วดูว่าตอบจากข้อมูลไหน", en: "Ask what a customer would ask and check where the answer came from."},
+      "setup.open_knowledge": {th: "เปิดข้อมูลร้าน", en: "Open shop info"},
+      "setup.open_chat": {th: "ทดลองคุย", en: "Try it"},
+      "hero.off": {th: "ตอบอัตโนมัติ: ปิดอยู่", en: "Auto reply is off"},
+      "hero.on": {th: "ตอบอัตโนมัติ: เปิดอยู่", en: "Auto reply is on"},
+      "hero.brain_title": {th: "AI ที่ใช้ตอบ", en: "AI used to reply"},
+      "hero.knowledge_title": {th: "ข้อมูลที่ให้ AI ใช้ตอบ", en: "Info the AI answers from"},
+      "hero.stats": {th: "ตอบไปแล้ว {n} ข้อความ (90 วันล่าสุด)", en: "{n} replies sent (last 90 days)"},
+      "hero.ready_hint": {th: "พร้อมแล้ว — เปิดสวิตช์เพื่อเริ่มตอบลูกค้า", en: "Ready — turn the switch on to start replying."},
+      "hero.setup_hint": {th: "ทำตามขั้นตอนด้านบนให้ครบก่อน", en: "Finish the steps above first."},
+      "hero.knowledge_summary": {th: "{n} หัวข้อ: {names}", en: "{n} topics: {names}"},
+      "hero.knowledge_empty": {th: "ยังไม่มีข้อมูลร้าน", en: "No shop info yet"},
+      "assistant.auto_reply_title": {th: "ตอบใครบ้าง", en: "Who gets replies"},
+      "assistant.auto_reply_hint": {th: "ทำงานบนเซิร์ฟเวอร์แม้ปิดหน้าเว็บ ตอบเฉพาะข้อความใหม่หลังเปิดสวิตช์", en: "Runs on the server even with this page closed. Only new messages after you switch it on."},
+      "assistant.auto_reply_contacts": {th: "เพื่อน", en: "Friends"},
+      "assistant.auto_reply_contacts_hint": {th: "ตอบแชทส่วนตัวกับลูกค้า", en: "Reply in one-to-one chats"},
+      "assistant.auto_reply_groups": {th: "กลุ่ม", en: "Groups"},
+      "assistant.auto_reply_groups_hint": {th: "ตอบข้อความใหม่ในกลุ่ม LINE", en: "Reply to new messages in LINE groups"},
+      "assistant.auto_reply_idle": {th: "รอเลือกเพื่อนหรือกลุ่ม", en: "Pick friends or groups"},
+      "kb.title": {th: "ข้อมูลร้าน", en: "Shop info"},
+      "kb.subtitle": {th: "ใช้ร่วมกันทุกคนที่ดูแลร้านนี้ บันทึกแล้ว AI อัปเดตให้เอง", en: "Shared by everyone who looks after this shop. Saving updates the AI automatically."},
+      "kb.add_topic": {th: "+ เพิ่มหัวข้อ", en: "+ Add topic"},
+      "kb.starter": {th: "สร้างข้อมูลเริ่มต้น", en: "Create starter info"},
+      "kb.starter_title": {th: "การทักทายและคำถามทั่วไป", en: "Greetings and general questions"},
+      "kb.chat_title": {th: "ทดลองคุย", en: "Try a conversation"},
+      "kb.chat_hint": {th: "ถามแบบที่ลูกค้าถาม ทุกคำตอบจะบอกว่าตอบจากหัวข้อไหน", en: "Ask like a customer. Every answer shows which topic it came from."},
+      "kb.chat_ph": {th: "เช่น ร้านเปิดกี่โมง", en: "e.g. What time do you open?"},
+      "kb.chat_send": {th: "ถาม", en: "Ask"},
+      "kb.unanswered_title": {th: "คำถามที่ AI ตอบไม่ได้", en: "Questions the AI couldn't answer"},
+      "kb.unanswered_hint": {th: "พิมพ์คำตอบครั้งเดียว ระบบจะเพิ่มเข้าข้อมูลร้านให้", en: "Type the answer once and it is added to your shop info."},
+      "kb.unanswered_none": {th: "ไม่มีคำถามค้าง", en: "Nothing waiting"},
+      "kb.legacy_summary": {th: "ขั้นสูง: แก้ไขทั้งหมดแบบข้อความ / เชื่อม API ข้อมูลร้าน", en: "Advanced: edit everything as text, connect a data API"},
+      "kb.preset_hours": {th: "เวลาเปิด–ปิด", en: "Opening hours"},
+      "kb.preset_hours_ph": {th: "เช่น เปิดทุกวัน 09:00–20:00 น. หยุดวันพุธ", en: "e.g. Open daily 09:00–20:00, closed Wednesdays"},
+      "kb.preset_menu": {th: "เมนูและราคา", en: "Menu and prices"},
+      "kb.preset_menu_ph": {th: "เช่น ข้าวผัด 60 บาท · ชาเย็น 35 บาท", en: "e.g. Fried rice 60 THB · Iced tea 35 THB"},
+      "kb.preset_order": {th: "วิธีสั่งและจ่ายเงิน", en: "How to order and pay"},
+      "kb.preset_order_ph": {th: "เช่น สั่งทาง LINE ได้เลย โอนผ่าน PromptPay ส่งฟรีเมื่อครบ 500 บาท", en: "e.g. Order here on LINE, pay by PromptPay, free delivery over 500 THB"},
+      "kb.preset_handoff": {th: "สิ่งที่ห้ามตอบ / ส่งต่อให้คน", en: "Don't answer / hand over to staff"},
+      "kb.preset_handoff_ph": {th: "เช่น เรื่องคืนเงินหรือร้องเรียน ให้ตอบว่าจะมีเจ้าหน้าที่ติดต่อกลับ", en: "e.g. For refunds or complaints, say a staff member will get back to them"},
+      "kb.status_error": {th: "อัปเดต AI ไม่สำเร็จ", en: "AI update failed"},
+      "kb.status_pending": {th: "รออัปเดต AI", en: "AI update pending"},
+      "kb.status_ok": {th: "AI อัปเดตแล้ว", en: "AI up to date"},
+      "kb.status_empty": {th: "ยังไม่มีข้อมูล", en: "No info yet"},
+      "kb.untitled": {th: "หัวข้อใหม่", en: "New topic"},
+      "kb.filled": {th: "มีข้อมูล", en: "Filled"},
+      "kb.empty": {th: "ยังว่าง", en: "Empty"},
+      "kb.topic_title_ph": {th: "ชื่อหัวข้อ", en: "Topic title"},
+      "kb.topic_body_ph": {th: "เขียนข้อมูลสั้น ๆ บรรทัดละเรื่อง", en: "Short facts, one per line"},
+      "kb.remove_topic": {th: "ลบหัวข้อนี้", en: "Remove this topic"},
+      "kb.unsaved": {th: "ยังไม่ได้บันทึก…", en: "Unsaved…"},
+      "kb.saving": {th: "กำลังบันทึก…", en: "Saving…"},
+      "kb.saved_at": {th: "บันทึกแล้ว {time}", en: "Saved {time}"},
+      "kb.thinking": {th: "กำลังคิด…", en: "Thinking…"},
+      "kb.answered_from": {th: "ตอบจาก: {names}", en: "Answered from: {names}"},
+      "kb.answered_general": {th: "ตอบจากความรู้ทั่วไปของ AI", en: "Answered from the AI's general knowledge"},
+      "kb.no_info": {th: "ไม่มีข้อมูล — ส่งต่อให้คน", en: "No info — handed over to staff"},
+      "kb.handoff": {th: "AI จะตอบลูกค้าว่าทีมงานจะเข้ามาตอบเพิ่มเติม", en: "The AI tells the customer a staff member will follow up."},
+      "kb.add_answer": {th: "เพิ่มคำตอบ", en: "Add an answer"},
+      "kb.from_line": {th: "จากลูกค้าใน LINE", en: "From a LINE customer"},
+      "kb.from_test": {th: "จากการทดลองคุย", en: "From a test chat"},
+      "kb.answer_ph": {th: "พิมพ์คำตอบที่ถูกต้อง", en: "Type the right answer"},
+      "kb.save_to_shop": {th: "บันทึกเข้าข้อมูลร้าน", en: "Save to shop info"},
+      "kb.saved_to_shop": {th: "เพิ่มเข้าหัวข้อ “คำถามที่พบบ่อย” แล้ว", en: "Added to \"Frequently asked\""},
+      "kb.dismiss": {th: "ข้าม", en: "Dismiss"},
+      "kb.synced_at": {th: "ดึงข้อมูลล่าสุด {time}", en: "Synced {time}"},
+      "kb.api_title": {th: "API ข้อมูลร้าน", en: "Shop data API"},
+      "kb.full_text": {th: "ข้อมูลร้านทั้งหมดแบบข้อความ (หัวข้อขึ้นต้นด้วย ##)", en: "All shop info as text (topics start with ##)"},
+      "kb.not_synced": {th: "ยังไม่ได้ดึงข้อมูล", en: "Not synced yet"},
+      "jobs.title": {th: "ส่งตามเวลา", en: "Scheduled sends"},
+      "jobs.subtitle": {th: "ข้อความที่ระบบส่งให้เองตามเวลาที่ตั้งไว้", en: "Messages that go out by themselves at the time you choose."},
+      "jobs.new": {th: "+ สร้างงานส่งตามเวลา", en: "+ New scheduled send"},
+      "jobs.when_once": {th: "ครั้งเดียว {at}", en: "Once on {at}"},
+      "jobs.every_day": {th: "ทุกวัน", en: "Every day"},
+      "jobs.weekdays": {th: "จ–ศ", en: "Mon–Fri"},
+      "jobs.mon_sat": {th: "จ–ส", en: "Mon–Sat"},
+      "jobs.when_window": {th: "{days} {start}–{end} ทุก {n} นาที", en: "{days} {start}–{end} every {n} min"},
+      "jobs.failed_banner": {th: "งาน “{name}” ส่งไม่สำเร็จ: {error}", en: "\"{name}\" failed: {error}"},
+      "jobs.reconnect": {th: "เชื่อมต่อใหม่", en: "Reconnect"},
+      "jobs.retry": {th: "ลองอีกครั้ง", en: "Try again"},
+      "jobs.status_running": {th: "กำลังส่ง", en: "Sending"},
+      "jobs.status_login_required": {th: "ต้องเชื่อมต่อใหม่", en: "Reconnect needed"},
+      "jobs.status_error": {th: "ส่งไม่สำเร็จ", en: "Failed"},
+      "jobs.status_completed": {th: "เสร็จแล้ว", en: "Done"},
+      "jobs.status_paused": {th: "หยุดไว้", en: "Paused"},
+      "jobs.status_waiting": {th: "เปิดอยู่", en: "On"},
+      "jobs.next": {th: "ครั้งถัดไป {at}", en: "next {at}"},
+      "jobs.recent": {th: "ล่าสุด:", en: "Recent:"},
+      "jobs.never_sent": {th: "ยังไม่เคยส่ง", en: "Not sent yet"},
+      "jobs.toggle_label": {th: "เปิด/ปิดงาน {name}", en: "Turn {name} on or off"},
+      "jobs.empty": {th: "ยังไม่มีงานส่งตามเวลา กด “สร้างงานส่งตามเวลา” เพื่อเริ่ม", en: "No scheduled sends yet. Press \"New scheduled send\" to start."},
+      "jobs.send_now": {th: "ส่งตอนนี้", en: "Send now"},
+      "jobs.load_contacts_first": {th: "กำลังโหลดรายชื่อ… เปิดหน้าแชทหนึ่งครั้งถ้ายังไม่ขึ้น", en: "Loading contacts… open Chat once if nothing shows."},
+      "wizard.title_new": {th: "สร้างงานส่งตามเวลา", en: "New scheduled send"},
+      "wizard.title_edit": {th: "แก้ไขงานส่งตามเวลา", en: "Edit scheduled send"},
+      "wizard.step1": {th: "ส่งให้ใคร", en: "Who"},
+      "wizard.step2": {th: "ส่งอะไร", en: "What"},
+      "wizard.step3": {th: "ส่งเมื่อไหร่", en: "When"},
+      "wizard.type_text": {th: "ข้อความ", en: "Text"},
+      "wizard.type_text_hint": {th: "พิมพ์ข้อความเอง", en: "A message you type"},
+      "wizard.type_image": {th: "รูปภาพ", en: "Picture"},
+      "wizard.type_image_hint": {th: "อัปโหลดหรือใส่ลิงก์รูป", en: "Upload or link a picture"},
+      "wizard.type_ai_image": {th: "รูปจาก AI", en: "AI picture"},
+      "wizard.type_ai_image_hint": {th: "ให้ AI วาดรูปใหม่ทุกครั้ง", en: "AI draws a new one each time"},
+      "wizard.type_api": {th: "ดึงจากระบบอื่น (API)", en: "From a data API"},
+      "wizard.type_api_hint": {th: "ส่งข้อความที่ระบบของคุณตอบกลับมา", en: "Send what your system returns"},
+      "wizard.message": {th: "ข้อความ", en: "Message"},
+      "wizard.add_extra": {th: "+ เพิ่มข้อความแบบที่ 2", en: "+ Add message version 2"},
+      "wizard.add_extra_n": {th: "+ เพิ่มข้อความแบบที่ {n}", en: "+ Add message version {n}"},
+      "wizard.extra_hint": {th: "ถ้ามี 2 แบบขึ้นไป ระบบจะสุ่มส่งทีละแบบ ลูกค้าจะไม่เห็นข้อความซ้ำทุกครั้ง", en: "With 2 or more versions, one is picked at random each time so customers don't see the same text."},
+      "wizard.image_url": {th: "…หรือลิงก์รูป", en: "…or picture link"},
+      "wizard.ai_key_hint": {th: "ใช้ AI สร้างรูปจาก ตั้งค่า → AI", en: "Uses the picture AI from Settings → AI."},
+      "wizard.freq_once": {th: "ครั้งเดียว", en: "Once"},
+      "wizard.freq_once_hint": {th: "ส่งวันเดียว", en: "On one date"},
+      "wizard.freq_daily": {th: "ทุกวัน", en: "Every day"},
+      "wizard.freq_daily_hint": {th: "เวลาเดิมทุกวัน", en: "Same time daily"},
+      "wizard.freq_weekly": {th: "ทุกสัปดาห์", en: "Every week"},
+      "wizard.freq_weekly_hint": {th: "เฉพาะวันที่เลือก", en: "On the days you pick"},
+      "wizard.freq_custom": {th: "กำหนดเอง", en: "Custom"},
+      "wizard.freq_custom_hint": {th: "ส่งซ้ำในช่วงเวลา", en: "Repeat within a time window"},
+      "wizard.date": {th: "วันที่", en: "Date"},
+      "wizard.days": {th: "วัน", en: "Days"},
+      "wizard.time": {th: "เวลา", en: "Time"},
+      "wizard.date_range": {th: "ส่งเฉพาะช่วงวันที่", en: "Only between certain dates"},
+      "wizard.advanced": {th: "ตัวเลือกขั้นสูง", en: "Advanced options"},
+      "wizard.ban_warning": {th: "การส่งถี่หรือส่งหาหลายห้องอาจทำให้บัญชี LINE ส่วนตัวถูกระงับ ควรส่งไม่เกินวันละไม่กี่ครั้ง", en: "Sending often or to many chats can get a personal LINE account suspended. Keep repeats to a few times a day."},
+      "wizard.every_minutes": {th: "ส่งทุก (นาที)", en: "Send every (minutes)"},
+      "wizard.max_runs": {th: "หยุดหลังส่งครบ (เว้นว่าง = ไม่จำกัด)", en: "Stop after this many sends (blank = no limit)"},
+      "wizard.encrypt": {th: "เข้ารหัส (เฉพาะข้อความ)", en: "Encrypt (text only)"},
+      "wizard.prev": {th: "ย้อนกลับ", en: "Back"},
+      "wizard.test": {th: "ส่งทดสอบหาตัวเอง", en: "Send a test to myself"},
+      "wizard.next": {th: "ถัดไป", en: "Next"},
+      "wizard.save": {th: "บันทึกและเปิดใช้งาน", en: "Save and turn on"},
+      "wizard.save_edit": {th: "บันทึกการแก้ไข", en: "Save changes"},
+      "wizard.summary": {th: "สรุป", en: "Summary"},
+      "wizard.sum_to": {th: "ส่งให้", en: "To"},
+      "wizard.sum_what": {th: "ข้อความ", en: "Message"},
+      "wizard.sum_when": {th: "เวลา", en: "When"},
+      "wizard.sum_name": {th: "ชื่องาน (ตั้งให้อัตโนมัติ)", en: "Name (set automatically)"},
+      "wizard.version": {th: "แบบที่ {n}", en: "Version {n}"},
+      "wizard.random_versions": {th: "สุ่มจาก {n} แบบ", en: "Random from {n} versions"},
+      "wizard.err_target": {th: "เลือกผู้รับก่อน", en: "Choose who to send to"},
+      "wizard.err_text": {th: "พิมพ์ข้อความก่อน", en: "Type a message"},
+      "wizard.err_image": {th: "เลือกรูปหรือใส่ลิงก์รูป", en: "Pick a picture or paste a link"},
+      "wizard.err_ai": {th: "อธิบายรูปที่ต้องการให้ AI วาด", en: "Describe the picture for the AI"},
+      "wizard.err_api": {th: "ใส่ API URL", en: "Enter the API URL"},
+      "wizard.err_when": {th: "เลือกวันและเวลา", en: "Pick a date and time"},
+      "wizard.err_days": {th: "เลือกอย่างน้อย 1 วัน", en: "Pick at least one day"},
+      "wizard.updated": {th: "บันทึกการแก้ไขแล้ว", en: "Changes saved"},
+      "wizard.created": {th: "สร้างงานและเปิดใช้งานแล้ว", en: "Scheduled send created and turned on"},
+      "wizard.test_sent": {th: "ส่งทดสอบไปที่ Keep Memo ของบัญชีนี้แล้ว — เปิดดูใน LINE", en: "Test sent to this account's Keep Memo — check it in LINE"},
+      "var.date": {th: "วันที่", en: "date"},
+      "var.date_hint": {th: "วันที่ตอนส่ง เช่น 12/10/2026", en: "The send date, e.g. 12/10/2026"},
+      "var.time": {th: "เวลา", en: "time"},
+      "var.time_hint": {th: "เวลาตอนส่ง เช่น 09:00", en: "The send time, e.g. 09:00"},
+      "var.name": {th: "ชื่อผู้รับ", en: "recipient"},
+      "var.name_hint": {th: "ชื่อของเพื่อนหรือกลุ่มที่รับข้อความ", en: "Name of the friend or group receiving it"},
+      "var.rand": {th: "เลขสุ่ม 1–100", en: "random 1–100"},
+      "var.rand_hint": {th: "ตัวเลขสุ่มใหม่ทุกครั้งที่ส่ง", en: "A new random number every send"},
+      "login.subtitle": {th: "สแกน QR ด้วยแอป LINE บนมือถือ ใช้เวลาไม่ถึง 1 นาที LinePassport จะใช้ชื่อจากบัญชี LINE ของคุณ", en: "Scan the QR with LINE on your phone — it takes under a minute. LinePassport uses the name from your LINE account."},
+      "login.howto_1": {th: "เปิดแอป LINE บนมือถือ ไปที่หน้าหลัก", en: "Open LINE on your phone and go to Home."},
+      "login.howto_2": {th: "แตะไอคอนสแกน QR มุมขวาบน", en: "Tap the QR scanner at the top right."},
+      "login.howto_3": {th: "สแกนโค้ดนี้ แล้วกดยืนยันบนมือถือ", en: "Scan this code, then confirm on your phone."},
+      "login.advanced": {th: "ตัวเลือกขั้นสูง (พร็อกซี)", en: "Advanced options (proxy)"},
+      "login.restart_with_proxy": {th: "สร้าง QR ใหม่ด้วยค่านี้", en: "Make a new QR with these settings"},
+      "login.start": {th: "ลองอีกครั้ง", en: "Try again"},
+      "errors.file_too_large": {th: "ไฟล์ใหญ่เกิน 30 MB", en: "File is larger than 30 MB"},
+      "errors.assistant_not_configured": {th: "ยังไม่ได้เลือก AI — ไปที่ ตอบอัตโนมัติ → เลือกสมอง AI", en: "No AI chosen yet — open Auto reply → choose the AI brain"},
+      "scheduler.run_now": {th: "ส่งตอนนี้", en: "Send now"},
+      "scheduler.title": {th: "ส่งตามเวลา", en: "Scheduled sends"},
+      "bot.nav_schedules": {th: "รายการงาน", en: "Jobs"},
+      "bot.nav_patterns": {th: "ข้อความสำเร็จรูป", en: "Saved messages"},
+      "bot.nav_logs": {th: "บันทึกการทำงาน", en: "Activity log"}
+    });
+
+    // Wrap renderers so the sidebar and live features follow account changes.
+    const baseRenderAccounts = renderAccounts;
+    renderAccounts = function () {
+      baseRenderAccounts();
+      renderAccountCard();
+    };
+    const baseRenderProfile = renderProfile;
+    renderProfile = function (status) {
+      baseRenderProfile(status);
+      renderAccountCard();
+      const accountId = state.activeAccountId || selectedAccountId();
+      if (status && status.authenticated && accountId) {
+        startEventStream();
+        if (!state.kpiSettings || state.kpiSettings.accountId !== accountId) loadKpiSettings().catch(() => {});
+        if (hasPermission("ask_ai") && (!state.assistantAutoReply || state.assistantAutoReply.accountId !== accountId)) {
+          loadAssistantAutoReply().catch(() => {});
+        }
+      }
+    };
+    const baseClearProfile = clearProfile;
+    clearProfile = function () {
+      baseClearProfile();
+      stopEventStream();
+      state.lastConversationsAt = 0;
+      state.unreadSince = new Map();
+      state.escalated = new Set();
+      state.kpiSettings = null;
+      renderAccountCard();
+      renderFreshness();
+    };
+    const baseApplyPermissions = applyPermissions;
+    applyPermissions = function () {
+      baseApplyPermissions();
+      const isStaff = Boolean(state.currentUser && state.currentUser.teamOwnerId);
+      const owner = hasPermission("manage_accounts") && !isStaff;
+      $("tabKpi").classList.toggle("hidden", !owner);
+      $("teamTabButton").classList.toggle("hidden", !owner);
+      $("kpiSettingsTabButton").classList.toggle("hidden", !hasPermission("read"));
+      $("aiTabButton").classList.toggle("hidden", !hasPermission("ask_ai"));
+    };
+    const baseSetAssistantView = setAssistantView;
+    setAssistantView = function (view) {
+      const target = view === "chat" ? "knowledge" : view;
+      baseSetAssistantView(target);
+      if (target === "knowledge") {
+        loadAssistantKnowledge().then(renderKbTopics).catch(toastError);
+        loadKbUnanswered().catch(() => {});
+        if (view === "chat") setTimeout(() => $("kbChatInput").focus(), 50);
+      }
+      if (target === "auto-reply") loadAssistantOverview().catch(toastError);
+    };
+
+    // Image AI settings now live under Settings → AI.
+    (function relocateImageAi() {
+      const imageAi = $("botAiSettings");
+      imageAi.removeAttribute("data-bot-page");
+      imageAi.classList.remove("hidden", "bot-page");
+      $("settingsImageAiSlot").appendChild(imageAi);
+      $("botNavAiSettings").classList.add("hidden");
+    })();
+
+    // Proxy options move from the old "Start" step into the QR card.
+    (function relocateLoginProxy() {
+      const box = document.querySelector(".login-proxy-box");
+      if (box) $("loginProxySlot").appendChild(box);
+      $("loginPanel").classList.add("qr-first");
+    })();
+
+    $("accountCard").addEventListener("click", (event) => { event.stopPropagation(); toggleAccountPopover(); });
+    $("mobileAccountButton").addEventListener("click", (event) => {
+      event.stopPropagation();
+      document.body.classList.toggle("account-pop-mobile");
+      renderAccountPopover();
+      $("accountPopover").classList.toggle("hidden", !document.body.classList.contains("account-pop-mobile"));
+    });
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".account-card-wrap") && !event.target.closest("#mobileAccountButton")) {
+        closeAccountPopover();
+        document.body.classList.remove("account-pop-mobile");
+      }
+      if (!event.target.closest(".convo-menu-wrap")) toggleConvoMenu(false);
+      if (!event.target.closest(".kebab-wrap")) document.querySelectorAll(".kebab-menu").forEach((m) => m.classList.add("hidden"));
+    });
+    $("tabSettings").addEventListener("click", () => openSettings());
+    $("notifyBannerEnable").addEventListener("click", () => enableNotificationsFromBanner().catch(toastError));
+    $("notifyBannerLater").addEventListener("click", snoozeNotifyBanner);
+    $("notifySettingsEnable").addEventListener("click", () => enableNotificationsFromBanner().catch(toastError));
+    $("notifySettingsTest").addEventListener("click", () => {
+      showPolicyNotification(t("notify.test_title"), {body: t("notify.test_body"), tag: "linepassport:test", renotify: false, data: {}});
+    });
+    $("notifyOutsideShift").addEventListener("change", () => {
+      try { localStorage.setItem(NOTIFY_OUTSIDE_SHIFT_KEY, $("notifyOutsideShift").checked ? "on" : "off"); } catch (_) { /* optional */ }
+    });
+    $("convoMenuButton").addEventListener("click", (event) => { event.stopPropagation(); toggleConvoMenu(); });
+    $("convoMenuEncrypt").addEventListener("click", () => {
+      state.forceEncrypt = !state.forceEncrypt;
+      if (state.forceEncrypt && !state.e2eeReady) {
+        state.forceEncrypt = false;
+        toast(t("chat.e2ee_disabled_tip"), true);
+      }
+      toggleConvoMenu(false);
+    });
+    $("convoMenuSchedule").addEventListener("click", () => {
+      toggleConvoMenu(false);
+      if (!state.target) return toast(t("toast.select_target_first"), true);
+      openScheduleWizard(null, {to: state.target, name: $("chatTitle").textContent});
+    });
+    $("convoMenuCopyMid").addEventListener("click", async () => {
+      toggleConvoMenu(false);
+      if (!state.target) return;
+      try { await navigator.clipboard.writeText(state.target); toast(t("common.copied")); } catch (_) { toast(state.target); }
+    });
+    $("presenceChip").addEventListener("click", togglePresenceBusy);
+    for (const type of ["keydown", "pointerdown"]) {
+      document.addEventListener(type, noteUserInput, {capture: true, passive: true});
+    }
+    document.addEventListener("visibilitychange", () => sendPresence(true));
+    window.addEventListener("focus", () => { syncNotificationPermission(); sendPresence(true); });
+    window.addEventListener("blur", () => sendPresence(true));
+
+    $("kpiRange").addEventListener("change", () => {
+      const custom = $("kpiRange").value === "custom";
+      $("kpiFrom").hidden = !custom;
+      $("kpiTo").hidden = !custom;
+      if (!custom || ($("kpiFrom").value && $("kpiTo").value)) loadKpi().catch(toastError);
+    });
+    for (const id of ["kpiFrom", "kpiTo"]) $(id).addEventListener("change", () => loadKpi().catch(toastError));
+    $("kpiCsvButton").addEventListener("click", downloadKpiCsv);
+    $("contactSearch").addEventListener("input", () => {
+      renderAllList();
+      if (state.contactsSubtab === "people") renderContactsList();
+    });
+    $("kpiSettingsButton").addEventListener("click", () => openSettings("kpi"));
+    $("teamCreateButton").addEventListener("click", () => createStaff().catch(toastError));
+    $("kpiSettingsSave").addEventListener("click", () => saveKpiSettings().catch(toastError));
+
+    $("assistantHeroSwitch").addEventListener("change", () => {
+      $("assistantAutoReplyEnabled").checked = $("assistantHeroSwitch").checked;
+      saveAssistantAutoReply().then(refreshAssistantSetup).catch((err) => {
+        $("assistantHeroSwitch").checked = !$("assistantHeroSwitch").checked;
+        toastError(err);
+      });
+    });
+    $("setupOpenKnowledge").addEventListener("click", () => setAssistantView("knowledge"));
+    $("heroKnowledgeEdit").addEventListener("click", () => setAssistantView("knowledge"));
+    $("setupOpenChat").addEventListener("click", () => setAssistantView("chat"));
+    $("heroBrainEdit").addEventListener("click", () => {
+      if (state.assistantBrain && state.assistantBrain.canEdit) openSettings("ai");
+      else toast(t("brain.owner_only"), true);
+    });
+    document.querySelectorAll("[data-assistant-help]").forEach((btn) => btn.addEventListener("click", () => setAssistantView("guide")));
+    $("kbBackButton").addEventListener("click", () => setAssistantView("auto-reply"));
+    $("assistantGuideBackButton").addEventListener("click", () => setAssistantView("auto-reply"));
+    $("kbAddTopic").addEventListener("click", addKbTopic);
+    $("kbStarter").addEventListener("click", addStarterTopic);
+    $("kbSave").addEventListener("click", () => saveKbTopics().catch(toastError));
+    $("kbChatForm").addEventListener("submit", (event) => { event.preventDefault(); askKbChat().catch(toastError); });
+    $("kbChatInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); askKbChat().catch(toastError); }
+    });
+
+    $("jobsNewButton").addEventListener("click", () => openScheduleWizard());
+    $("jobsHelpButton").addEventListener("click", () => setBotPage("guide"));
+    $("wizardBackButton").addEventListener("click", () => setBotPage("schedules"));
+    $("wizardPrev").addEventListener("click", () => moveWizard(-1));
+    $("wizardNext").addEventListener("click", () => moveWizard(1));
+    $("wizardSave").addEventListener("click", () => saveWizard().catch(toastError));
+    $("wizardTest").addEventListener("click", () => sendScheduleTest().catch(toastError));
+    document.querySelectorAll("[data-wizard-step]").forEach((btn) => btn.addEventListener("click", () => {
+      const step = Number(btn.dataset.wizardStep);
+      for (let s = 1; s < step; s += 1) {
+        const error = wizardStepError(s);
+        if (error) { setWizardStep(s); return toast(t(error), true); }
+      }
+      setWizardStep(step);
+    }));
+    document.querySelectorAll("#wizardTargetTabs .subtab").forEach((btn) => btn.addEventListener("click", () => setWizardTargetTab(btn.dataset.wtab)));
+    $("wizardTargetSearch").addEventListener("input", renderWizardTargets);
+    document.querySelectorAll("[data-wizard-type]").forEach((card) => card.addEventListener("click", () => { state.wizard.type = card.dataset.wizardType; syncWizardType(); }));
+    document.querySelectorAll("[data-wizard-freq]").forEach((card) => card.addEventListener("click", () => { state.wizard.freq = card.dataset.wizardFreq; syncWizardFreq(); }));
+    $("wizardText").addEventListener("focus", () => { state.wizardLastTextBox = $("wizardText"); });
+    $("wizardAddExtra").addEventListener("click", () => { state.wizard.extras.push(""); renderWizardExtras(); });
+    $("wizardImageUpload").addEventListener("click", () => $("wizardImageFile").click());
+    $("wizardImageFile").addEventListener("change", (event) => handleWizardImage(event.target.files[0]).catch(toastError));
+    $("wizardName").addEventListener("input", () => { state.wizard.name = $("wizardName").value; state.wizard.nameTouched = true; });
+    const wizardFieldMap = {
+      wizardText: "text", wizardImageUrl: "imageUrl", wizardAiPrompt: "aiPrompt", wizardApiMethod: "apiMethod",
+      wizardApiUrl: "apiUrl", wizardApiBody: "apiBody", wizardDate: "date", wizardTime: "time",
+      wizardWindowStart: "windowStart", wizardWindowEnd: "windowEnd", wizardInterval: "interval",
+      wizardMaxRuns: "maxRuns", wizardActiveFrom: "activeFrom", wizardActiveUntil: "activeUntil"
+    };
+    for (const [id, key] of Object.entries(wizardFieldMap)) {
+      $(id).addEventListener("input", () => { state.wizard[key] = $(id).value; updateWizardSummary(); });
+      $(id).addEventListener("change", () => { state.wizard[key] = $(id).value; updateWizardSummary(); });
+    }
+    $("wizardEncrypt").addEventListener("change", () => { state.wizard.encrypt = $("wizardEncrypt").checked; });
+    $("loginRestartButton").addEventListener("click", async () => {
+      clearInterval(state.loginTimer);
+      try { await post("/api/login/cancel"); } catch (_) { /* best effort */ }
+      startLogin().catch(toastError);
+    });
+
+    state.wizard = newWizardDraft();
+    setInterval(renderFreshness, 1000);
+    setInterval(() => sendPresence(false), 10000);
+    setInterval(checkEscalationsAndAiHolds, 15000);
 
     state.lang = localStorage.getItem("okline.lang") === "en" ? "en" : "th";
     state.advanced = true;
@@ -11023,6 +14525,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     syncScheduleMode();
     setAccountControls(false);
     refreshWebAuth();
+    syncNotificationPermission();
   </script>
 </body>
 </html>
@@ -12223,6 +15726,7 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("GET", "/api/events"): (12, 60.0),
     ("GET", "/api/kpi"): (30, 60.0),
     ("POST", "/api/team/create"): (10, 60.0),
+    ("POST", "/api/schedules/test"): (6, 60.0),
 }
 MAX_USERS = 1000
 MAX_ACCOUNTS_PER_USER = 20
@@ -17870,7 +21374,8 @@ class WebState:
 
     def _share_gemini_key_with_image_ai(self, user: dict[str, Any] | None, key: str) -> None:
         data = self._ai_all(user)
-        google = data.get("google") if isinstance(data.get("google"), dict) else {}
+        raw_google = data.get("google")
+        google: dict[str, Any] = raw_google if isinstance(raw_google, dict) else {}
         if self._decrypt_secret(str(google.get("apiKey") or "")):
             return
         self.save_ai_settings({"provider": "google", "apiKey": key}, user)
@@ -19573,6 +23078,42 @@ class WebState:
             "knowledge": knowledge,
         }
 
+    def test_schedule_draft(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Send an unsaved schedule's content to the account itself (LINE Keep memo)."""
+        account_id = _required_account_id(str(body.get("accountId") or ""))
+        account = self.account_store.get(account_id)
+        if account is None:
+            raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
+        draft = dict(body)
+        draft["mode"] = "once"
+        draft["runAt"] = draft.get("runAt") or _now_iso()
+        draft["to"] = draft.get("to") or "self"
+        job = _schedule_from_body(draft, account_id=account_id)
+        owner = self.web_auth.user_for_account(account_id)
+        with self.api_lock_for(account_id):
+            api = self.get_api(account_id)
+            own_mid = str(account.get("mid") or "")
+            if not own_mid:
+                profile = api.get_profile()
+                own_mid = (
+                    str((profile or {}).get("mid") or "") if isinstance(profile, dict) else ""
+                )
+            if not own_mid:
+                raise WebError(HTTPStatus.BAD_GATEWAY, "Cannot identify the LINE account.")
+            items = _resolve_job_contents(
+                job, ai_settings=self.ai_settings(owner, reveal=True)
+            )
+            message_ids = _send_job_contents(api, own_mid, job, items=items)
+        self.append_bot_log(
+            "schedule.test",
+            account_id=account_id,
+            detail=f"{len(message_ids)} message(s)",
+            data={"webUserId": str((user or {}).get("id") or "")},
+        )
+        return {"ok": True, "messageIds": message_ids, "to": own_mid}
+
     def disable_schedules_for_account(self, account_id: str) -> None:
         with self.schedule_lock:
             changed = False
@@ -20457,6 +23998,11 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             account_id = _required_account_id(str(body.get("accountId") or ""))
             self._require_account_access(account_id)
             return self.state.run_schedule_now(str(body.get("id") or ""), account_id)
+        if method == "POST" and path == "/api/schedules/test":
+            self._require_permission("send")
+            body = self._read_json(max_bytes=MAX_MEDIA_JSON_BODY_BYTES)
+            self._require_account_access(str(body.get("accountId") or ""))
+            return self.state.test_schedule_draft(body, self.current_user)
         if method == "POST" and path == "/api/schedules/clear-stuck":
             self._require_permission("schedule")
             body = self._read_json()
@@ -21412,6 +24958,9 @@ def _schedule_from_body(
             "name": name,
             "accountId": account_id,
             "to": to.strip(),
+            "targetName": str(
+                body.get("targetName") if "targetName" in body else job.get("targetName") or ""
+            ).strip()[:MAX_NAME_LENGTH],
             "contentSource": content_source,
             "text": text,
             "patternIds": pattern_ids,
@@ -21435,6 +24984,9 @@ def _schedule_from_body(
             "activeFrom": str(body.get("activeFrom") or job.get("activeFrom") or ""),
             "activeUntil": str(body.get("activeUntil") or job.get("activeUntil") or ""),
             "intervalMinutes": interval,
+            "weekdays": _schedule_weekdays(
+                body["weekdays"] if "weekdays" in body else job.get("weekdays")
+            ),
             "maxRuns": max_runs,
             "enabled": bool(body.get("enabled", job.get("enabled", True))),
             "running": False,
@@ -21450,6 +25002,22 @@ def _schedule_from_body(
     job["nextRunAt"] = _compute_next_epoch(job)
     job["status"] = "waiting" if job["enabled"] and job["nextRunAt"] else "paused"
     return job
+
+
+def _schedule_weekdays(value: Any) -> list[int]:
+    """Weekdays a repeating job runs on (0=Mon..6=Sun); empty means every day."""
+    if not isinstance(value, list):
+        return []
+    days = set()
+    for item in value:
+        try:
+            day = int(item)
+        except (TypeError, ValueError) as exc:
+            raise WebError(HTTPStatus.BAD_REQUEST, "weekdays must be 0-6.") from exc
+        if not 0 <= day <= 6:
+            raise WebError(HTTPStatus.BAD_REQUEST, "weekdays must be 0-6.")
+        days.add(day)
+    return [] if len(days) == 7 else sorted(days)
 
 
 def _valid_hhmm(value: str) -> str:
@@ -21498,12 +25066,18 @@ def _next_repeat_epoch(job: dict[str, Any], after: _dt.datetime) -> float | None
     start_hour, start_min = (int(x) for x in window_start.split(":", 1))
     end_hour, end_min = (int(x) for x in window_end.split(":", 1))
     crosses_midnight = (end_hour, end_min) <= (start_hour, start_min)
+    weekdays = set(_schedule_weekdays(job.get("weekdays")))
+
+    def runs_on(value: _dt.date) -> bool:
+        return not weekdays or value.weekday() in weekdays
 
     day = after.date()
     if crosses_midnight:
         prev_day = day - _dt.timedelta(days=1)
-        if (not start_date or prev_day >= start_date) and (
-            not until_date or prev_day <= until_date
+        if (
+            (not start_date or prev_day >= start_date)
+            and (not until_date or prev_day <= until_date)
+            and runs_on(prev_day)
         ):
             prev_start = _dt.datetime.combine(prev_day, _dt.time(start_hour, start_min))
             prev_end = _dt.datetime.combine(prev_day, _dt.time(end_hour, end_min))
@@ -21516,6 +25090,10 @@ def _next_repeat_epoch(job: dict[str, Any], after: _dt.datetime) -> float | None
     for _ in range(370):
         if until_date and day > until_date:
             return None
+        if not runs_on(day):
+            day = day + _dt.timedelta(days=1)
+            after = _dt.datetime.combine(day, _dt.time(0, 0))
+            continue
         start = _dt.datetime.combine(day, _dt.time(start_hour, start_min))
         end = _dt.datetime.combine(day, _dt.time(end_hour, end_min))
         if end <= start:
@@ -21538,9 +25116,7 @@ def _advance_after_success(job: dict[str, Any]) -> None:
         job["nextRunAt"] = None
         job["status"] = "completed"
         return
-    interval = max(1, int(job.get("intervalMinutes") or 1))
-    after = _dt.datetime.now() + _dt.timedelta(minutes=interval)
-    job["nextRunAt"] = _next_repeat_epoch(job, after)
+    job["nextRunAt"] = _next_repeat_epoch(job, _repeat_resume_after(job))
     if not job["nextRunAt"]:
         job["enabled"] = False
     job["status"] = "waiting" if job["nextRunAt"] else "completed"
@@ -21553,9 +25129,17 @@ def _advance_after_error(job: dict[str, Any]) -> None:
         job["enabled"] = False
         job["nextRunAt"] = None
         return
+    job["nextRunAt"] = _next_repeat_epoch(job, _repeat_resume_after(job))
+
+
+def _repeat_resume_after(job: dict[str, Any]) -> _dt.datetime:
     interval = max(1, int(job.get("intervalMinutes") or 1))
-    after = _dt.datetime.now() + _dt.timedelta(minutes=interval)
-    job["nextRunAt"] = _next_repeat_epoch(job, after)
+    now = _dt.datetime.now()
+    if interval >= 1440:
+        # Once-a-day jobs restart at the next day's window instead of drifting
+        # later by the scheduler's polling delay every day.
+        return _dt.datetime.combine(now.date() + _dt.timedelta(days=1), _dt.time(0, 0))
+    return now + _dt.timedelta(minutes=interval)
 
 
 def _append_history(job: dict[str, Any], entry: dict[str, Any]) -> None:
@@ -21679,7 +25263,10 @@ def _resolve_job_contents(
     if source == "text":
         texts = [str(x) for x in (job.get("patternTexts") or []) if str(x).strip()]
         base = random.choice(texts) if texts else str(job.get("text") or "")
-        text = _apply_placeholders(base)
+        # {name} is the recipient's display name, captured when the job was saved.
+        text = _apply_placeholders(base).replace(
+            "{name}", str(job.get("targetName") or "").strip()
+        )
         if not text:
             raise WebError(HTTPStatus.BAD_REQUEST, "Schedule text is required.")
         _bot_log(log, "content.text", _short_text(text, 120), data={"patterns": bool(texts)})
@@ -23226,8 +26813,8 @@ def _kpi_summary(items: list[dict[str, Any]], sla_seconds: int) -> dict[str, Any
 
 def _presence_totals(
     segments: list[dict[str, Any]], windows: list[tuple[int, int]]
-) -> dict[str, int]:
-    totals = {state: 0 for state in sorted(PRESENCE_STATES)}
+) -> dict[str, int | None]:
+    totals = dict.fromkeys(sorted(PRESENCE_STATES), 0)
     scheduled = sum(hi - lo for lo, hi in windows)
     covered = 0
     for segment in segments:
@@ -23241,7 +26828,9 @@ def _presence_totals(
             if overlap > 0:
                 totals[state] += overlap
                 covered += overlap
-    result = {state: round(value / 1000) for state, value in totals.items()}
+    result: dict[str, int | None] = {
+        state: round(value / 1000) for state, value in totals.items()
+    }
     result["offline"] = max(0, round((scheduled - covered) / 1000))
     result["scheduled"] = round(scheduled / 1000)
     return result
@@ -23260,7 +26849,7 @@ def _build_kpi_report(
 ) -> dict[str, Any]:
     sla = int(settings.get("slaSeconds") or DEFAULT_KPI_SLA_SECONDS)
     tiles = _kpi_summary(responses, sla)
-    pending = sorted(
+    pending: list[dict[str, Any]] = sorted(
         (
             {
                 "chatMid": mid,
@@ -23292,6 +26881,11 @@ def _build_kpi_report(
         member_segments = [item for item in segments if item.get("userId") == member["id"]]
         rules = shifts.get(member["id"])
         windows = _time_windows(rules, from_ms, to_ms) if rules else default_windows
+        presence = _presence_totals(member_segments, windows)
+        if not rules and not business.get("enabled"):
+            # Without a shift or business hours "offline" has no meaning.
+            presence["offline"] = None
+            presence["scheduled"] = None
         per_user.append(
             {
                 **member,
@@ -23299,7 +26893,7 @@ def _build_kpi_report(
                     [item for item in responses if item.get("answeredBy") == member["id"]],
                     sla,
                 ),
-                "presence": _presence_totals(member_segments, windows),
+                "presence": presence,
                 "hasShift": bool(rules),
             }
         )

@@ -632,7 +632,8 @@ def test_mobile_scheduler_uses_primary_tabs_and_compact_job_actions():
 
 
 def test_placeholder_chips_stay_in_one_scrollable_row_on_mobile():
-    assert INDEX_HTML.count('class="ph-chips"') == 2
+    # Schedule form, pattern form and the scheduled-send wizard.
+    assert INDEX_HTML.count('class="ph-chips"') == 3
     assert ".ph-chips {\n      display: flex;\n      flex-wrap: nowrap;" in INDEX_HTML
     assert "overflow-x: auto;" in INDEX_HTML
     assert ".ph-chip {\n      flex: 0 0 auto;\n      width: auto;" in INDEX_HTML
@@ -1730,7 +1731,8 @@ def test_web_ui_notifies_only_after_conversation_baseline_is_ready():
     assert 'if (permission !== "granted")' in INDEX_HTML
     assert "state.notificationsEnabled = true;" in INDEX_HTML
     assert "const soundReady = soundUnlocked && await playNotificationSound();" in INDEX_HTML
-    assert 'state.notificationsEnabled = saved === "on"' in INDEX_HTML
+    # Granted browser permission turns notifications on without the bell opt-in.
+    assert 'state.notificationsEnabled = saved !== "off-by-user"' in INDEX_HTML
     assert '&& Notification.permission === "granted";' in INDEX_HTML
     assert (
         "silent && previousMessageKey && lastMessageKey !== previousMessageKey" in INDEX_HTML
@@ -1741,7 +1743,8 @@ def test_web_ui_notifies_only_after_conversation_baseline_is_ready():
     assert "state.notificationAccountId !== accountId" in INDEX_HTML
     assert "!state.conversationBaselineReady" in INDEX_HTML
     assert "processNewMessageNotifications(accountId, conversations);" in INDEX_HTML
-    assert "if (!state.notificationsEnabled && !lineViewIsVisible) return;" in INDEX_HTML
+    # Hidden tabs keep refreshing (UX plan B1).
+    assert "lineViewIsVisible" not in INDEX_HTML
     assert (
         'document.title = unread ? `(${count}) LinePassport` : "LinePassport";' in INDEX_HTML
     )
@@ -1771,13 +1774,13 @@ def test_notification_service_worker_is_public(live_server):
 
 
 def test_contacts_background_refresh_uses_lightweight_conversation_endpoint():
-    assert "const CONVERSATION_BACKGROUND_REFRESH_MS = 8000;" in INDEX_HTML
+    # Live updates come from /api/events; polling is only the 30 s fallback.
+    assert "const CONVERSATION_BACKGROUND_REFRESH_MS = 30000;" in INDEX_HTML
+    assert 'new EventSource(`/api/events?${accountQuery(accountId)}`)' in INDEX_HTML
     assert "function refreshConversationsInBackground()" in INDEX_HTML
     assert "api(`/api/conversations?${accountQuery(accountId)}&limit=1000`)" in INDEX_HTML
     assert "if (signature === state.conversationSignature) return;" in INDEX_HTML
-    assert (
-        "setInterval(refreshConversationsInBackground, CONVERSATION_BACKGROUND_REFRESH_MS);"
-    ) in INDEX_HTML
+    assert "if (!state.sseConnected) refreshConversationsInBackground();" in INDEX_HTML
     start = INDEX_HTML.index("async function refreshConversationsInBackground")
     end = INDEX_HTML.index("function listLoading", start)
     block = INDEX_HTML[start:end]

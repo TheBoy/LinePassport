@@ -4,6 +4,46 @@ All notable changes to OkLine are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Redesigned LinePassport web UI.** Left sidebar (Chat · Auto reply ·
+  Scheduled sends · Staff KPI · Settings, plus a small developer group for API,
+  Tools and Activity log), an account card with one connection dot, a phone
+  bottom bar, and Thai-only wording in Thai mode. Clicking a chat opens it
+  (paste a chat ID into search to open any chat); the Send button has a label.
+- **QR-first sign-up.** Adding a LINE account shows the QR immediately with
+  three how-to steps; proxy settings moved into "Advanced options".
+- **Scheduled sends: list + 3-step wizard** (who → what → when) with recipient
+  names, coloured status, failed jobs pinned on top with a fix button, last-3
+  send history, an on/off switch and a ⋯ menu. The wizard has Thai variable
+  chips (`{วันที่} {เวลา} {ชื่อผู้รับ} {เลขสุ่ม 1–100}`), message versions 2, 3…
+  (saved as patterns), a live preview, once/daily/weekly/custom presets with a
+  real time picker and weekdays, a "send a test to myself" button and safe
+  defaults (once a day, never every 15 minutes). Repeating jobs support
+  `weekdays`, and once-a-day jobs no longer drift.
+- **Auto reply without `/god`.** A 3-step setup (choose the AI brain → shop info
+  → try a conversation): shops can use a **Gemini API key** or their own Ollama
+  (`/api/assistant/settings`, falls back to the global God AI). Shop info is
+  edited as topics, saved automatically, and every test answer shows which topic
+  it came from. Unanswered questions can be answered once and saved into a
+  "Frequently asked" topic.
+- **Staff KPI and team sharing.** Owners add staff (`/api/team`) who reply from
+  the owner's LINE account and share its shop info. The server tracks waiting
+  customer chats and who answered first (staff, AI, or the phone app);
+  `/api/kpi` reports first-response time, % within the reply target, chats per
+  person, chats waiting now, AI vs staff, and screen time from a presence
+  heartbeat (replying / standby / switched away / idle / on other work /
+  offline), counted inside shifts. KPI settings cover the reply target, business
+  hours and shifts; CSV export included.
+- **Live updates and calmer notifications.** `/api/events` (server-sent events)
+  replaces 8-second polling; hidden tabs keep updating; the server refreshes every
+  signed-in account. Notifications turn on with browser permission (banner for
+  "not asked" / "blocked"), at most one per chat per 2 minutes, a single digest
+  when many customers write at once, one reminder past the reply target, no alert
+  when the AI already answered, and quiet outside your shift. A chip shows how
+  fresh the chat list is.
+
 ## [2.8.0] - 2026-07-08
 
 ### Added

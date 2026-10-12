@@ -351,7 +351,8 @@ class GeminiClient:
             parsed = _parse_json_object(text)
         except OllamaError as exc:
             raise GeminiError("Gemini did not return a structured answer.") from exc
-        usage = data.get("usageMetadata") if isinstance(data.get("usageMetadata"), dict) else {}
+        raw_usage = data.get("usageMetadata")
+        usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
         return _structured_answer(
             parsed,
             model=model,
