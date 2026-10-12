@@ -149,17 +149,7 @@ class OllamaClient:
     ) -> dict[str, Any]:
         if not model.strip():
             raise OllamaError("Chat model is not configured.")
-        policy = (
-            "Use only the supplied knowledge. If it is insufficient, set canAnswer to false."
-            if strict_knowledge
-            else "Use the supplied knowledge when relevant. You may use general knowledge."
-        )
-        prompt = (
-            f"{policy}\n\n"
-            "Return JSON with answer, canAnswer, and confidence. Do not include markdown fences.\n\n"
-            f"KNOWLEDGE:\n{context or '(no matching knowledge)'}\n\n"
-            f"QUESTION:\n{question}"
-        )
+        prompt = _assistant_prompt(question, context, strict_knowledge)
         schema = {
             "type": "object",
             "properties": {
@@ -185,21 +175,222 @@ class OllamaClient:
         )
         message = data.get("message")
         content = str(message.get("content") or "") if isinstance(message, dict) else ""
-        parsed = _parse_json_object(content)
-        answer = str(parsed.get("answer") or "").strip()
-        can_answer = bool(parsed.get("canAnswer")) and bool(answer)
+        return _structured_answer(
+            _parse_json_object(content),
+            model=str(data.get("model") or model),
+            prompt_tokens=int(data.get("prompt_eval_count") or 0),
+            output_tokens=int(data.get("eval_count") or 0),
+        )
+
+
+GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com"
+DEFAULT_GEMINI_CHAT_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
+
+
+class GeminiError(OllamaError):
+    """Raised when the Gemini API is unavailable or returns invalid data.
+
+    Subclasses :class:`OllamaError` so callers handle either backend the same way.
+    """
+
+
+class GeminiClient:
+    """Google Gemini chat + embeddings with the same surface as OllamaClient."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str = GEMINI_API_BASE_URL,
+        timeout: float = 120.0,
+    ) -> None:
+        self.api_key = (api_key or "").strip()
+        self.base_url = base_url.rstrip("/")
+        self.timeout = max(5.0, min(float(timeout), 600.0))
+
+    def _request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if not self.api_key:
+            raise GeminiError("Gemini API key is not configured.")
         try:
-            confidence = max(0.0, min(float(parsed.get("confidence") or 0.0), 1.0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        return {
-            "answer": answer,
-            "canAnswer": can_answer,
-            "confidence": confidence,
-            "model": str(data.get("model") or model),
-            "promptEvalCount": int(data.get("prompt_eval_count") or 0),
-            "evalCount": int(data.get("eval_count") or 0),
-        }
+            response = requests.request(
+                method,
+                f"{self.base_url}/v1beta/{path.lstrip('/')}",
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": self.api_key,
+                },
+                json=payload,
+                timeout=(5.0, self.timeout),
+                allow_redirects=False,
+            )
+        except requests.RequestException as exc:
+            raise GeminiError(f"Cannot connect to Gemini: {exc}") from exc
+        try:
+            raw = response.content
+            if len(raw) > MAX_OLLAMA_RESPONSE_BYTES:
+                raise GeminiError("Gemini response is too large.", response.status_code)
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise GeminiError(
+                    f"Gemini returned invalid JSON (HTTP {response.status_code}).",
+                    response.status_code,
+                ) from exc
+            if not response.ok:
+                error = data.get("error") if isinstance(data, dict) else None
+                detail = error.get("message") if isinstance(error, dict) else ""
+                raise GeminiError(
+                    f"Gemini error {response.status_code}: {detail or response.reason}",
+                    response.status_code,
+                )
+            if not isinstance(data, dict):
+                raise GeminiError("Gemini returned an unexpected response.")
+            return data
+        finally:
+            response.close()
+
+    def list_models(self) -> list[dict[str, Any]]:
+        data = self._request("GET", "models?pageSize=200")
+        models = data.get("models")
+        result: list[dict[str, Any]] = []
+        for item in models if isinstance(models, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").removeprefix("models/")
+            methods = item.get("supportedGenerationMethods") or []
+            if not name:
+                continue
+            result.append(
+                {
+                    "name": name,
+                    "size": 0,
+                    "family": "gemini",
+                    "parameterSize": "",
+                    "quantization": "",
+                    "chat": "generateContent" in methods,
+                    "embedding": "embedContent" in methods,
+                }
+            )
+        return result
+
+    def embed(self, model: str, texts: list[str]) -> list[list[float]]:
+        model = (model or DEFAULT_GEMINI_EMBEDDING_MODEL).strip().removeprefix("models/")
+        if not texts:
+            return []
+        data = self._request(
+            "POST",
+            f"models/{model}:batchEmbedContents",
+            {
+                "requests": [
+                    {"model": f"models/{model}", "content": {"parts": [{"text": text}]}}
+                    for text in texts
+                ]
+            },
+        )
+        embeddings = data.get("embeddings")
+        if not isinstance(embeddings, list) or len(embeddings) != len(texts):
+            raise GeminiError("Gemini returned invalid embeddings.")
+        result: list[list[float]] = []
+        for item in embeddings:
+            values = item.get("values") if isinstance(item, dict) else None
+            if not isinstance(values, list) or not values:
+                raise GeminiError("Gemini returned an empty embedding.")
+            try:
+                result.append([float(value) for value in values])
+            except (TypeError, ValueError) as exc:
+                raise GeminiError("Gemini returned an invalid embedding vector.") from exc
+        return result
+
+    def chat(
+        self,
+        *,
+        model: str,
+        question: str,
+        context: str,
+        system_prompt: str,
+        strict_knowledge: bool,
+        temperature: float,
+    ) -> dict[str, Any]:
+        model = (model or DEFAULT_GEMINI_CHAT_MODEL).strip().removeprefix("models/")
+        prompt = _assistant_prompt(question, context, strict_knowledge)
+        data = self._request(
+            "POST",
+            f"models/{model}:generateContent",
+            {
+                "systemInstruction": {"parts": [{"text": system_prompt.strip()}]},
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": max(0.0, min(float(temperature), 2.0)),
+                    "responseMimeType": "application/json",
+                    "responseSchema": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "answer": {"type": "STRING"},
+                            "canAnswer": {"type": "BOOLEAN"},
+                            "confidence": {"type": "NUMBER"},
+                        },
+                        "required": ["answer", "canAnswer", "confidence"],
+                    },
+                },
+            },
+        )
+        candidates = data.get("candidates")
+        first = candidates[0] if isinstance(candidates, list) and candidates else {}
+        content = first.get("content") if isinstance(first, dict) else None
+        parts = content.get("parts") if isinstance(content, dict) else None
+        text = "".join(
+            str(part.get("text") or "")
+            for part in (parts if isinstance(parts, list) else [])
+            if isinstance(part, dict)
+        )
+        try:
+            parsed = _parse_json_object(text)
+        except OllamaError as exc:
+            raise GeminiError("Gemini did not return a structured answer.") from exc
+        usage = data.get("usageMetadata") if isinstance(data.get("usageMetadata"), dict) else {}
+        return _structured_answer(
+            parsed,
+            model=model,
+            prompt_tokens=int(usage.get("promptTokenCount") or 0),
+            output_tokens=int(usage.get("candidatesTokenCount") or 0),
+        )
+
+
+def _assistant_prompt(question: str, context: str, strict_knowledge: bool) -> str:
+    policy = (
+        "Use only the supplied knowledge. If it is insufficient, set canAnswer to false."
+        if strict_knowledge
+        else "Use the supplied knowledge when relevant. You may use general knowledge."
+    )
+    return (
+        f"{policy}\n\n"
+        "Return JSON with answer, canAnswer, and confidence. Do not include markdown fences.\n\n"
+        f"KNOWLEDGE:\n{context or '(no matching knowledge)'}\n\n"
+        f"QUESTION:\n{question}"
+    )
+
+
+def _structured_answer(
+    parsed: dict[str, Any], *, model: str, prompt_tokens: int, output_tokens: int
+) -> dict[str, Any]:
+    answer = str(parsed.get("answer") or "").strip()
+    can_answer = bool(parsed.get("canAnswer")) and bool(answer)
+    try:
+        confidence = max(0.0, min(float(parsed.get("confidence") or 0.0), 1.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return {
+        "answer": answer,
+        "canAnswer": can_answer,
+        "confidence": confidence,
+        "model": model,
+        "promptEvalCount": prompt_tokens,
+        "evalCount": output_tokens,
+    }
 
 
 def _parse_json_object(value: str) -> dict[str, Any]:

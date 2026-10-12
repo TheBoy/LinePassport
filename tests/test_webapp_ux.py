@@ -410,6 +410,146 @@ def test_events_stream_pushes_conversation_updates(live):
             pytest.fail("no conversation_updated event")
 
 
+class _FakeGemini:
+    instances: list[_FakeGemini] = []
+
+    def __init__(self, api_key, **kwargs):
+        self.api_key = api_key
+        _FakeGemini.instances.append(self)
+
+    def embed(self, model, texts):
+        return [[1.0, float(len(text) % 7 + 1)] for text in texts]
+
+    def chat(self, **kwargs):
+        if "เปิด" in kwargs["question"] and "เปิด" in kwargs["context"]:
+            return {"answer": "เปิด 9 โมง", "canAnswer": True, "confidence": 0.9, "model": kwargs["model"]}
+        return {"answer": "", "canAnswer": False, "confidence": 0.0, "model": kwargs["model"]}
+
+    def list_models(self):
+        return []
+
+
+def test_owner_configures_gemini_without_god(web_state, monkeypatch):
+    monkeypatch.setattr(webapp_module, "GeminiClient", _FakeGemini)
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    assert web_state.assistant_settings(owner)["configured"] is False
+    saved = web_state.save_assistant_settings(
+        {"provider": "gemini", "apiKey": "AIza-test-key"}, owner
+    )
+    assert saved["configured"] is True and saved["provider"] == "gemini"
+    assert saved["test"]["ok"] is True
+    assert saved["source"] == "tenant"
+    assert "AIza-test-key" not in str(web_state.store.get("global_ai", {}))
+    # The same key now also powers the AI image tool when that slot was empty.
+    assert web_state.ai_settings(owner)["providers"]["google"]["hasApiKey"] is True
+    # Auto-reply for the owner's account can now be switched on.
+    result = web_state.save_ai_auto_reply_settings("acct", {"enabled": True}, owner)
+    assert result["enabled"] is True and result["aiConfigured"] is True
+
+    staff = web_state.web_auth.create_staff(owner, "s@example.com", "staff-pass", "S", ["acct"])
+    staff_user = web_state.web_auth._find_user(staff["id"])
+    with pytest.raises(WebError):
+        web_state.save_assistant_settings({"provider": "gemini", "apiKey": "x"}, staff_user)
+    assert web_state.assistant_settings(staff_user)["configured"] is True
+
+
+def test_shop_topics_cite_sources_and_collect_faq(web_state, monkeypatch):
+    monkeypatch.setattr(webapp_module, "GeminiClient", _FakeGemini)
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    web_state.save_assistant_settings({"provider": "gemini", "apiKey": "k", "test": False}, owner)
+    knowledge = web_state.save_assistant_knowledge(
+        {
+            "sections": [
+                {"id": "hours", "title": "เวลาเปิด–ปิด", "body": "ร้านเปิด 9:00 ถึง 18:00"},
+                {"id": "", "title": "เมนูราคา", "body": ""},
+            ]
+        },
+        owner,
+    )
+    assert [item["title"] for item in knowledge["sections"]] == ["เวลาเปิด–ปิด", "เมนูราคา"]
+    assert knowledge["knowledgeMarkdown"].startswith("## เวลาเปิด–ปิด")
+    assert knowledge["indexMode"] == "embedding"
+
+    staff = web_state.web_auth.create_staff(owner, "s@example.com", "staff-pass", "S", ["acct"])
+    staff_user = web_state.web_auth._find_user(staff["id"])
+    answered = web_state.ask_global_ai("ร้านเปิดกี่โมง", staff_user)["question"]
+    assert answered["status"] == "answered"
+    assert answered["sources"][0]["name"] == "เวลาเปิด–ปิด"
+
+    unknown = web_state.ask_global_ai("ส่งต่างประเทศไหม", staff_user)["question"]
+    assert unknown["status"] == "unanswered"
+    pending = web_state.tenant_unanswered(owner)["questions"]
+    assert [item["id"] for item in pending] == [unknown["id"]]
+
+    result = web_state.add_knowledge_faq(
+        {"question": "ส่งต่างประเทศไหม", "answer": "ยังไม่ส่ง", "questionId": unknown["id"]},
+        staff_user,
+    )
+    faq = next(item for item in result["sections"] if item["id"] == "faq")
+    assert "ถาม: ส่งต่างประเทศไหม" in faq["body"] and "ตอบ: ยังไม่ส่ง" in faq["body"]
+    assert web_state.tenant_unanswered(owner)["questions"] == []
+    # Staff and owner see one shared shop data set.
+    assert web_state.assistant_knowledge(owner)["sections"] == result["sections"]
+
+
+def test_gemini_client_parses_structured_answer(monkeypatch):
+    from okline import assistant
+
+    calls = []
+
+    class _Response:
+        ok = True
+        status_code = 200
+        reason = "OK"
+
+        def __init__(self, payload):
+            self._payload = payload
+            self.content = b"{}"
+
+        def json(self):
+            return self._payload
+
+        def close(self):
+            pass
+
+    def fake_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        if url.endswith(":batchEmbedContents"):
+            return _Response({"embeddings": [{"values": [0.1, 0.2]}]})
+        return _Response(
+            {
+                "candidates": [
+                    {"content": {"parts": [{"text": '{"answer":"ok","canAnswer":true,"confidence":0.7}'}]}}
+                ],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2},
+            }
+        )
+
+    monkeypatch.setattr(assistant.requests, "request", fake_request)
+    client = assistant.GeminiClient("secret")
+    result = client.chat(
+        model="gemini-x",
+        question="q",
+        context="",
+        system_prompt="s",
+        strict_knowledge=True,
+        temperature=0.2,
+    )
+    assert result["answer"] == "ok" and result["canAnswer"] is True
+    assert client.embed("", ["hello"]) == [[0.1, 0.2]]
+    assert calls[0][2]["headers"]["x-goog-api-key"] == "secret"
+    assert "key=" not in calls[0][1]  # the key never goes into the URL
+
+
+def test_legacy_knowledge_markdown_splits_into_topics():
+    sections = webapp_module._knowledge_sections_from_markdown(
+        "intro line\n\n# เวลาเปิด\nทุกวัน\n\n## คำถามที่พบบ่อย\nถาม: a\nตอบ: b"
+    )
+    assert [item["title"] for item in sections] == ["", "เวลาเปิด", "คำถามที่พบบ่อย"]
+    assert sections[2]["id"] == "faq"
+    assert webapp_module._knowledge_sections_markdown(sections).startswith("intro line")
+
+
 def test_presence_and_kpi_routes_enforce_roles(live):
     base, state = live
     owner_session = requests.Session()

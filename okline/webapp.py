@@ -46,6 +46,9 @@ from . import __version__
 from . import e2ee_crypto as e2ee_frame
 from ._util import is_mid
 from .assistant import (
+    DEFAULT_GEMINI_CHAT_MODEL,
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    GeminiClient,
     OllamaClient,
     OllamaError,
     chunk_markdown,
@@ -17693,6 +17696,213 @@ class WebState:
             self.store.set("global_ai", data)
         return {"ok": True, **self.global_ai_settings()}
 
+    # -- per-shop assistant brain (Gemini key or Ollama) ----------------------
+    def _assistant_settings_for(
+        self, data: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Effective assistant settings: the shop's own brain, else God's global one."""
+        tenant_user = self.tenant_user(user) or {}
+        owner_id = str(tenant_user.get("id") or "")
+        tenant = data["tenants"].get(owner_id) if owner_id else None
+        raw = tenant.get("settings") if isinstance(tenant, dict) else None
+        if isinstance(raw, dict) and raw.get("provider") in {"gemini", "ollama"}:
+            provider = str(raw["provider"])
+            settings = self._global_ai_private_settings({"settings": raw})
+            settings["provider"] = provider
+            settings["source"] = "tenant"
+            if provider == "gemini":
+                key = settings["apiKey"] or self._ai_provider_view(
+                    self._ai_all(tenant_user), "google"
+                )["apiKey"]
+                settings["apiKey"] = key
+                settings["chatModel"] = settings["chatModel"] or DEFAULT_GEMINI_CHAT_MODEL
+                settings["embeddingModel"] = (
+                    settings["embeddingModel"] or DEFAULT_GEMINI_EMBEDDING_MODEL
+                )
+                settings["configured"] = bool(settings["enabled"] and key)
+            else:
+                settings["configured"] = bool(settings["enabled"] and settings["chatModel"])
+            return settings
+        settings = self._global_ai_private_settings(data)
+        settings["provider"] = "ollama"
+        settings["source"] = "global"
+        settings["configured"] = bool(settings["enabled"] and settings["chatModel"])
+        return settings
+
+    def _assistant_client(self, settings: dict[str, Any]) -> OllamaClient | GeminiClient:
+        if settings.get("provider") == "gemini":
+            return GeminiClient(
+                str(settings.get("apiKey") or ""), timeout=float(settings.get("timeout") or 120)
+            )
+        return self._ollama_client(settings)
+
+    def assistant_settings(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        data = self._global_ai_all()
+        settings = self._assistant_settings_for(data, user)
+        global_settings = self._global_ai_private_settings(data)
+        tenant_user = self.tenant_user(user) or {}
+        return {
+            "ok": True,
+            "provider": settings["provider"],
+            "source": settings["source"],
+            "configured": settings["configured"],
+            "enabled": settings["enabled"],
+            "hasApiKey": bool(settings["apiKey"]),
+            "apiKeyPreview": _mask_secret(settings["apiKey"]),
+            "baseUrl": settings["baseUrl"],
+            "chatModel": settings["chatModel"],
+            "embeddingModel": settings["embeddingModel"],
+            "strictKnowledge": settings["strictKnowledge"],
+            "temperature": settings["temperature"],
+            "topK": settings["topK"],
+            "systemPrompt": settings["systemPrompt"],
+            "imageKeyAvailable": bool(
+                self._ai_provider_view(self._ai_all(tenant_user), "google")["apiKey"]
+            ),
+            "globalAvailable": bool(
+                global_settings["enabled"] and global_settings["chatModel"]
+            ),
+            "canEdit": self.web_auth.has_permission(user, "manage_accounts")
+            and not (user or {}).get("teamOwnerId"),
+            "defaults": {
+                "geminiChatModel": DEFAULT_GEMINI_CHAT_MODEL,
+                "geminiEmbeddingModel": DEFAULT_GEMINI_EMBEDDING_MODEL,
+                "ollamaBaseUrl": DEFAULT_OLLAMA_BASE_URL,
+            },
+        }
+
+    def save_assistant_settings(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        if not self.web_auth.has_permission(user, "manage_accounts") or (user or {}).get(
+            "teamOwnerId"
+        ):
+            raise WebError(HTTPStatus.FORBIDDEN, "Only the shop owner can change the AI.")
+        owner_id = self._assistant_owner_id(user)
+        provider = str(body.get("provider") or "").strip().lower()
+        if provider not in {"gemini", "ollama", "global"}:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Choose Gemini or Ollama.", "ai_settings_invalid")
+        with self.lock:
+            data = self._global_ai_all()
+            _, tenant = self._tenant_ai_knowledge(data, user)
+            previous = tenant.get("settings") if isinstance(tenant.get("settings"), dict) else {}
+            previous_embedding = str((previous or {}).get("embeddingModel") or "")
+            previous_provider = str((previous or {}).get("provider") or "")
+            if provider == "global":
+                tenant.pop("settings", None)
+            else:
+                current = self._global_ai_private_settings({"settings": previous or {}})
+                raw_key = str(body.get("apiKey") or "").strip()
+                if body.get("clearApiKey"):
+                    api_key = ""
+                elif raw_key:
+                    api_key = raw_key
+                else:
+                    api_key = current["apiKey"] if previous_provider == provider else ""
+                base_url = DEFAULT_OLLAMA_BASE_URL
+                if provider == "ollama":
+                    try:
+                        base_url = normalize_ollama_base_url(
+                            str(body.get("baseUrl") or current["baseUrl"])
+                        )
+                    except ValueError as exc:
+                        raise WebError(
+                            HTTPStatus.BAD_REQUEST, str(exc), "ollama_url_invalid"
+                        ) from exc
+                    if not str(body.get("chatModel") or "").strip():
+                        raise WebError(
+                            HTTPStatus.BAD_REQUEST,
+                            "Pick the Ollama chat model.",
+                            "ai_settings_invalid",
+                        )
+                try:
+                    temperature = max(
+                        0.0, min(float(body.get("temperature", current["temperature"])), 2.0)
+                    )
+                    top_k = max(1, min(int(body.get("topK", current["topK"])), 12))
+                except (TypeError, ValueError) as exc:
+                    raise WebError(
+                        HTTPStatus.BAD_REQUEST,
+                        "AI numeric settings are invalid.",
+                        "ai_settings_invalid",
+                    ) from exc
+                tenant["settings"] = {
+                    "provider": provider,
+                    "enabled": True,
+                    "baseUrl": base_url,
+                    "apiKey": self._encrypt_secret(api_key),
+                    "chatModel": str(body.get("chatModel") or "").strip()[:200],
+                    "embeddingModel": str(body.get("embeddingModel") or "").strip()[:200],
+                    "systemPrompt": str(
+                        body.get("systemPrompt") or current["systemPrompt"]
+                    ).strip()[:20_000]
+                    or DEFAULT_ASSISTANT_SYSTEM_PROMPT,
+                    "strictKnowledge": bool(
+                        body.get("strictKnowledge", current["strictKnowledge"])
+                    ),
+                    "topK": top_k,
+                    "temperature": temperature,
+                    "timeout": current["timeout"],
+                    "updatedAt": _now_iso(),
+                }
+                if provider == "gemini" and raw_key:
+                    # One Gemini key per shop: share it with the AI image tool
+                    # when that slot is still empty.
+                    self._share_gemini_key_with_image_ai(user, raw_key)
+            new_settings = tenant.get("settings") or {}
+            if (
+                str(new_settings.get("embeddingModel") or "") != previous_embedding
+                or str(new_settings.get("provider") or "") != previous_provider
+            ):
+                for chunk in tenant.get("chunks", []):
+                    if isinstance(chunk, dict):
+                        chunk.pop("embedding", None)
+                tenant["indexMode"] = "needs-reindex"
+            self.store.set("global_ai", data)
+        test: dict[str, Any] = {"ok": True, "error": ""}
+        if body.get("test", True):
+            test = self.test_assistant_settings(user)
+        try:
+            self.reindex_assistant_knowledge({"id": owner_id})
+        except Exception:
+            traceback.print_exc()
+        return {**self.assistant_settings(user), "test": test}
+
+    def _share_gemini_key_with_image_ai(self, user: dict[str, Any] | None, key: str) -> None:
+        data = self._ai_all(user)
+        google = data.get("google") if isinstance(data.get("google"), dict) else {}
+        if self._decrypt_secret(str(google.get("apiKey") or "")):
+            return
+        self.save_ai_settings({"provider": "google", "apiKey": key}, user)
+
+    def test_assistant_settings(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        settings = self._assistant_settings_for(self._global_ai_all(), user)
+        if not settings["configured"]:
+            return {"ok": False, "error": "not_configured"}
+        try:
+            client = self._assistant_client(settings)
+            if settings["provider"] == "gemini":
+                result = client.chat(
+                    model=settings["chatModel"],
+                    question="ping",
+                    context="",
+                    system_prompt="Reply with answer 'pong'.",
+                    strict_knowledge=False,
+                    temperature=0.0,
+                )
+                return {"ok": True, "error": "", "model": result.get("model")}
+            models = client.list_models()
+            names = {str(item.get("name") or "") for item in models}
+            if settings["chatModel"] not in names and f"{settings['chatModel']}:latest" not in names:
+                return {
+                    "ok": False,
+                    "error": f"Model {settings['chatModel']} is not installed in Ollama.",
+                    "models": sorted(names),
+                }
+            return {"ok": True, "error": "", "models": sorted(names)}
+        except OllamaError as exc:
+            return {"ok": False, "error": _safe_log_detail(exc, 500)}
+
     def _ollama_client(self, settings: dict[str, Any] | None = None) -> OllamaClient:
         cfg = settings or self.global_ai_settings(reveal=True)
         return OllamaClient(
@@ -17749,8 +17959,17 @@ class WebState:
     def assistant_knowledge(self, user: dict[str, Any] | None) -> dict[str, Any]:
         data = self._global_ai_all()
         _, tenant = self._tenant_ai_knowledge(data, user)
+        stored_sections = tenant.get("knowledgeSections")
         return {
             "knowledgeMarkdown": str(tenant.get("knowledgeMarkdown") or ""),
+            "sections": (
+                [dict(item) for item in stored_sections if isinstance(item, dict)]
+                if isinstance(stored_sections, list) and stored_sections
+                else _knowledge_sections_from_markdown(
+                    str(tenant.get("knowledgeMarkdown") or "")
+                )
+            ),
+            "updatedAt": str(tenant.get("knowledgeUpdatedAt") or ""),
             "apiSources": [
                 self._knowledge_source_view(source)
                 for source in tenant["apiSources"]
@@ -17767,7 +17986,14 @@ class WebState:
     def save_assistant_knowledge(
         self, body: dict[str, Any], user: dict[str, Any] | None
     ) -> dict[str, Any]:
-        markdown = str(body.get("knowledgeMarkdown") or "")
+        sections = (
+            _validate_knowledge_sections(body["sections"]) if "sections" in body else None
+        )
+        markdown = (
+            _knowledge_sections_markdown(sections)
+            if sections is not None
+            else str(body.get("knowledgeMarkdown") or "")
+        )
         if len(markdown) > MAX_GLOBAL_KNOWLEDGE_LENGTH:
             raise WebError(
                 HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
@@ -17778,9 +18004,124 @@ class WebState:
             data = self._global_ai_all()
             _, tenant = self._tenant_ai_knowledge(data, user)
             tenant["knowledgeMarkdown"] = markdown
+            if sections is not None:
+                tenant["knowledgeSections"] = sections
+            else:
+                tenant.pop("knowledgeSections", None)
             tenant["knowledgeUpdatedAt"] = _now_iso()
             self.store.set("global_ai", data)
         return {"ok": True, **self.reindex_assistant_knowledge(user)}
+
+    def add_knowledge_faq(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Append a question/answer pair to the shop's FAQ topic and reindex."""
+        question = str(body.get("question") or "").strip()
+        answer = str(body.get("answer") or "").strip()
+        if not question or not answer:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Question and answer are required.")
+        if len(question) > MAX_ASSISTANT_QUESTION_LENGTH or len(answer) > MAX_ASSISTANT_ANSWER_LENGTH:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Question or answer is too long.")
+        tenant_user = self.tenant_user(user)
+        owner_id = self._assistant_owner_id(tenant_user)
+        question_id = str(body.get("questionId") or "").strip()
+        with self.lock:
+            data = self._global_ai_all()
+            _, tenant = self._tenant_ai_knowledge(data, tenant_user)
+            sections = tenant.get("knowledgeSections")
+            if not isinstance(sections, list) or not sections:
+                sections = _knowledge_sections_from_markdown(
+                    str(tenant.get("knowledgeMarkdown") or "")
+                )
+            faq = next(
+                (
+                    item
+                    for item in sections
+                    if isinstance(item, dict) and item.get("id") == KNOWLEDGE_FAQ_SECTION_ID
+                ),
+                None,
+            )
+            if faq is None:
+                faq = {"id": KNOWLEDGE_FAQ_SECTION_ID, "title": "คำถามที่พบบ่อย", "body": ""}
+                sections.append(faq)
+            entry = f"ถาม: {question}\nตอบ: {answer}"
+            faq["body"] = f"{str(faq.get('body') or '').strip()}\n\n{entry}".strip()
+            sections = _validate_knowledge_sections(sections)
+            markdown = _knowledge_sections_markdown(sections)
+            if len(markdown) > MAX_GLOBAL_KNOWLEDGE_LENGTH:
+                raise WebError(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    "knowledge.md is too large.",
+                    "knowledge_too_large",
+                )
+            tenant["knowledgeSections"] = sections
+            tenant["knowledgeMarkdown"] = markdown
+            tenant["knowledgeUpdatedAt"] = _now_iso()
+            if question_id:
+                member_ids = self._tenant_member_ids(owner_id)
+                for item in data["questions"]:
+                    if (
+                        isinstance(item, dict)
+                        and str(item.get("id") or "") == question_id
+                        and str(item.get("userId") or "") in member_ids
+                    ):
+                        item["answer"] = answer
+                        item["status"] = "resolved"
+                        item["resolvedBy"] = str(
+                            (user or {}).get("displayName") or (user or {}).get("username") or ""
+                        )
+                        item["updatedAt"] = _now_iso()
+            self.store.set("global_ai", data)
+        return {"ok": True, **self.reindex_assistant_knowledge(tenant_user)}
+
+    def _tenant_member_ids(self, owner_id: str) -> set[str]:
+        ids = {owner_id}
+        for item in self.web_auth.data.get("users", []):
+            if isinstance(item, dict) and str(item.get("teamOwnerId") or "") == owner_id:
+                ids.add(str(item.get("id") or ""))
+        return ids
+
+    def tenant_unanswered(
+        self, user: dict[str, Any] | None, *, limit: int = 200
+    ) -> dict[str, Any]:
+        """Questions the shop's AI could not answer, newest first."""
+        owner_id = self._assistant_owner_id(self.tenant_user(user))
+        member_ids = self._tenant_member_ids(owner_id)
+        data = self._global_ai_all()
+        items = [
+            self._public_assistant_question(item)
+            for item in data["questions"]
+            if isinstance(item, dict)
+            and item.get("status") == "unanswered"
+            and str(item.get("userId") or "") in member_ids
+        ]
+        items.sort(key=lambda item: item["createdAt"], reverse=True)
+        return {"questions": items[: max(1, min(int(limit), 500))]}
+
+    def dismiss_tenant_question(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        question_id = str(body.get("id") or "").strip()
+        owner_id = self._assistant_owner_id(self.tenant_user(user))
+        member_ids = self._tenant_member_ids(owner_id)
+        with self.lock:
+            data = self._global_ai_all()
+            target = next(
+                (
+                    item
+                    for item in data["questions"]
+                    if isinstance(item, dict)
+                    and str(item.get("id") or "") == question_id
+                    and str(item.get("userId") or "") in member_ids
+                ),
+                None,
+            )
+            if target is None:
+                raise WebError(HTTPStatus.NOT_FOUND, "Question not found.")
+            target["status"] = "dismissed"
+            target["updatedAt"] = _now_iso()
+            self.store.set("global_ai", data)
+        return {"ok": True, **self.tenant_unanswered(user)}
 
     def save_assistant_api_source(
         self, body: dict[str, Any], user: dict[str, Any] | None
@@ -18086,7 +18427,25 @@ class WebState:
                     }
                 )
 
-        append_chunks("knowledge-md", "knowledge.md", str(data.get("knowledgeMarkdown") or ""))
+        sections = data.get("knowledgeSections")
+        if isinstance(sections, list) and sections:
+            # Shop topics index separately so answers can cite the topic title.
+            for section in sections:
+                if not isinstance(section, dict):
+                    continue
+                title = str(section.get("title") or "").strip()
+                body = str(section.get("body") or "").strip()
+                if not body:
+                    continue
+                append_chunks(
+                    f"section:{section.get('id')}",
+                    title or "ข้อมูลร้าน",
+                    f"## {title}\n\n{body}" if title else body,
+                )
+        else:
+            append_chunks(
+                "knowledge-md", "knowledge.md", str(data.get("knowledgeMarkdown") or "")
+            )
         for source in data.get("apiSources", []):
             if not isinstance(source, dict) or not source.get("enabled", True):
                 continue
@@ -18107,15 +18466,15 @@ class WebState:
 
     def reindex_assistant_knowledge(self, user: dict[str, Any] | None) -> dict[str, Any]:
         data = self._global_ai_all()
-        settings = self._global_ai_private_settings(data)
+        settings = self._assistant_settings_for(data, user)
         owner_id, tenant = self._tenant_ai_knowledge(data, user)
         chunks = self._build_knowledge_chunks(tenant, scope=f"tenant:{owner_id}")
         index_mode = "keyword"
         index_error = ""
         embedding_model = settings["embeddingModel"]
-        if chunks and embedding_model:
+        if chunks and embedding_model and (settings["provider"] != "gemini" or settings["apiKey"]):
             try:
-                client = self._ollama_client(settings)
+                client = self._assistant_client(settings)
                 for start in range(0, len(chunks), 32):
                     batch = chunks[start : start + 32]
                     vectors = client.embed(
@@ -18244,12 +18603,17 @@ class WebState:
             runtime["state"] = "idle"
         elif not runtime.get("state"):
             runtime["state"] = "starting"
-        settings = self.global_ai_settings()
+        settings = self._assistant_settings_for(
+            self._global_ai_all(), self._account_ai_owner(account_id, user)
+        )
         return {
             "ok": True,
             "accountId": account_id,
             "accountLabel": str(account.get("label") or account_id),
             "enabled": enabled,
+            "aiProvider": settings["provider"],
+            "aiSource": settings["source"],
+            "replyCount": self._auto_reply_count(account_id),
             "contactsEnabled": bool(record.get("contactsEnabled", True)),
             "groupsEnabled": bool(record.get("groupsEnabled", True)),
             "groupReplyMode": str(record.get("groupReplyMode") or "all"),
@@ -18264,6 +18628,20 @@ class WebState:
                 "replyCount": int(runtime.get("replyCount") or 0),
             },
         }
+
+    def _account_ai_owner(
+        self, account_id: str, user: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Auto-replies run on the account owner's AI brain and shop data."""
+        return self.web_auth.user_for_account(account_id) or self.tenant_user(user)
+
+    def _auto_reply_count(self, account_id: str) -> int:
+        """Customer questions the AI answered (KPI history, last 90 days)."""
+        return sum(
+            1
+            for item in self._kpi_responses(account_id)
+            if item.get("answeredBy") == "ai"
+        )
 
     def save_ai_auto_reply_settings(
         self,
@@ -18346,10 +18724,12 @@ class WebState:
                 "Select at least one LINE group or choose all groups.",
                 "auto_reply_group_required",
             )
-        if enabled and not self.global_ai_settings().get("configured"):
+        if enabled and not self._assistant_settings_for(
+            self._global_ai_all(), self._account_ai_owner(account_id, user)
+        ).get("configured"):
             raise WebError(
                 HTTPStatus.CONFLICT,
-                "AI assistant is not configured by God.",
+                "AI assistant is not configured.",
                 "assistant_not_configured",
             )
         now = _now_iso()
@@ -18989,18 +19369,21 @@ class WebState:
         if len(question) > MAX_ASSISTANT_QUESTION_LENGTH:
             raise WebError(HTTPStatus.BAD_REQUEST, "Question is too long.")
         data = self._global_ai_all()
-        settings = self._global_ai_private_settings(data)
-        _, tenant = self._tenant_ai_knowledge(data, user)
-        if not settings["enabled"] or not settings["chatModel"]:
+        settings = self._assistant_settings_for(data, user)
+        _, tenant = self._tenant_ai_knowledge(data, self.tenant_user(user))
+        if not settings["configured"]:
             raise WebError(
                 HTTPStatus.CONFLICT,
-                "AI assistant is not configured by God.",
+                "AI assistant is not configured.",
                 "assistant_not_configured",
             )
-        client = self._ollama_client(settings)
+        client = self._assistant_client(settings)
         query_embedding: list[float] | None = None
+        # A shop with its own AI brain answers from its own data only: the
+        # global index was embedded by a different model.
+        shared_chunks = data["chunks"] if settings["source"] == "global" else []
         knowledge_chunks = [
-            item for item in [*data["chunks"], *tenant["chunks"]] if isinstance(item, dict)
+            item for item in [*shared_chunks, *tenant["chunks"]] if isinstance(item, dict)
         ]
         if (
             knowledge_chunks
@@ -19090,9 +19473,15 @@ class WebState:
             if isinstance(item, dict) and str(item.get("userId") or "") == owner_id
         ]
         items.sort(key=lambda item: item["createdAt"], reverse=True)
+        effective = self._assistant_settings_for(data, user)
         return {
             "questions": items[: max(1, min(int(limit), 500))],
-            "settings": self.global_ai_settings(),
+            "settings": {
+                **self.global_ai_settings(),
+                "configured": effective["configured"],
+                "provider": effective["provider"],
+                "source": effective["source"],
+            },
         }
 
     def assistant_unanswered(self, *, limit: int = 500) -> dict[str, Any]:
@@ -19770,6 +20159,24 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 self.current_user,
                 limit=_query_int(query, "limit", 100, minimum=1, maximum=500),
             )
+        if method == "GET" and path == "/api/assistant/settings":
+            self._require_permission("ask_ai")
+            return self.state.assistant_settings(self.current_user)
+        if method == "POST" and path == "/api/assistant/settings":
+            self._require_permission("manage_accounts")
+            return self.state.save_assistant_settings(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/assistant/knowledge/faq":
+            self._require_permission("ask_ai")
+            return self.state.add_knowledge_faq(self._read_json(), self.current_user)
+        if method == "GET" and path == "/api/assistant/unanswered/mine":
+            self._require_permission("ask_ai")
+            return self.state.tenant_unanswered(
+                self.current_user,
+                limit=_query_int(query, "limit", 200, minimum=1, maximum=500),
+            )
+        if method == "POST" and path == "/api/assistant/unanswered/dismiss":
+            self._require_permission("ask_ai")
+            return self.state.dismiss_tenant_question(self._read_json(), self.current_user)
         if method == "POST" and path == "/api/assistant/ask":
             self._require_permission("ask_ai")
             body = self._read_json()
@@ -19792,29 +20199,29 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             )
         if method == "GET" and path == "/api/assistant/knowledge":
             self._require_permission("ask_ai")
-            return self.state.assistant_knowledge(self.current_user)
+            return self.state.assistant_knowledge(self.state.tenant_user(self.current_user))
         if method == "POST" and path == "/api/assistant/knowledge":
             self._require_permission("ask_ai")
             return self.state.save_assistant_knowledge(
-                self._read_json(max_bytes=MAX_JSON_BODY_BYTES), self.current_user
+                self._read_json(max_bytes=MAX_JSON_BODY_BYTES), self.state.tenant_user(self.current_user)
             )
         if method == "POST" and path == "/api/assistant/knowledge/reindex":
             self._require_permission("ask_ai")
-            return {"ok": True, **self.state.reindex_assistant_knowledge(self.current_user)}
+            return {"ok": True, **self.state.reindex_assistant_knowledge(self.state.tenant_user(self.current_user))}
         if method == "POST" and path == "/api/assistant/knowledge/sources/save":
             self._require_permission("ask_ai")
-            return self.state.save_assistant_api_source(self._read_json(), self.current_user)
+            return self.state.save_assistant_api_source(self._read_json(), self.state.tenant_user(self.current_user))
         if method == "POST" and path == "/api/assistant/knowledge/sources/sync":
             self._require_permission("ask_ai")
             body = self._read_json()
             return self.state.sync_assistant_api_source(
-                str(body.get("id") or ""), self.current_user
+                str(body.get("id") or ""), self.state.tenant_user(self.current_user)
             )
         if method == "POST" and path == "/api/assistant/knowledge/sources/delete":
             self._require_permission("ask_ai")
             body = self._read_json()
             return self.state.delete_assistant_api_source(
-                str(body.get("id") or ""), self.current_user
+                str(body.get("id") or ""), self.state.tenant_user(self.current_user)
             )
         if method == "GET" and path == "/api/assistant/unanswered":
             self._require_permission("manage_ai")
@@ -22631,6 +23038,70 @@ def _record_operator_send(handler: Any, body: dict[str, Any], to: str, kind: str
     if state is None or not account_id:
         return
     state.record_operator_send(account_id, getattr(handler, "current_user", None), to, kind)
+
+
+KNOWLEDGE_FAQ_SECTION_ID = "faq"
+MAX_KNOWLEDGE_SECTIONS = 100
+
+
+def _validate_knowledge_sections(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        raise WebError(HTTPStatus.BAD_REQUEST, "sections must be a list.", "invalid_knowledge")
+    if len(raw) > MAX_KNOWLEDGE_SECTIONS:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Too many topics.", "invalid_knowledge")
+    sections: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise WebError(HTTPStatus.BAD_REQUEST, "Each topic must be an object.", "invalid_knowledge")
+        section_id = re.sub(r"[^A-Za-z0-9_-]", "", str(item.get("id") or ""))[:40]
+        if not section_id or section_id in seen:
+            section_id = uuid.uuid4().hex[:12]
+        seen.add(section_id)
+        title = " ".join(str(item.get("title") or "").split())[:MAX_NAME_LENGTH]
+        body = str(item.get("body") or "").replace("\r\n", "\n").strip()
+        sections.append({"id": section_id, "title": title, "body": body})
+    return sections
+
+
+def _knowledge_sections_markdown(sections: list[dict[str, str]]) -> str:
+    """Serialize shop topics into the markdown the legacy indexer understands."""
+    parts = []
+    for section in sections:
+        title = section.get("title") or ""
+        body = section.get("body") or ""
+        if not title and not body:
+            continue
+        parts.append(f"## {title}\n{body}".strip() if title else body)
+    return "\n\n".join(parts).strip()
+
+
+def _knowledge_sections_from_markdown(markdown: str) -> list[dict[str, str]]:
+    """Split legacy knowledge.md into topics at ``#``/``##`` headings."""
+    sections: list[dict[str, str]] = []
+    title = ""
+    lines: list[str] = []
+
+    def flush() -> None:
+        body = "\n".join(lines).strip()
+        if title or body:
+            section_id = (
+                KNOWLEDGE_FAQ_SECTION_ID
+                if title == "คำถามที่พบบ่อย"
+                else hashlib.sha1(f"{len(sections)}:{title}".encode()).hexdigest()[:12]
+            )
+            sections.append({"id": section_id, "title": title, "body": body})
+
+    for line in (markdown or "").replace("\r\n", "\n").split("\n"):
+        heading = re.match(r"^#{1,2}\s+(.*)$", line)
+        if heading:
+            flush()
+            title = heading.group(1).strip()[:MAX_NAME_LENGTH]
+            lines = []
+        else:
+            lines.append(line)
+    flush()
+    return sections
 
 
 def _room_tracked(chat_mid: str) -> bool:
