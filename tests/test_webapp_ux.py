@@ -1,0 +1,448 @@
+"""Tests for the UX-plan backend: KPI tracking, presence, staff sharing, events."""
+
+from __future__ import annotations
+
+import datetime as dt
+import threading
+from collections.abc import Iterator
+
+import pytest
+import requests
+
+from okline import webapp as webapp_module
+from okline.webapp import (
+    OkLineWebHandler,
+    OkLineWebServer,
+    WebAuth,
+    WebConfig,
+    WebError,
+    WebState,
+)
+
+_CUSTOMER_MID = "U" + "a" * 32
+
+
+def _make_config(tmp_path) -> WebConfig:
+    root = tmp_path / ".okline"
+    return WebConfig(
+        host="127.0.0.1",
+        port=0,
+        tokens_file=str(tmp_path / "tokens.json"),
+        state_dir=str(root),
+        accounts_file=str(root / "accounts.json"),
+        accounts_dir=str(root / "accounts"),
+        schedules_file=str(root / "schedules.json"),
+        auth_file=str(root / "auth.json"),
+    )
+
+
+@pytest.fixture
+def web_state(tmp_path, monkeypatch) -> Iterator[WebState]:
+    monkeypatch.delenv("OKLINE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    state = WebState(_make_config(tmp_path))
+    try:
+        yield state
+    finally:
+        state.close()
+
+
+@pytest.fixture
+def live(tmp_path, monkeypatch) -> Iterator[tuple[str, WebState]]:
+    monkeypatch.delenv("OKLINE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    server = OkLineWebServer(("127.0.0.1", 0), OkLineWebHandler)
+    server.state = WebState(_make_config(tmp_path))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", server.state
+    finally:
+        server.shutdown()
+        server.state.close()
+        server.server_close()
+
+
+class _SendFakeApi:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    def send_text(self, to, text):
+        self.sent.append((to, text))
+        return {"id": f"m{len(self.sent)}"}
+
+
+class _HandlerStub:
+    def __init__(self, state, user):
+        self.server = type("Server", (), {"state": state})()
+        self.current_user = user
+
+
+def _owner(web_state):
+    token = web_state.web_auth.setup("owner@example.com", "owner-pass")
+    owner = web_state.web_auth.current_user(WebAuth.cookie_header(token))
+    assert owner
+    return owner
+
+
+def _seed_owned_account(web_state, owner, account_id="acct", mid="U-me"):
+    web_state.account_store.data["accounts"] = [
+        {
+            "id": account_id,
+            "label": "Test LINE",
+            "mid": mid,
+            "ownerId": owner["id"],
+            "tokenFile": "",
+            "createdAt": "2026-07-11T12:00:00",
+            "updatedAt": "2026-07-11T12:00:00",
+        }
+    ]
+    web_state.account_store.data["activeAccountId"] = account_id
+    web_state.account_store.save()
+    web_state.web_auth.grant_account_access(owner["id"], account_id)
+    return web_state.web_auth._find_user(owner["id"])
+
+
+def _box(mid, *messages):
+    return {
+        "id": mid,
+        "lastMessages": [
+            {"id": f"{mid}-{index}", "from": sender, "createdTime": str(at), "contentType": 0}
+            for index, (sender, at) in enumerate(messages)
+        ],
+    }
+
+
+def test_operator_send_logs_web_user(web_state):
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    result = OkLineWebHandler._send(
+        _HandlerStub(web_state, owner),
+        _SendFakeApi(),
+        {"accountId": "acct", "to": _CUSTOMER_MID, "text": "hello"},
+    )
+    assert result["ok"] is True
+    logs = web_state.list_bot_logs("acct", owner)["logs"]
+    sent = [log for log in logs if log["action"] == "operator_send"]
+    assert sent and sent[0]["data"]["webUserId"] == owner["id"]
+    assert sent[0]["data"]["to"] == _CUSTOMER_MID
+    assert sent[0]["data"]["kind"] == "text"
+
+
+def test_room_state_tracks_waiting_and_attributes_replies(web_state, monkeypatch):
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    base = 1_800_000_000_000
+    clock = {"now": base / 1000}
+    monkeypatch.setattr(webapp_module.time, "time", lambda: clock["now"])
+
+    # First sight of a room is history: no KPI event, but it is waiting.
+    web_state.update_room_state(
+        "acct", "U-me", [_box(_CUSTOMER_MID, (_CUSTOMER_MID, base - 5000))]
+    )
+    assert web_state.room_states("acct")[_CUSTOMER_MID]["status"] == "waiting"
+    assert web_state._kpi_responses("acct") == []
+
+    # A web operator reply answers the room immediately and is attributed.
+    clock["now"] = (base + 60_000) / 1000
+    web_state.note_outgoing("acct", _CUSTOMER_MID, owner["id"])
+    room = web_state.room_states("acct")[_CUSTOMER_MID]
+    assert room["status"] == "answered"
+    assert room["answeredBy"] == owner["id"]
+    responses = web_state._kpi_responses("acct")
+    assert responses[-1]["answeredBy"] == owner["id"]
+    assert responses[-1]["responseSeconds"] == 65
+
+    # A scheduled send does not count as answering a new question.
+    web_state.update_room_state(
+        "acct", "U-me", [_box(_CUSTOMER_MID, (_CUSTOMER_MID, base + 100_000))]
+    )
+    web_state.note_outgoing("acct", _CUSTOMER_MID, "schedule")
+    web_state.update_room_state(
+        "acct",
+        "U-me",
+        [_box(_CUSTOMER_MID, (_CUSTOMER_MID, base + 100_000), ("U-me", base + 110_000))],
+    )
+    assert web_state.room_states("acct")[_CUSTOMER_MID]["status"] == "waiting"
+
+    # A reply typed on the phone (no web attribution) counts as line_app.
+    web_state.outgoing_attribution.clear()
+    web_state.update_room_state(
+        "acct",
+        "U-me",
+        [
+            _box(
+                _CUSTOMER_MID,
+                (_CUSTOMER_MID, base + 100_000),
+                ("U-me", base + 110_000),
+                ("U-me", base + 160_000),
+            )
+        ],
+    )
+    assert web_state.room_states("acct")[_CUSTOMER_MID]["status"] == "answered"
+    assert web_state._kpi_responses("acct")[-1]["answeredBy"] == "line_app"
+
+    # Silence for 24h closes the room; an unanswered one is recorded as missed.
+    web_state.update_room_state(
+        "acct", "U-me", [_box(_CUSTOMER_MID, (_CUSTOMER_MID, base + 200_000))]
+    )
+    clock["now"] = (base + 200_000 + 25 * 3600 * 1000) / 1000
+    web_state.update_room_state("acct", "U-me", [])
+    assert web_state.room_states("acct")[_CUSTOMER_MID]["status"] == "closed"
+    assert web_state._kpi_responses("acct")[-1]["missed"] is True
+
+
+def test_group_chats_are_not_tracked_for_kpi(web_state):
+    _seed_owned_account(web_state, _owner(web_state))
+    web_state.update_room_state("acct", "U-me", [_box("C-group", ("U-x", 1000))])
+    assert web_state.room_states("acct") == {}
+
+
+def test_inbox_fetch_bumps_event_version_only_on_change(web_state):
+    _seed_owned_account(web_state, _owner(web_state))
+    payload = {"messageBoxes": [_box(_CUSTOMER_MID, (_CUSTOMER_MID, 1000))]}
+    web_state._after_inbox_fetch("acct", payload)
+    first = web_state.inbox_version("acct")
+    web_state._after_inbox_fetch("acct", payload)
+    assert web_state.inbox_version("acct") == first
+    assert web_state.wait_inbox_event("acct", first, 0.01) is None
+    changed = {
+        "messageBoxes": [_box(_CUSTOMER_MID, (_CUSTOMER_MID, 1000), (_CUSTOMER_MID, 2000))]
+    }
+    web_state._after_inbox_fetch("acct", changed)
+    assert web_state.wait_inbox_event("acct", first, 0.01) == first + 1
+
+
+def test_presence_heartbeats_merge_into_segments(web_state, monkeypatch):
+    owner = _owner(web_state)
+    clock = {"now": 1_800_000_000.0}
+    monkeypatch.setattr(webapp_module.time, "time", lambda: clock["now"])
+
+    def beat(state, advance=30):
+        clock["now"] += advance
+        return web_state.record_presence(owner, {"state": state, "notification": "granted"})
+
+    beat("active", 0)
+    beat("active")
+    beat("active")
+    beat("away")
+    beat("away")
+    beat("standby", 600)  # a long gap means the user was offline in between
+    web_state.flush_presence()
+    segments = [
+        item
+        for item in web_state.store.get("presence", {})["segments"]
+        if item["userId"] == owner["id"]
+    ]
+    assert [item["state"] for item in segments] == ["active", "away", "standby"]
+    start = 1_800_000_000_000
+    assert segments[0]["from"] == start and segments[0]["to"] == start + 90_000
+    assert segments[1]["from"] == start + 90_000 and segments[1]["to"] == start + 120_000
+    assert segments[2]["from"] == start + 720_000
+    with pytest.raises(WebError):
+        web_state.record_presence(owner, {"state": "sleeping"})
+
+
+def test_kpi_report_aggregates_responses_and_presence(web_state):
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    staff = web_state.web_auth.create_staff(
+        owner, "staff@example.com", "staff-pass", "Staff", ["acct"]
+    )
+    start = 1_780_000_000_000
+    web_state.store.set(
+        "kpi_responses:acct",
+        {
+            "responses": [
+                {
+                    "chatMid": "U1",
+                    "askedAt": start,
+                    "answeredAt": start + 60_000,
+                    "answeredBy": staff["id"],
+                    "responseSeconds": 60,
+                },
+                {
+                    "chatMid": "U2",
+                    "askedAt": start + 1000,
+                    "answeredAt": start + 601_000,
+                    "answeredBy": staff["id"],
+                    "responseSeconds": 600,
+                },
+                {
+                    "chatMid": "U3",
+                    "askedAt": start + 2000,
+                    "answeredAt": start + 7000,
+                    "answeredBy": "ai",
+                    "responseSeconds": 5,
+                },
+                {"chatMid": "U4", "askedAt": start + 3000, "answeredBy": None, "missed": True},
+            ]
+        },
+    )
+    web_state.presence_cache = [
+        {"userId": staff["id"], "state": "active", "from": start, "to": start + 1_800_000},
+        {
+            "userId": staff["id"],
+            "state": "away",
+            "from": start + 1_800_000,
+            "to": start + 3_600_000,
+        },
+    ]
+    report = web_state.kpi_report("acct", owner, from_ms=start, to_ms=start + 3_600_000)
+    assert report["tiles"]["chats"] == 4
+    assert report["tiles"]["slaPercent"] == 50.0  # 60s and 5s within 300s, of 4
+    assert report["split"] == {"ai": 1, "human": 2, "lineApp": 0, "missed": 1}
+    row = next(item for item in report["perUser"] if item["id"] == staff["id"])
+    assert row["chats"] == 2 and row["avgResponseSeconds"] == 330
+    assert row["presence"]["active"] == 1800 and row["presence"]["away"] == 1800
+    assert row["presence"]["offline"] == 0
+    staff_user = web_state.web_auth._find_user(staff["id"])
+    with pytest.raises(WebError):
+        web_state.kpi_report("acct", staff_user, from_ms=start, to_ms=start + 1)
+
+
+def test_kpi_shift_windows_expand_weekly_rules():
+    start = int(dt.datetime(2027, 1, 4, 0, 0).timestamp() * 1000)  # a Monday
+    windows = webapp_module._time_windows(
+        [{"days": [0], "start": "09:00", "end": "17:00"}], start, start + 86_400_000
+    )
+    assert windows == [(start + 9 * 3_600_000, start + 17 * 3_600_000)]
+    overnight = webapp_module._time_windows(
+        [{"days": [0], "start": "22:00", "end": "06:00"}], start, start + 2 * 86_400_000
+    )
+    assert overnight == [(start + 22 * 3_600_000, start + 30 * 3_600_000)]
+
+
+def test_kpi_settings_owner_only_and_validated(web_state):
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    staff = web_state.web_auth.create_staff(owner, "s@example.com", "staff-pass", "S", ["acct"])
+    saved = web_state.save_kpi_settings(
+        {
+            "accountId": "acct",
+            "settings": {
+                "slaSeconds": 120,
+                "shifts": {
+                    staff["id"]: [{"days": [0, 1], "start": "09:00", "end": "18:00"}],
+                    "stranger": [],
+                },
+            },
+        },
+        owner,
+    )
+    assert saved["settings"]["slaSeconds"] == 120
+    assert list(saved["settings"]["shifts"]) == [staff["id"]]
+    staff_user = web_state.web_auth._find_user(staff["id"])
+    mine = web_state.kpi_settings("acct", staff_user)
+    assert mine["myShifts"][0]["start"] == "09:00" and mine["canEdit"] is False
+    with pytest.raises(WebError):
+        web_state.save_kpi_settings({"accountId": "acct", "settings": {}}, staff_user)
+
+
+def test_owner_can_share_account_with_staff(web_state):
+    auth = web_state.web_auth
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    member_token = auth.register("other@example.com", "member-pass", "Other")
+    other = auth.current_user(WebAuth.cookie_header(member_token))
+
+    staff = web_state.create_staff(
+        {
+            "email": "staff@example.com",
+            "password": "staff-pass",
+            "displayName": "Staff",
+            "accountIds": ["acct"],
+        },
+        owner,
+    )["user"]
+    assert staff["role"] == "operator" and staff["staffAccountIds"] == ["acct"]
+    staff_user = auth._find_user(staff["id"])
+    assert auth.can_access_account(staff_user, "acct") is True
+    assert auth.owns_account(staff_user, "acct") is False
+    assert auth.allowed_account_ids(staff_user) == {"acct"}
+
+    # Owners cannot hand out accounts they do not own; staff cannot build teams.
+    with pytest.raises(WebError):
+        web_state.create_staff(
+            {"email": "x@example.com", "password": "x-pass-123", "accountIds": ["acct"]},
+            other,
+        )
+    with pytest.raises(WebError):
+        web_state.team_payload(staff_user)
+    with pytest.raises(WebError):
+        web_state.update_staff({"id": staff["id"], "displayName": "Nope"}, other)
+
+    # Staff work on the shop owner's AI data.
+    assert web_state.tenant_user(staff_user)["id"] == owner["id"]
+
+    web_state.update_staff({"id": staff["id"], "accountIds": []}, owner)
+    assert auth.can_access_account(auth._find_user(staff["id"]), "acct") is False
+    web_state.delete_staff({"id": staff["id"]}, owner)
+    assert auth._find_user(staff["id"]) is None
+
+
+def test_deleting_shared_account_removes_staff_access(web_state):
+    auth = web_state.web_auth
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    staff = auth.create_staff(owner, "staff@example.com", "staff-pass", "Staff", ["acct"])
+    web_state.delete_account("acct", owner)
+    assert auth._find_user(staff["id"])["staffAccountIds"] == []
+
+
+def test_events_stream_pushes_conversation_updates(live):
+    base, state = live
+    session = requests.Session()
+    session.post(
+        f"{base}/api/auth/setup",
+        json={"email": "owner@example.com", "password": "owner-pass"},
+        timeout=5,
+    ).raise_for_status()
+    user = session.get(f"{base}/api/auth/status", timeout=5).json()["user"]
+    _seed_owned_account(state, state.web_auth._find_user(user["id"]))
+    with session.get(f"{base}/api/events?accountId=acct", stream=True, timeout=10) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        lines = response.iter_lines(chunk_size=1, decode_unicode=True)
+        assert next(lines) == "retry: 5000"
+        assert next(lines) == "event: hello"
+        state._after_inbox_fetch(
+            "acct", {"messageBoxes": [_box(_CUSTOMER_MID, (_CUSTOMER_MID, 1000))]}
+        )
+        for line in lines:
+            if line.startswith("event: conversation_updated"):
+                break
+        else:
+            pytest.fail("no conversation_updated event")
+
+
+def test_presence_and_kpi_routes_enforce_roles(live):
+    base, state = live
+    owner_session = requests.Session()
+    owner_session.post(
+        f"{base}/api/auth/setup",
+        json={"email": "owner@example.com", "password": "owner-pass"},
+        timeout=5,
+    ).raise_for_status()
+    owner = owner_session.get(f"{base}/api/auth/status", timeout=5).json()["user"]
+    _seed_owned_account(state, state.web_auth._find_user(owner["id"]))
+    created = owner_session.post(
+        f"{base}/api/team/create",
+        json={
+            "email": "staff@example.com",
+            "password": "staff-pass",
+            "displayName": "Staff",
+            "accountIds": ["acct"],
+        },
+        timeout=5,
+    )
+    assert created.status_code == 200, created.text
+    staff_session = requests.Session()
+    staff_session.post(
+        f"{base}/api/auth/login",
+        json={"email": "staff@example.com", "password": "staff-pass"},
+        timeout=5,
+    ).raise_for_status()
+    beat = staff_session.post(
+        f"{base}/api/presence", json={"state": "active", "notification": "default"}, timeout=5
+    )
+    assert beat.status_code == 200 and beat.json()["state"] == "active"
+    assert staff_session.get(f"{base}/api/kpi?accountId=acct", timeout=5).status_code == 403
+    assert staff_session.get(f"{base}/api/team", timeout=5).status_code == 403
+    report = owner_session.get(f"{base}/api/kpi?accountId=acct", timeout=5)
+    assert report.status_code == 200
+    assert {row["role"] for row in report.json()["perUser"]} == {"owner", "staff"}

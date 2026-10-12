@@ -12216,9 +12216,14 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("GET", "/api/assistant/auto-reply"): (20, 30.0),
     ("GET", "/api/assistant/auto-reply/groups"): (10, 30.0),
     ("POST", "/api/assistant/auto-reply"): (10, 30.0),
+    ("POST", "/api/presence"): (20, 60.0),
+    ("GET", "/api/events"): (12, 60.0),
+    ("GET", "/api/kpi"): (30, 60.0),
+    ("POST", "/api/team/create"): (10, 60.0),
 }
 MAX_USERS = 1000
 MAX_ACCOUNTS_PER_USER = 20
+MAX_STAFF_PER_OWNER = 50
 MAX_ASSISTANT_QUESTION_LENGTH = 4000
 MAX_ASSISTANT_ANSWER_LENGTH = 20_000
 MAX_GLOBAL_KNOWLEDGE_LENGTH = 750_000
@@ -12243,6 +12248,26 @@ MAX_AI_AUTO_REPLY_IDENTITY_CACHE = 4000
 INBOX_SNAPSHOT_TTL_SECONDS = AI_AUTO_REPLY_POLL_SECONDS
 INBOX_SNAPSHOT_CHAT_LIMIT = 1000
 INBOX_SNAPSHOT_MESSAGES_PER_BOX = 10
+# Server-side inbox refresh: fast while a browser watches the account or the AI
+# answers it, slower otherwise so KPI "waiting" rooms stay reasonably current.
+INBOX_ACTIVE_REFRESH_SECONDS = AI_AUTO_REPLY_POLL_SECONDS
+INBOX_IDLE_REFRESH_SECONDS = 30.0
+INBOX_WATCH_TTL_SECONDS = 180.0
+SSE_STREAM_MAX_SECONDS = 300.0
+SSE_KEEPALIVE_SECONDS = 15.0
+ROOM_CLOSE_AFTER_SECONDS = 24 * 3600
+MAX_TRACKED_ROOMS = 2000
+OUTGOING_ATTRIBUTION_TTL_SECONDS = 300.0
+# Outgoing messages that are not a human/AI reply to a waiting customer.
+NON_REPLY_SENDERS = frozenset({"schedule", "api"})
+PRESENCE_STATES = frozenset({"active", "standby", "away", "busy", "idle"})
+PRESENCE_OFFLINE_SECONDS = 120
+PRESENCE_SAVE_SECONDS = 60.0
+MAX_PRESENCE_SEGMENTS = 20_000
+KPI_RETENTION_DAYS = 90
+MAX_KPI_RESPONSES = 50_000
+DEFAULT_KPI_SLA_SECONDS = 300
+KPI_OVERDUE_SECONDS = 1800
 MAX_AI_AUTO_REPLIES_PER_ACCOUNT_PER_MINUTE = 20
 MAX_AI_AUTO_REPLIES_PER_CHAT_PER_MINUTE = 6
 AI_AUTO_REPLY_FALLBACK = (
@@ -12688,6 +12713,22 @@ def _now_iso() -> str:
     return _dt.datetime.now().replace(microsecond=0).isoformat()
 
 
+def _strip_account_from_user(user: Any, account_ids: set[str]) -> bool:
+    """Remove owned and shared access to ``account_ids``; True when changed."""
+    if not isinstance(user, dict):
+        return False
+    changed = False
+    for key in ("accountIds", "staffAccountIds"):
+        current = list(user.get(key) or [])
+        kept = [item for item in current if item not in account_ids]
+        if len(kept) != len(current):
+            user[key] = kept
+            changed = True
+    if changed:
+        user["updatedAt"] = _now_iso()
+    return changed
+
+
 def _safe_slug(value: str, fallback: str = "account") -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-._").lower()
     return slug[:42] or fallback
@@ -12789,26 +12830,39 @@ class FileStateStore(StateStore):
             ),
         }
 
+    def _path(self, key: str) -> str:
+        known = self.paths.get(key)
+        if known:
+            return known
+        # Dynamic keys such as ``room_state:<accountId>`` live in their own files.
+        if not re.fullmatch(r"[a-z_]{1,40}(:[A-Za-z0-9_.-]{1,120})?", key):
+            raise KeyError(key)
+        name = key.replace(":", "__")
+        return str(Path(self.config.schedules_file).parent / "kv" / f"{name}.json")
+
     def get(self, key: str, default: Any) -> Any:
         with self.lock:
-            return _read_json_file(self.paths[key], default)
+            return _read_json_file(self._path(key), default)
 
     def set(self, key: str, value: Any) -> None:
         with self.lock:
-            _write_json_file(self.paths[key], value)
+            path = self._path(key)
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            _write_json_file(path, value)
 
     def set_many(self, values: dict[str, Any]) -> None:
         with self.lock:
             backups: dict[str, bytes | None] = {}
             for key in values:
-                path = self.paths[key]
+                path = self._path(key)
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
                 backups[key] = Path(path).read_bytes() if os.path.exists(path) else None
             try:
                 for key, value in values.items():
-                    _write_json_file(self.paths[key], value)
+                    _write_json_file(self._path(key), value)
             except Exception:
                 for key, raw in reversed(list(backups.items())):
-                    path = self.paths[key]
+                    path = self._path(key)
                     try:
                         if raw is None:
                             if os.path.exists(path):
@@ -13262,12 +13316,124 @@ class WebAuth:
             return False
         if self._is_god(user):
             return True
-        return account_id in set(user.get("accountIds") or [])
+        return account_id in set(user.get("accountIds") or []) or account_id in set(
+            user.get("staffAccountIds") or []
+        )
 
     def allowed_account_ids(self, user: dict[str, Any] | None) -> set[str] | None:
         if self._is_god(user):
             return None
-        return set(user.get("accountIds") or []) if user else set()
+        if not user:
+            return set()
+        return set(user.get("accountIds") or []) | set(user.get("staffAccountIds") or [])
+
+    def owns_account(self, user: dict[str, Any] | None, account_id: str) -> bool:
+        """True when ``user`` is the account owner rather than shared staff."""
+        if not user or not account_id:
+            return False
+        if self._is_god(user):
+            return True
+        return account_id in set(user.get("accountIds") or [])
+
+    # -- team (staff sharing a LINE account with its owner) -------------------
+    def list_staff(self, owner: dict[str, Any]) -> list[dict[str, Any]]:
+        owner_id = str(owner.get("id") or "")
+        return [
+            self._public_user_strict(user)
+            for user in self.data.get("users", [])
+            if isinstance(user, dict) and str(user.get("teamOwnerId") or "") == owner_id
+        ]
+
+    def _validated_staff_accounts(
+        self, owner: dict[str, Any], account_ids: list[str]
+    ) -> list[str]:
+        stored_owner = self._find_user(str(owner.get("id") or "")) or owner
+        owned = set(stored_owner.get("accountIds") or [])
+        requested = sorted({str(item) for item in account_ids if item})
+        if any(item not in owned for item in requested):
+            raise WebError(
+                HTTPStatus.FORBIDDEN,
+                "Staff can only be given LINE accounts you own.",
+                "staff_account_not_owned",
+            )
+        return requested
+
+    def create_staff(
+        self,
+        owner: dict[str, Any],
+        username: str,
+        password: str,
+        display_name: str,
+        account_ids: list[str],
+    ) -> dict[str, Any]:
+        username = self._normalize_email(username)
+        self._validate_password(password)
+        if len(display_name) > 80:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Display name is too long.")
+        with self.lock:
+            staff_accounts = self._validated_staff_accounts(owner, account_ids)
+            if self._find_user_by_username(username):
+                raise WebError(HTTPStatus.CONFLICT, "Email already exists.", "email_exists")
+            if len(self.data.get("users", [])) >= MAX_USERS:
+                raise WebError(HTTPStatus.CONFLICT, "User limit reached.", "user_quota")
+            if len(self.list_staff(owner)) >= MAX_STAFF_PER_OWNER:
+                raise WebError(HTTPStatus.CONFLICT, "Staff limit reached.", "staff_quota")
+            user = self._new_user(username, password, "operator", [], display_name or username)
+            user["teamOwnerId"] = str(owner.get("id") or "")
+            user["staffAccountIds"] = staff_accounts
+            self.data.setdefault("users", []).append(user)
+            self.data.pop("simpleMode", None)
+            self._save()
+            return self._public_user_strict(user)
+
+    def _owned_staff(self, owner: dict[str, Any], staff_id: str) -> dict[str, Any]:
+        staff = self._find_user(staff_id)
+        if staff is None or str(staff.get("teamOwnerId") or "") != str(owner.get("id") or ""):
+            raise WebError(HTTPStatus.NOT_FOUND, "Staff member not found.")
+        return staff
+
+    def update_staff(
+        self,
+        owner: dict[str, Any],
+        staff_id: str,
+        *,
+        display_name: str | None = None,
+        account_ids: list[str] | None = None,
+        active: bool | None = None,
+        password: str | None = None,
+    ) -> dict[str, Any]:
+        with self.lock:
+            staff = self._owned_staff(owner, staff_id)
+            if display_name is not None:
+                if len(display_name) > 80:
+                    raise WebError(HTTPStatus.BAD_REQUEST, "Display name is too long.")
+                staff["displayName"] = display_name.strip() or staff["username"]
+            if account_ids is not None:
+                staff["staffAccountIds"] = self._validated_staff_accounts(owner, account_ids)
+            if active is not None:
+                staff["active"] = bool(active)
+            if password:
+                self._validate_password(password)
+                salt = secrets.token_hex(16)
+                staff["salt"] = salt
+                staff["passwordHash"] = self._hash_password(password, salt)
+                staff["passwordIterations"] = self.iterations
+            staff["updatedAt"] = _now_iso()
+            if password or active is False:
+                self._revoke_user_sessions(staff_id)
+            self._save()
+            return self._public_user_strict(staff)
+
+    def delete_staff(self, owner: dict[str, Any], staff_id: str) -> None:
+        with self.lock:
+            self._owned_staff(owner, staff_id)
+            self.data["users"] = [
+                user
+                for user in self.data.get("users", [])
+                if not isinstance(user, dict) or user.get("id") != staff_id
+            ]
+            self._revoke_user_sessions(staff_id)
+            self._save()
 
     def grant_account_access(self, user_id: str, account_id: str) -> None:
         with self.lock:
@@ -13494,10 +13660,7 @@ class WebAuth:
         with self.lock:
             changed = False
             for user in self.data.get("users", []):
-                account_ids = list(user.get("accountIds") or [])
-                if account_id in account_ids:
-                    user["accountIds"] = [item for item in account_ids if item != account_id]
-                    user["updatedAt"] = _now_iso()
+                if _strip_account_from_user(user, {account_id}):
                     changed = True
             if changed:
                 self._save()
@@ -13626,6 +13789,8 @@ class WebAuth:
                 ROLE_DEFINITIONS.get(str(user.get("role")), {}).get("permissions", [])
             ),
             "accountIds": list(user.get("accountIds") or []),
+            "staffAccountIds": list(user.get("staffAccountIds") or []),
+            "teamOwnerId": user.get("teamOwnerId") or "",
             "active": bool(user.get("active", True)),
             "createdAt": user.get("createdAt"),
             "updatedAt": user.get("updatedAt"),
@@ -14155,6 +14320,19 @@ class WebState:
         self.ai_auto_reply_identity_cache: dict[
             tuple[str, str], tuple[float, str]
         ] = {}
+        # Server-side inbox tracking shared by AI auto-reply, KPI and live events.
+        self.room_state_lock = threading.RLock()
+        self.outgoing_attribution: dict[tuple[str, str], tuple[float, str]] = {}
+        self.inbox_refreshed_at: dict[str, float] = {}
+        self.inbox_signatures: dict[str, str] = {}
+        self.inbox_events = threading.Condition()
+        self.inbox_versions: dict[str, int] = {}
+        self.inbox_watchers: dict[str, float] = {}
+        self.room_states_cache: dict[str, dict[str, dict[str, Any]]] = {}
+        self.presence_cache: list[dict[str, Any]] | None = None
+        self.presence_lock = threading.RLock()
+        self.presence_current: dict[str, dict[str, Any]] = {}
+        self.presence_saved_at: dict[str, float] = {}
         self.schedules: list[dict[str, Any]] = self._load_schedules()
         self.schedule_inflight: set[str] = set()
         self.schedule_executor = ThreadPoolExecutor(
@@ -14460,6 +14638,12 @@ class WebState:
 
     def close(self) -> None:
         self.ai_auto_reply_engine.close()
+        with self.inbox_events:
+            self.inbox_events.notify_all()
+        try:
+            self.flush_presence()
+        except Exception:
+            traceback.print_exc()
         self.scheduler.close()
         self.ai_auto_reply_executor.shutdown(wait=False, cancel_futures=True)
         self.schedule_executor.shutdown(wait=False, cancel_futures=True)
@@ -14513,6 +14697,8 @@ class WebState:
                 raise RuntimeError("LINE returned an invalid inbox response")
             with self.inbox_snapshot_lock:
                 self.inbox_snapshots[account_id] = (time.monotonic(), payload)
+            self.inbox_refreshed_at[account_id] = time.monotonic()
+            self._after_inbox_fetch(account_id, payload)
             return payload
 
     def chat_summary_map(
@@ -15167,12 +15353,7 @@ class WebState:
             account_data, removed = self.account_store.data_after_remove(account_id)
             auth_data = copy.deepcopy(self.web_auth.data)
             for auth_user in auth_data.get("users", []):
-                account_ids = list(auth_user.get("accountIds") or [])
-                if account_id in account_ids:
-                    auth_user["accountIds"] = [
-                        item for item in account_ids if item != account_id
-                    ]
-                    auth_user["updatedAt"] = _now_iso()
+                _strip_account_from_user(auth_user, {account_id})
             schedules = copy.deepcopy(self.schedules)
             for schedule in schedules:
                 if schedule.get("accountId") == account_id:
@@ -15467,6 +15648,557 @@ class WebState:
             self.store.set("bot_logs", {"logs": kept})
         return {"ok": True, "logs": [marker], "count": 1}
 
+    # -- team (staff sharing the owner's LINE accounts) -----------------------
+    def _require_team_owner(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        if not user or not self.web_auth.has_permission(user, "manage_accounts"):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied.", "forbidden")
+        if user.get("teamOwnerId"):
+            raise WebError(HTTPStatus.FORBIDDEN, "Staff cannot manage a team.", "forbidden")
+        return user
+
+    def team_payload(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        owner = self._require_team_owner(user)
+        owned = set((self.web_auth._find_user(str(owner.get("id") or "")) or owner).get(
+            "accountIds"
+        ) or [])
+        return {
+            "staff": self.web_auth.list_staff(owner),
+            "accounts": [
+                {"id": account.get("id"), "label": account.get("label")}
+                for account in self.account_store.list_accounts(owned)
+            ],
+        }
+
+    def create_staff(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+        owner = self._require_team_owner(user)
+        staff = self.web_auth.create_staff(
+            owner,
+            str(body.get("email") or body.get("username") or ""),
+            str(body.get("password") or ""),
+            str(body.get("displayName") or ""),
+            _string_list(body.get("accountIds")),
+        )
+        return {"ok": True, "user": staff, **self.team_payload(owner)}
+
+    def update_staff(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+        owner = self._require_team_owner(user)
+        staff = self.web_auth.update_staff(
+            owner,
+            str(body.get("id") or ""),
+            display_name=str(body["displayName"]) if "displayName" in body else None,
+            account_ids=(
+                _string_list(body.get("accountIds")) if "accountIds" in body else None
+            ),
+            active=bool(body.get("active")) if "active" in body else None,
+            password=str(body.get("password") or "") or None,
+        )
+        return {"ok": True, "user": staff, **self.team_payload(owner)}
+
+    def delete_staff(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+        owner = self._require_team_owner(user)
+        self.web_auth.delete_staff(owner, str(body.get("id") or ""))
+        return {"ok": True, **self.team_payload(owner)}
+
+    def tenant_user(self, user: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The shop owner whose AI data a (possibly staff) user works on."""
+        owner_id = str((user or {}).get("teamOwnerId") or "")
+        if not owner_id:
+            return user
+        owner = self.web_auth._find_user(owner_id)
+        return dict(owner) if owner else user
+
+    # -- inbox tracking: rooms, attribution and live events -------------------
+    def watch_inbox(self, account_id: str) -> None:
+        self.inbox_watchers[account_id] = time.monotonic()
+
+    def refresh_inbox_for_all_accounts(self) -> None:
+        """Keep every signed-in account's inbox fresh, not only AI-enabled ones."""
+        ai_accounts = self._ai_auto_reply_all()["accounts"]
+        now = time.monotonic()
+        for account in list(self.account_store.data.get("accounts", [])):
+            if not isinstance(account, dict):
+                continue
+            account_id = str(account.get("id") or "")
+            token_file = str(account.get("tokenFile") or "")
+            if not account_id or not token_file or not os.path.exists(token_file):
+                continue
+            if self.account_store.requires_reauth(account_id):
+                continue
+            if self.web_auth.user_for_account(account_id) is None:
+                continue
+            record = ai_accounts.get(account_id)
+            watched = (
+                now - self.inbox_watchers.get(account_id, -1e9) < INBOX_WATCH_TTL_SECONDS
+            )
+            interval = (
+                INBOX_ACTIVE_REFRESH_SECONDS
+                if watched or (isinstance(record, dict) and record.get("enabled"))
+                else INBOX_IDLE_REFRESH_SECONDS
+            )
+            if now - self.inbox_refreshed_at.get(account_id, -1e9) < interval:
+                continue
+            self.inbox_refreshed_at[account_id] = now
+            try:
+                self.inbox_message_boxes(account_id, self.get_api(account_id), force=True)
+            except Exception:
+                # A broken session is reported by the views that need it; keep
+                # polling the remaining accounts.
+                continue
+
+    def _after_inbox_fetch(self, account_id: str, payload: dict[str, Any]) -> None:
+        try:
+            raw_boxes = payload.get("messageBoxes", [])
+            boxes = [box for box in raw_boxes if isinstance(box, dict)] if isinstance(
+                raw_boxes, list
+            ) else []
+            signature = hashlib.sha1(
+                "|".join(
+                    f"{_message_box_id(box)}:{_message_box_time(box)}:"
+                    f"{_message_box_unread_count(box)}"
+                    for box in boxes
+                ).encode("utf-8")
+            ).hexdigest()
+            if self.inbox_signatures.get(account_id) != signature:
+                self.inbox_signatures[account_id] = signature
+                self._bump_inbox_version(account_id)
+            own_mid = str((self.account_store.get(account_id) or {}).get("mid") or "")
+            if own_mid:
+                self.update_room_state(account_id, own_mid, boxes)
+        except Exception:
+            traceback.print_exc()
+
+    def _bump_inbox_version(self, account_id: str) -> None:
+        with self.inbox_events:
+            self.inbox_versions[account_id] = self.inbox_versions.get(account_id, 0) + 1
+            self.inbox_events.notify_all()
+
+    def inbox_version(self, account_id: str) -> int:
+        with self.inbox_events:
+            return self.inbox_versions.get(account_id, 0)
+
+    def wait_inbox_event(
+        self, account_id: str, version: int, timeout: float
+    ) -> int | None:
+        """Block until the account's inbox version moves past ``version``."""
+        deadline = time.monotonic() + timeout
+        with self.inbox_events:
+            while True:
+                current = self.inbox_versions.get(account_id, 0)
+                if current != version:
+                    return current
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self.ai_auto_reply_engine.stop_event.is_set():
+                    return None
+                self.inbox_events.wait(remaining)
+
+    def _room_states(self, account_id: str) -> dict[str, dict[str, Any]]:
+        cached = self.room_states_cache.get(account_id)
+        if cached is not None:
+            return cached
+        raw = self.store.get(f"room_state:{account_id}", {})
+        rooms = raw.get("rooms") if isinstance(raw, dict) else None
+        rooms = (
+            {mid: room for mid, room in rooms.items() if isinstance(room, dict)}
+            if isinstance(rooms, dict)
+            else {}
+        )
+        self.room_states_cache[account_id] = rooms
+        return rooms
+
+    def _save_room_states(self, account_id: str, rooms: dict[str, Any]) -> None:
+        if len(rooms) > MAX_TRACKED_ROOMS:
+            ordered = sorted(
+                rooms.items(),
+                key=lambda item: max(
+                    _coerce_int(item[1].get("lastIncomingAt")),
+                    _coerce_int(item[1].get("lastOutgoingAt")),
+                ),
+                reverse=True,
+            )
+            rooms.clear()
+            rooms.update(ordered[:MAX_TRACKED_ROOMS])
+        self.room_states_cache[account_id] = rooms
+        self.store.set(f"room_state:{account_id}", {"rooms": rooms})
+
+    def _kpi_responses(self, account_id: str) -> list[dict[str, Any]]:
+        raw = self.store.get(f"kpi_responses:{account_id}", {})
+        items = raw.get("responses") if isinstance(raw, dict) else None
+        return [item for item in items if isinstance(item, dict)] if isinstance(
+            items, list
+        ) else []
+
+    def _record_kpi_response(self, account_id: str, record: dict[str, Any]) -> None:
+        items = self._kpi_responses(account_id)
+        items.append(record)
+        cutoff = int(time.time() * 1000) - KPI_RETENTION_DAYS * 86_400_000
+        items = [item for item in items if _coerce_int(item.get("askedAt")) >= cutoff]
+        self.store.set(
+            f"kpi_responses:{account_id}", {"responses": items[-MAX_KPI_RESPONSES:]}
+        )
+
+    def _outgoing_attribution_for(self, account_id: str, chat_mid: str) -> str:
+        entry = self.outgoing_attribution.get((account_id, chat_mid))
+        if entry and time.time() - entry[0] <= OUTGOING_ATTRIBUTION_TTL_SECONDS:
+            return entry[1]
+        return ""
+
+    def _answer_room(
+        self,
+        account_id: str,
+        chat_mid: str,
+        room: dict[str, Any],
+        answered_ms: int,
+        by: str,
+        *,
+        record: bool = True,
+    ) -> None:
+        asked_ms = _coerce_int(room.get("firstUnansweredAt")) or answered_ms
+        room["status"] = "answered"
+        room["answeredBy"] = by
+        room["answeredAt"] = answered_ms
+        room["firstUnansweredAt"] = None
+        room["lastOutgoingAt"] = max(_coerce_int(room.get("lastOutgoingAt")), answered_ms)
+        if record:
+            self._record_kpi_response(
+                account_id,
+                {
+                    "chatMid": chat_mid,
+                    "askedAt": asked_ms,
+                    "answeredAt": answered_ms,
+                    "answeredBy": by,
+                    "responseSeconds": max(0, round((answered_ms - asked_ms) / 1000)),
+                },
+            )
+
+    def note_outgoing(self, account_id: str, chat_mid: str, by: str) -> None:
+        """Remember who sent to a chat so the inbox tracker can attribute it."""
+        account_id = str(account_id or "")
+        chat_mid = str(chat_mid or "")
+        if not account_id or not chat_mid:
+            return
+        now = time.time()
+        with self.room_state_lock:
+            self.outgoing_attribution[(account_id, chat_mid)] = (now, by)
+            if len(self.outgoing_attribution) > 5000:
+                self.outgoing_attribution = {
+                    key: value
+                    for key, value in self.outgoing_attribution.items()
+                    if now - value[0] <= OUTGOING_ATTRIBUTION_TTL_SECONDS
+                }
+            if by in NON_REPLY_SENDERS or not _room_tracked(chat_mid):
+                return
+            try:
+                rooms = self._room_states(account_id)
+                room = rooms.get(chat_mid)
+                if not isinstance(room, dict) or room.get("status") != "waiting":
+                    return
+                self._answer_room(account_id, chat_mid, room, int(now * 1000), by)
+                self._save_room_states(account_id, rooms)
+            except Exception:
+                traceback.print_exc()
+
+    def update_room_state(
+        self, account_id: str, own_mid: str, boxes: list[dict[str, Any]]
+    ) -> None:
+        now_ms = int(time.time() * 1000)
+        with self.room_state_lock:
+            rooms = self._room_states(account_id)
+            changed = False
+            for box in boxes:
+                chat_mid = _message_box_id(box)
+                if not _room_tracked(chat_mid):
+                    continue
+                messages = sorted(_message_box_messages(box), key=_message_time)
+                if not messages:
+                    continue
+                room = rooms.get(chat_mid)
+                is_new = not isinstance(room, dict)
+                if is_new:
+                    room = {
+                        "status": "closed",
+                        "cursorAt": 0,
+                        "lastIncomingAt": 0,
+                        "lastOutgoingAt": 0,
+                        "firstUnansweredAt": None,
+                        "answeredBy": None,
+                        "answeredAt": None,
+                    }
+                assert room is not None
+                cursor = _coerce_int(room.get("cursorAt"))
+                start_cursor = cursor
+                for message in messages:
+                    sent_ms = _message_time(message)
+                    if sent_ms <= cursor:
+                        continue
+                    cursor = sent_ms
+                    if str(message.get("from") or "") not in {"", own_mid}:
+                        room["lastIncomingAt"] = max(
+                            _coerce_int(room.get("lastIncomingAt")), sent_ms
+                        )
+                        if room.get("status") != "waiting":
+                            room["status"] = "waiting"
+                            room["firstUnansweredAt"] = sent_ms
+                            room["answeredBy"] = None
+                            room["answeredAt"] = None
+                        continue
+                    room["lastOutgoingAt"] = max(
+                        _coerce_int(room.get("lastOutgoingAt")), sent_ms
+                    )
+                    if room.get("status") != "waiting" or sent_ms < _coerce_int(
+                        room.get("firstUnansweredAt")
+                    ):
+                        continue
+                    by = self._outgoing_attribution_for(account_id, chat_mid)
+                    if by in NON_REPLY_SENDERS:
+                        continue
+                    # History seen on first contact is context, not a KPI event.
+                    self._answer_room(
+                        account_id,
+                        chat_mid,
+                        room,
+                        sent_ms,
+                        by or "line_app",
+                        record=not is_new,
+                    )
+                if is_new or cursor != start_cursor:
+                    room["cursorAt"] = cursor
+                    rooms[chat_mid] = room
+                    changed = True
+            for chat_mid, room in rooms.items():
+                last = max(
+                    _coerce_int(room.get("lastIncomingAt")),
+                    _coerce_int(room.get("lastOutgoingAt")),
+                )
+                if (
+                    room.get("status") != "closed"
+                    and last
+                    and now_ms - last > ROOM_CLOSE_AFTER_SECONDS * 1000
+                ):
+                    if room.get("status") == "waiting":
+                        asked_ms = _coerce_int(room.get("firstUnansweredAt"))
+                        self._record_kpi_response(
+                            account_id,
+                            {
+                                "chatMid": chat_mid,
+                                "askedAt": asked_ms,
+                                "answeredAt": None,
+                                "answeredBy": None,
+                                "missed": True,
+                            },
+                        )
+                    room["status"] = "closed"
+                    room["firstUnansweredAt"] = None
+                    changed = True
+            if changed:
+                self._save_room_states(account_id, rooms)
+
+    def room_states(self, account_id: str) -> dict[str, dict[str, Any]]:
+        with self.room_state_lock:
+            return copy.deepcopy(self._room_states(account_id))
+
+    # -- staff presence (KPI screen time) -------------------------------------
+    def _presence_segments(self) -> list[dict[str, Any]]:
+        if self.presence_cache is None:
+            raw = self.store.get("presence", {})
+            items = raw.get("segments") if isinstance(raw, dict) else None
+            self.presence_cache = (
+                [item for item in items if isinstance(item, dict)]
+                if isinstance(items, list)
+                else []
+            )
+        return self.presence_cache
+
+    def _save_presence(self, now: float) -> None:
+        segments = self._presence_segments()
+        cutoff = int(now * 1000) - KPI_RETENTION_DAYS * 86_400_000
+        kept = [item for item in segments if _coerce_int(item.get("to")) >= cutoff]
+        self.presence_cache = kept[-MAX_PRESENCE_SEGMENTS:]
+        self.store.set("presence", {"segments": self.presence_cache})
+        self.presence_saved_at["*"] = now
+
+    def record_presence(
+        self, user: dict[str, Any] | None, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        user_id = str((user or {}).get("id") or "")
+        if not user_id:
+            raise WebError(HTTPStatus.UNAUTHORIZED, "User authentication required.")
+        state = str(body.get("state") or "").strip().lower()
+        if state not in PRESENCE_STATES:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Unknown presence state.", "invalid_presence")
+        notification = str(body.get("notification") or "").strip().lower()
+        if notification not in {"granted", "denied", "default", "unsupported"}:
+            notification = ""
+        now = time.time()
+        now_ms = int(now * 1000)
+        with self.presence_lock:
+            segments = self._presence_segments()
+            current = next(
+                (item for item in reversed(segments) if item.get("userId") == user_id), None
+            )
+            contiguous = bool(
+                current and now_ms - _coerce_int(current.get("to")) <= PRESENCE_OFFLINE_SECONDS * 1000
+            )
+            if current and contiguous and current.get("state") == state:
+                current["to"] = now_ms
+                if notification:
+                    current["notification"] = notification
+                segment = current
+                persist = now - self.presence_saved_at.get("*", 0) >= PRESENCE_SAVE_SECONDS
+            else:
+                if current and contiguous:
+                    current["to"] = now_ms
+                segment = {
+                    "userId": user_id,
+                    "state": state,
+                    "from": now_ms,
+                    "to": now_ms,
+                }
+                if notification:
+                    segment["notification"] = notification
+                segments.append(segment)
+                persist = True
+            self.presence_current[user_id] = {
+                "state": state,
+                "notification": notification,
+                "at": now_ms,
+            }
+            if persist:
+                self._save_presence(now)
+            return {"ok": True, "state": state, "since": segment["from"]}
+
+    def flush_presence(self) -> None:
+        with self.presence_lock:
+            if self.presence_cache is not None:
+                self._save_presence(time.time())
+
+    # -- KPI settings and aggregation ---------------------------------------
+    def _account_owner_id(self, account_id: str) -> str:
+        account = self.account_store.get(account_id) or {}
+        owner = self.web_auth.user_for_account(account_id)
+        return str(account.get("ownerId") or (owner or {}).get("id") or "")
+
+    def _kpi_settings_for_owner(self, owner_id: str) -> dict[str, Any]:
+        raw = self.store.get("kpi_settings", {"tenants": {}})
+        tenants = raw.get("tenants") if isinstance(raw, dict) else None
+        stored = tenants.get(owner_id) if isinstance(tenants, dict) else None
+        settings = _default_kpi_settings()
+        if isinstance(stored, dict):
+            settings.update(
+                {key: stored[key] for key in settings if key in stored}
+            )
+        return settings
+
+    def kpi_settings(self, account_id: str, user: dict[str, Any] | None) -> dict[str, Any]:
+        account_id = _required_account_id(account_id)
+        if not self.web_auth.can_access_account(user, account_id):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+        settings = self._kpi_settings_for_owner(self._account_owner_id(account_id))
+        user_id = str((user or {}).get("id") or "")
+        return {
+            "ok": True,
+            "accountId": account_id,
+            "settings": settings,
+            "myShifts": list((settings.get("shifts") or {}).get(user_id) or []),
+            "members": self._kpi_members(account_id),
+            "canEdit": self.web_auth.owns_account(user, account_id)
+            and self.web_auth.has_permission(user, "manage_accounts"),
+        }
+
+    def save_kpi_settings(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(str(body.get("accountId") or ""))
+        if not self.web_auth.owns_account(user, account_id) or not self.web_auth.has_permission(
+            user, "manage_accounts"
+        ):
+            raise WebError(HTTPStatus.FORBIDDEN, "Only the account owner can change KPI settings.")
+        owner_id = self._account_owner_id(account_id)
+        member_ids = {member["id"] for member in self._kpi_members(account_id)}
+        settings = _validate_kpi_settings(body.get("settings"), member_ids)
+        with self.lock:
+            raw = self.store.get("kpi_settings", {"tenants": {}})
+            root = raw if isinstance(raw, dict) else {"tenants": {}}
+            if not isinstance(root.get("tenants"), dict):
+                root["tenants"] = {}
+            root["tenants"][owner_id] = {**settings, "updatedAt": _now_iso()}
+            self.store.set("kpi_settings", root)
+        return self.kpi_settings(account_id, user)
+
+    def _kpi_members(self, account_id: str) -> list[dict[str, Any]]:
+        members = []
+        for item in self.web_auth.data.get("users", []):
+            if not isinstance(item, dict) or item.get("role") == "god":
+                continue
+            if account_id in set(item.get("accountIds") or []) or account_id in set(
+                item.get("staffAccountIds") or []
+            ):
+                members.append(
+                    {
+                        "id": str(item.get("id") or ""),
+                        "name": str(item.get("displayName") or item.get("username") or ""),
+                        "role": "owner" if account_id in set(item.get("accountIds") or []) else "staff",
+                        "active": bool(item.get("active", True)),
+                    }
+                )
+        return members
+
+    def kpi_report(
+        self,
+        account_id: str,
+        user: dict[str, Any] | None,
+        *,
+        from_ms: int,
+        to_ms: int,
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(account_id)
+        if not self.web_auth.owns_account(user, account_id) or not self.web_auth.has_permission(
+            user, "manage_accounts"
+        ):
+            raise WebError(HTTPStatus.FORBIDDEN, "Only the account owner can view KPI.")
+        now_ms = int(time.time() * 1000)
+        to_ms = min(to_ms, now_ms)
+        if from_ms >= to_ms:
+            raise WebError(HTTPStatus.BAD_REQUEST, "The KPI range is empty.", "invalid_range")
+        settings = self._kpi_settings_for_owner(self._account_owner_id(account_id))
+        members = self._kpi_members(account_id)
+        responses = [
+            item
+            for item in self._kpi_responses(account_id)
+            if from_ms <= _coerce_int(item.get("askedAt")) < to_ms
+        ]
+        with self.presence_lock:
+            segments = [dict(item) for item in self._presence_segments()]
+        rooms = self.room_states(account_id)
+        return _build_kpi_report(
+            responses=responses,
+            segments=segments,
+            rooms=rooms,
+            members=members,
+            settings=settings,
+            from_ms=from_ms,
+            to_ms=to_ms,
+            now_ms=now_ms,
+        )
+
+    def record_operator_send(
+        self, account_id: str, user: dict[str, Any] | None, to: str, kind: str
+    ) -> None:
+        user_id = str((user or {}).get("id") or "")
+        self.append_bot_log(
+            "operator_send",
+            account_id=account_id,
+            data={
+                "webUserId": user_id,
+                "webUserName": str(
+                    (user or {}).get("displayName") or (user or {}).get("username") or ""
+                ),
+                "to": to,
+                "kind": kind,
+            },
+        )
+        if user_id:
+            self.note_outgoing(account_id, to, user_id)
+
     def create_user(
         self, body: dict[str, Any], actor: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -15529,12 +16261,14 @@ class WebState:
                     current_user_id=current_user_id,
                     actor=current_user,
                 )
+                # Staff the deleted owner created lose their only reason to exist.
+                auth_data["users"] = [
+                    auth_user
+                    for auth_user in auth_data.get("users", [])
+                    if str(auth_user.get("teamOwnerId") or "") != user_id
+                ]
                 for auth_user in auth_data.get("users", []):
-                    auth_user["accountIds"] = [
-                        account_id
-                        for account_id in auth_user.get("accountIds", [])
-                        if account_id not in account_ids
-                    ]
+                    _strip_account_from_user(auth_user, account_ids)
                 account_data = copy.deepcopy(self.account_store.data)
                 kept_accounts = []
                 for account in account_data.get("accounts", []):
@@ -15987,6 +16721,7 @@ class WebState:
                 kind = str(target.get("type") or "contact")
                 try:
                     message_ids: list[Any] = []
+                    self.note_outgoing(account_id, mid, "api")
                     if text:
                         result = (
                             api.send_encrypted_text(mid, text)
@@ -17946,6 +18681,10 @@ class WebState:
             )
 
     def poll_ai_auto_replies(self) -> None:
+        try:
+            self.refresh_inbox_for_all_accounts()
+        except Exception:
+            traceback.print_exc()
         data = self._ai_auto_reply_all()
         records = [
             dict(record)
@@ -18164,6 +18903,8 @@ class WebState:
             api = self.get_api(account_id)
             with self.api_lock_for(account_id):
                 result = api.send_text(chat_mid, outbound)
+                # Inside the lock so the inbox poll sees the attribution first.
+                self.note_outgoing(account_id, chat_mid, "ai")
             message_id = result.get("id") if isinstance(result, dict) else result
             self.append_bot_log(
                 "ai.auto_reply.sent",
@@ -18574,6 +19315,7 @@ class WebState:
                     items=items,
                     log=log_bot,
                 )
+                self.note_outgoing(account_id, to, "schedule")
             message_id = message_ids[-1] if message_ids else None
             sent_at = _now_iso()
             with self.schedule_lock:
@@ -18789,6 +19531,8 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 return self._message_content(query)
             if method == "GET" and parsed.path == "/api/profile-avatar":
                 return self._profile_avatar(query)
+            if method == "GET" and parsed.path == "/api/events":
+                return self._events(query)
             data = self._dispatch(method, parsed.path, query)
             if isinstance(data, WebResult):
                 return self._json(data.data, data.status, headers=data.headers)
@@ -19107,6 +19851,42 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.delete_account(
                 str(body.get("accountId") or ""), self.current_user
             )
+        if method == "GET" and path == "/api/team":
+            return self.state.team_payload(self.current_user)
+        if method == "POST" and path == "/api/team/create":
+            return self.state.create_staff(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/team/update":
+            return self.state.update_staff(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/team/delete":
+            return self.state.delete_staff(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/presence":
+            self._require_permission("read")
+            return self.state.record_presence(self.current_user, self._read_json())
+        if method == "GET" and path == "/api/kpi/settings":
+            self._require_permission("read")
+            return self.state.kpi_settings(
+                _query_one(query, "accountId", ""), self.current_user
+            )
+        if method == "POST" and path == "/api/kpi/settings":
+            self._require_permission("manage_accounts")
+            return self.state.save_kpi_settings(self._read_json(), self.current_user)
+        if method == "GET" and path == "/api/kpi":
+            self._require_permission("manage_accounts")
+            now_ms = int(time.time() * 1000)
+            to_ms = _query_int(query, "to", now_ms, minimum=0, maximum=now_ms + 86_400_000)
+            from_ms = _query_int(
+                query,
+                "from",
+                to_ms - 86_400_000,
+                minimum=max(0, to_ms - KPI_RETENTION_DAYS * 86_400_000),
+                maximum=to_ms,
+            )
+            return self.state.kpi_report(
+                _query_one(query, "accountId", ""),
+                self.current_user,
+                from_ms=from_ms,
+                to_ms=to_ms,
+            )
         if method == "GET" and path == "/api/users":
             self._require_permission("manage_users")
             return self.state.users_payload()
@@ -19344,6 +20124,52 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         with self.state.api_lock_for(account_id):
             return fn(api)
 
+    def _events(self, query: dict[str, list[str]]) -> None:
+        """Server-sent events: push inbox changes so hidden tabs stay current."""
+        self._require_permission("read")
+        account_id = _required_account_id(_query_one(query, "accountId", ""))
+        self._require_account_access(account_id)
+        if not self.state.account_store.get(account_id):
+            raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
+        self.close_connection = True
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", "text/event-stream; charset=utf-8")
+        self.send_header("cache-control", "no-store, no-cache")
+        self.send_header("x-accel-buffering", "no")
+        self.send_header("x-content-type-options", "nosniff")
+        self.end_headers()
+
+        def emit(chunk: str) -> bool:
+            try:
+                self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.flush()
+                return True
+            except (OSError, ValueError):
+                return False
+
+        version = self.state.inbox_version(account_id)
+        hello = json.dumps({"accountId": account_id, "version": version})
+        if not emit(f"retry: 5000\nevent: hello\ndata: {hello}\n\n"):
+            return
+        deadline = time.monotonic() + SSE_STREAM_MAX_SECONDS
+        while time.monotonic() < deadline:
+            self.state.watch_inbox(account_id)
+            changed = self.state.wait_inbox_event(
+                account_id, version, min(SSE_KEEPALIVE_SECONDS, deadline - time.monotonic())
+            )
+            if self.state.ai_auto_reply_engine.stop_event.is_set():
+                return
+            if changed is None:
+                if not emit(": ping\n\n"):
+                    return
+                continue
+            version = changed
+            payload = json.dumps(
+                {"accountId": account_id, "version": version, "at": int(time.time() * 1000)}
+            )
+            if not emit(f"event: conversation_updated\ndata: {payload}\n\n"):
+                return
+
     def _contacts(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
         search = _query_one(query, "search", "").lower()
         limit = _query_int(query, "limit", 250, minimum=1, maximum=1000)
@@ -19424,6 +20250,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         server = getattr(self, "server", None)
         state = getattr(server, "state", None)
         if account_id and state is not None:
+            state.watch_inbox(account_id)
             return state.chat_summary_map(account_id, api, limit)
         return _chat_summary_map(api, limit)
 
@@ -19499,7 +20326,9 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         encrypt = bool(body.get("encrypt"))
         result = api.send_encrypted_text(to, text) if encrypt else api.send_text(to, text)
         message_id = result.get("id") if isinstance(result, dict) else result
+        _record_operator_send(self, body, to, "text")
         return {"ok": True, "messageId": message_id, "result": result}
+
 
     def _send_media(self, api: OkLine, body: dict[str, Any]) -> dict[str, Any]:
         to = _resolve_to(api, str(body.get("to") or ""))
@@ -19534,6 +20363,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         else:
             result = api.send_file(to, raw, name=name)
         message_id = result.get("id") if isinstance(result, dict) else result
+        _record_operator_send(self, body, to, "media")
         return {"ok": True, "messageId": message_id, "result": result}
 
     def _message_content(self, query: dict[str, list[str]]) -> None:
@@ -21792,6 +22622,270 @@ def _coerce_int(value: Any) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _record_operator_send(handler: Any, body: dict[str, Any], to: str, kind: str) -> None:
+    """Log which web user sent a chat message (KPI attribution)."""
+    state = getattr(getattr(handler, "server", None), "state", None)
+    account_id = str(body.get("accountId") or "").strip()
+    if state is None or not account_id:
+        return
+    state.record_operator_send(account_id, getattr(handler, "current_user", None), to, kind)
+
+
+def _room_tracked(chat_mid: str) -> bool:
+    """KPI rooms are 1:1 customer chats; groups are not tracked."""
+    return str(chat_mid or "")[:1].lower() == "u"
+
+
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _default_kpi_settings() -> dict[str, Any]:
+    return {
+        "slaSeconds": DEFAULT_KPI_SLA_SECONDS,
+        "businessHours": {
+            "enabled": False,
+            "days": [0, 1, 2, 3, 4, 5],
+            "start": "09:00",
+            "end": "18:00",
+        },
+        "shifts": {},
+        "notifyOutsideHours": False,
+    }
+
+
+def _validate_time_rule(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise WebError(HTTPStatus.BAD_REQUEST, "Shift rules must be objects.", "invalid_kpi")
+    days = raw.get("days")
+    if not isinstance(days, list) or not days:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Pick at least one day.", "invalid_kpi")
+    clean_days = sorted({int(day) for day in days if str(day).isdigit() and 0 <= int(day) <= 6})
+    start = str(raw.get("start") or "")
+    end = str(raw.get("end") or "")
+    if not clean_days or not _HHMM_RE.match(start) or not _HHMM_RE.match(end):
+        raise WebError(HTTPStatus.BAD_REQUEST, "Times must be HH:MM.", "invalid_kpi")
+    return {"days": clean_days, "start": start, "end": end}
+
+
+def _validate_kpi_settings(raw: Any, member_ids: set[str]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise WebError(HTTPStatus.BAD_REQUEST, "settings must be an object.", "invalid_kpi")
+    settings = _default_kpi_settings()
+    try:
+        sla = int(raw.get("slaSeconds", settings["slaSeconds"]))
+    except (TypeError, ValueError) as exc:
+        raise WebError(HTTPStatus.BAD_REQUEST, "SLA must be a number.", "invalid_kpi") from exc
+    settings["slaSeconds"] = max(30, min(sla, 86_400))
+    hours = raw.get("businessHours")
+    if isinstance(hours, dict):
+        rule = _validate_time_rule(hours)
+        settings["businessHours"] = {"enabled": bool(hours.get("enabled")), **rule}
+    shifts = raw.get("shifts")
+    if shifts is not None:
+        if not isinstance(shifts, dict):
+            raise WebError(HTTPStatus.BAD_REQUEST, "shifts must be an object.", "invalid_kpi")
+        clean: dict[str, list[dict[str, Any]]] = {}
+        for user_id, rules in shifts.items():
+            if str(user_id) not in member_ids or not isinstance(rules, list):
+                continue
+            if rules:
+                clean[str(user_id)] = [_validate_time_rule(rule) for rule in rules[:14]]
+        settings["shifts"] = clean
+    settings["notifyOutsideHours"] = bool(raw.get("notifyOutsideHours", False))
+    return settings
+
+
+def _time_windows(
+    rules: list[dict[str, Any]], from_ms: int, to_ms: int
+) -> list[tuple[int, int]]:
+    """Expand weekly HH:MM rules into local-time windows clipped to the range."""
+    windows: list[tuple[int, int]] = []
+    day = _dt.datetime.fromtimestamp(from_ms / 1000).date() - _dt.timedelta(days=1)
+    last_day = _dt.datetime.fromtimestamp(to_ms / 1000).date()
+    while day <= last_day:
+        for rule in rules:
+            if day.weekday() not in rule.get("days", []):
+                continue
+            sh, sm = (int(part) for part in str(rule["start"]).split(":"))
+            eh, em = (int(part) for part in str(rule["end"]).split(":"))
+            start = _dt.datetime.combine(day, _dt.time(sh, sm))
+            end = _dt.datetime.combine(day, _dt.time(eh, em))
+            if end <= start:
+                end += _dt.timedelta(days=1)
+            lo = max(from_ms, int(start.timestamp() * 1000))
+            hi = min(to_ms, int(end.timestamp() * 1000))
+            if hi > lo:
+                windows.append((lo, hi))
+        day += _dt.timedelta(days=1)
+    windows.sort()
+    merged: list[tuple[int, int]] = []
+    for lo, hi in windows:
+        if merged and lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    return merged
+
+
+def _kpi_summary(items: list[dict[str, Any]], sla_seconds: int) -> dict[str, Any]:
+    answered = [item for item in items if not item.get("missed")]
+    times = sorted(_coerce_int(item.get("responseSeconds")) for item in answered)
+    within = sum(1 for value in times if value <= sla_seconds)
+    total = len(items)
+    median = None
+    if times:
+        middle = len(times) // 2
+        median = (
+            times[middle]
+            if len(times) % 2
+            else round((times[middle - 1] + times[middle]) / 2)
+        )
+    return {
+        "chats": total,
+        "answered": len(answered),
+        "missed": total - len(answered),
+        "avgResponseSeconds": round(sum(times) / len(times)) if times else None,
+        "medianResponseSeconds": median,
+        "withinSla": within,
+        "slaPercent": round(100 * within / total, 1) if total else None,
+    }
+
+
+def _presence_totals(
+    segments: list[dict[str, Any]], windows: list[tuple[int, int]]
+) -> dict[str, int]:
+    totals = {state: 0 for state in sorted(PRESENCE_STATES)}
+    scheduled = sum(hi - lo for lo, hi in windows)
+    covered = 0
+    for segment in segments:
+        seg_lo = _coerce_int(segment.get("from"))
+        seg_hi = _coerce_int(segment.get("to"))
+        state = str(segment.get("state") or "")
+        if state not in totals or seg_hi <= seg_lo:
+            continue
+        for lo, hi in windows:
+            overlap = min(hi, seg_hi) - max(lo, seg_lo)
+            if overlap > 0:
+                totals[state] += overlap
+                covered += overlap
+    result = {state: round(value / 1000) for state, value in totals.items()}
+    result["offline"] = max(0, round((scheduled - covered) / 1000))
+    result["scheduled"] = round(scheduled / 1000)
+    return result
+
+
+def _build_kpi_report(
+    *,
+    responses: list[dict[str, Any]],
+    segments: list[dict[str, Any]],
+    rooms: dict[str, dict[str, Any]],
+    members: list[dict[str, Any]],
+    settings: dict[str, Any],
+    from_ms: int,
+    to_ms: int,
+    now_ms: int,
+) -> dict[str, Any]:
+    sla = int(settings.get("slaSeconds") or DEFAULT_KPI_SLA_SECONDS)
+    tiles = _kpi_summary(responses, sla)
+    pending = sorted(
+        (
+            {
+                "chatMid": mid,
+                "waitingSince": _coerce_int(room.get("firstUnansweredAt")),
+                "waitingSeconds": max(
+                    0, round((now_ms - _coerce_int(room.get("firstUnansweredAt"))) / 1000)
+                ),
+            }
+            for mid, room in rooms.items()
+            if room.get("status") == "waiting" and _coerce_int(room.get("firstUnansweredAt"))
+        ),
+        key=lambda item: item["waitingSince"],
+    )
+    tiles["pendingNow"] = len(pending)
+    tiles["overdueNow"] = sum(
+        1 for item in pending if item["waitingSeconds"] > KPI_OVERDUE_SECONDS
+    )
+    business = settings.get("businessHours") or {}
+    default_windows = (
+        _time_windows([business], from_ms, to_ms)
+        if business.get("enabled")
+        else [(from_ms, to_ms)]
+    )
+    shifts = settings.get("shifts") or {}
+    member_ids = {member["id"] for member in members}
+    per_user = []
+    timeline = []
+    for member in members:
+        member_segments = [item for item in segments if item.get("userId") == member["id"]]
+        rules = shifts.get(member["id"])
+        windows = _time_windows(rules, from_ms, to_ms) if rules else default_windows
+        per_user.append(
+            {
+                **member,
+                **_kpi_summary(
+                    [item for item in responses if item.get("answeredBy") == member["id"]],
+                    sla,
+                ),
+                "presence": _presence_totals(member_segments, windows),
+                "hasShift": bool(rules),
+            }
+        )
+        clipped = [
+            {
+                "state": item.get("state"),
+                "from": max(from_ms, _coerce_int(item.get("from"))),
+                "to": min(to_ms, _coerce_int(item.get("to"))),
+            }
+            for item in member_segments
+            if _coerce_int(item.get("to")) > from_ms and _coerce_int(item.get("from")) < to_ms
+        ]
+        timeline.append({"userId": member["id"], "name": member["name"], "segments": clipped[-500:]})
+    ai_items = [item for item in responses if item.get("answeredBy") == "ai"]
+    app_items = [item for item in responses if item.get("answeredBy") == "line_app"]
+    human_items = [item for item in responses if item.get("answeredBy") in member_ids]
+    daily_map: dict[str, list[dict[str, Any]]] = {}
+    for item in responses:
+        key = _dt.datetime.fromtimestamp(_coerce_int(item.get("askedAt")) / 1000).date().isoformat()
+        daily_map.setdefault(key, []).append(item)
+    daily = [
+        {"date": key, **_kpi_summary(items, sla)} for key, items in sorted(daily_map.items())
+    ]
+
+    def states_at(moment: int) -> set[str]:
+        return {
+            str(item.get("state"))
+            for item in segments
+            if item.get("userId") in member_ids
+            and _coerce_int(item.get("from")) <= moment <= _coerce_int(item.get("to"))
+        }
+
+    away_alerts = 0
+    for item in responses:
+        states = states_at(_coerce_int(item.get("askedAt")))
+        if "away" in states and not states & {"active", "standby", "busy"}:
+            away_alerts += 1
+    return {
+        "ok": True,
+        "from": from_ms,
+        "to": to_ms,
+        "slaSeconds": sla,
+        "tiles": tiles,
+        "perUser": per_user,
+        "ai": _kpi_summary(ai_items, sla),
+        "lineApp": _kpi_summary(app_items, sla),
+        "split": {
+            "ai": len(ai_items),
+            "human": len(human_items),
+            "lineApp": len(app_items),
+            "missed": sum(1 for item in responses if item.get("missed")),
+        },
+        "daily": daily,
+        "pendingNow": pending[:200],
+        "presence": timeline,
+        "awayAlerts": away_alerts,
+    }
 
 
 def _message_box_id(box: dict[str, Any]) -> str:
