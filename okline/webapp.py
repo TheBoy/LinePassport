@@ -61,6 +61,12 @@ from .exceptions import LineAuthError, LineLoginRequired
 from .hmac_signer import LtsmBridge
 from .obs import encode_message_talk_meta
 from .transport import LineConfig
+from .webpush import (
+    VapidKeys,
+    WebPushError,
+    push_endpoint_allowed,
+    send_web_push,
+)
 
 INDEX_HTML = r"""<!doctype html>
 <html lang="en">
@@ -12100,6 +12106,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
           localStorage.setItem("linepassport.notifications", "on");
           syncNotificationButton();
         }
+        ensurePushSubscription();
       } else if (state.notificationsEnabled) {
         state.notificationsEnabled = false;
         syncNotificationButton();
@@ -12131,12 +12138,47 @@ Response guidance: Say goodbye politely and invite the person to return with mor
 
     function renderNotifySettings() {
       const permission = notificationPermission();
-      $("notifySettingsState").textContent = t("notify.state_" + permission);
+      $("notifySettingsState").textContent = t("notify.state_" + permission)
+        + (permission === "granted" ? " " + t(state.pushSubscribed ? "notify.push_on" : "notify.push_off") : "");
       $("notifySettingsEnable").classList.toggle("hidden", permission !== "default");
       $("notifySettingsTest").disabled = permission !== "granted";
       try {
         $("notifyOutsideShift").checked = localStorage.getItem(NOTIFY_OUTSIDE_SHIFT_KEY) === "on";
       } catch (_) { /* storage unavailable */ }
+    }
+
+    function base64UrlToBytes(value) {
+      const padded = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+      const raw = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4));
+      return Uint8Array.from(raw, (char) => char.charCodeAt(0));
+    }
+
+    // Web Push reaches staff even when no LinePassport tab is open (B7).
+    async function ensurePushSubscription() {
+      if (state.pushSubscribed || notificationPermission() !== "granted" || !state.currentUser) return;
+      if (!("serviceWorker" in navigator) || typeof PushManager === "undefined") return;
+      try {
+        const registration = state.notificationWorker || await navigator.serviceWorker.ready;
+        if (!registration || !registration.pushManager) return;
+        const {publicKey} = await api("/api/push/key");
+        const applicationServerKey = base64UrlToBytes(publicKey);
+        let subscription = await registration.pushManager.getSubscription();
+        const currentKey = subscription && subscription.options && subscription.options.applicationServerKey;
+        if (subscription && currentKey && new Uint8Array(currentKey).join() !== applicationServerKey.join()) {
+          await subscription.unsubscribe();
+          subscription = null;
+        }
+        if (!subscription) {
+          subscription = await registration.pushManager.subscribe({userVisibleOnly: true, applicationServerKey});
+        }
+        const json = subscription.toJSON();
+        await post("/api/push/subscribe", {endpoint: json.endpoint, keys: json.keys});
+        state.pushSubscribed = true;
+        state.pushEndpoint = json.endpoint;
+        renderNotifySettings();
+      } catch (_) {
+        /* Push is optional: in-page notifications still work. */
+      }
     }
 
     async function enableNotificationsFromBanner() {
@@ -13982,6 +14024,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "notify.state_denied": {th: "ถูกบล็อก — ปลดได้ที่ไอคอนแม่กุญแจข้างช่อง URL", en: "Blocked — allow it from the lock icon next to the address bar."},
       "notify.state_unsupported": {th: "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน", en: "This browser doesn't support notifications."},
       "notify.test": {th: "ทดลองแจ้งเตือน", en: "Send a test"},
+      "notify.push_on": {th: "· แจ้งเตือนได้แม้ปิดหน้าเว็บ", en: "· works even with this page closed"},
+      "notify.push_off": {th: "· แจ้งเตือนเฉพาะตอนเปิดหน้าเว็บ (เบราว์เซอร์นี้ยังไม่รองรับการแจ้งเตือนเมื่อปิดหน้า)", en: "· only while this page is open (this browser can't notify when it's closed)"},
       "notify.test_title": {th: "ทดลองแจ้งเตือน LinePassport", en: "LinePassport test notification"},
       "notify.test_body": {th: "ถ้าเห็นข้อความนี้ แปลว่าแจ้งเตือนใช้งานได้", en: "If you can see this, notifications work."},
       "notify.outside_shift": {th: "แจ้งเตือนฉันนอกกะด้วย", en: "Also notify me outside my shift"},
@@ -14316,6 +14360,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     renderProfile = function (status) {
       baseRenderProfile(status);
       renderAccountCard();
+      ensurePushSubscription();
       const accountId = state.activeAccountId || selectedAccountId();
       if (status && status.authenticated && accountId) {
         startEventStream();
@@ -14335,6 +14380,15 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       state.kpiSettings = null;
       renderAccountCard();
       renderFreshness();
+    };
+    const baseWebLogout = webLogout;
+    webLogout = async function () {
+      if (state.pushEndpoint) {
+        try { await post("/api/push/unsubscribe", {endpoint: state.pushEndpoint}); } catch (_) { /* best effort */ }
+        state.pushSubscribed = false;
+        state.pushEndpoint = "";
+      }
+      return baseWebLogout();
     };
     const baseApplyPermissions = applyPermissions;
     applyPermissions = function () {
@@ -14532,6 +14586,26 @@ Response guidance: Say goodbye politely and invite the person to return with mor
 """
 
 SERVICE_WORKER_JS = r"""
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch (_) {
+    data = {};
+  }
+  const lang = String((self.navigator && self.navigator.language) || "th").toLowerCase();
+  const thai = lang.startsWith("th");
+  const title = (thai ? data.title : data.titleEn) || data.title || "LinePassport";
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: (thai ? data.body : data.bodyEn) || data.body || "",
+      tag: data.tag || "linepassport",
+      renotify: false,
+      requireInteraction: Boolean(data.requireInteraction),
+      data: {accountId: data.accountId || "", mid: data.mid || "", name: ""}
+    })
+  );
+});
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};
@@ -15723,6 +15797,7 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("GET", "/api/assistant/auto-reply/groups"): (10, 30.0),
     ("POST", "/api/assistant/auto-reply"): (10, 30.0),
     ("POST", "/api/presence"): (20, 60.0),
+    ("POST", "/api/push/subscribe"): (10, 60.0),
     ("GET", "/api/events"): (12, 60.0),
     ("GET", "/api/kpi"): (30, 60.0),
     ("POST", "/api/team/create"): (10, 60.0),
@@ -15759,6 +15834,21 @@ INBOX_SNAPSHOT_MESSAGES_PER_BOX = 10
 # answers it, slower otherwise so KPI "waiting" rooms stay reasonably current.
 INBOX_ACTIVE_REFRESH_SECONDS = AI_AUTO_REPLY_POLL_SECONDS
 INBOX_IDLE_REFRESH_SECONDS = 30.0
+# LINE's operation stream (the Chrome client's fetchOps over SSE) pushes a
+# notice for every new message; while it is healthy getMessageBoxes polling only
+# runs as a once-a-minute safety net.
+OPS_HEALTHY_SECONDS = 120.0
+OPS_FALLBACK_REFRESH_SECONDS = 60.0
+OPS_FAILURE_LIMIT = 3
+OPS_DISABLE_SECONDS = 900.0
+OPS_REFRESH_DEBOUNCE_SECONDS = 0.5
+# Web Push (no LinePassport page open): same policy as in-page notifications.
+PUSH_ROOM_COOLDOWN_SECONDS = 120.0
+PUSH_DIGEST_WINDOW_SECONDS = 60.0
+PUSH_DIGEST_THRESHOLD = 3
+PUSH_AI_GRACE_SECONDS = 30.0
+MAX_PUSH_SUBSCRIPTIONS_PER_USER = 10
+DEFAULT_VAPID_SUBJECT = "mailto:linepassport@localhost"
 INBOX_WATCH_TTL_SECONDS = 180.0
 SSE_STREAM_MAX_SECONDS = 300.0
 SSE_KEEPALIVE_SECONDS = 15.0
@@ -17777,6 +17867,54 @@ class ScheduleEngine:
                 traceback.print_exc()
 
 
+class OpsWatcher:
+    """Follows one account's LINE operation stream and refreshes its inbox."""
+
+    def __init__(self, state: WebState, account_id: str) -> None:
+        self.state = state
+        self.account_id = account_id
+        self.stop_event = threading.Event()
+        self.connected = False
+        self.last_event_at = 0.0
+        self.failures = 0
+        self.disabled_until = 0.0
+        self.thread = threading.Thread(
+            target=self._run, name=f"linepassport-ops-{account_id[:12]}", daemon=True
+        )
+        self.thread.start()
+
+    def healthy(self) -> bool:
+        return self.connected and time.monotonic() - self.last_event_at < OPS_HEALTHY_SECONDS
+
+    def stop(self) -> None:
+        self.stop_event.set()
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            if time.monotonic() < self.disabled_until:
+                self.stop_event.wait(30.0)
+                continue
+            try:
+                api = self.state.get_api(self.account_id)
+                for event in api.ops.stream(reconnect=False):
+                    if self.stop_event.is_set():
+                        return
+                    self.connected = True
+                    self.failures = 0
+                    self.last_event_at = time.monotonic()
+                    if event.event not in {"ping", "connInfoRevision"}:
+                        self.state.request_inbox_refresh(self.account_id)
+            except Exception:
+                self.failures += 1
+            finally:
+                self.connected = False
+            if self.failures >= OPS_FAILURE_LIMIT:
+                # Fall back to plain polling for a while instead of hammering LINE.
+                self.failures = 0
+                self.disabled_until = time.monotonic() + OPS_DISABLE_SECONDS
+            self.stop_event.wait(min(60.0, 5.0 * self.failures) or 2.0)
+
+
 class AiAutoReplyEngine:
     def __init__(self, state: WebState) -> None:
         self.state = state
@@ -17835,6 +17973,21 @@ class WebState:
         self.inbox_events = threading.Condition()
         self.inbox_versions: dict[str, int] = {}
         self.inbox_watchers: dict[str, float] = {}
+        self.ops_watchers: dict[str, OpsWatcher] = {}
+        self.ops_refresh_pending: set[str] = set()
+        self.ops_refresh_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="linepassport-ops-refresh"
+        )
+        self.push_lock = threading.RLock()
+        self.vapid_keys: VapidKeys | None = None
+        self.push_subscriptions_cache: list[dict[str, Any]] | None = None
+        self.push_pending: dict[tuple[str, str], float] = {}
+        self.push_last_sent: dict[tuple[str, str, str], float] = {}
+        self.push_recent: dict[str, list[float]] = {}
+        self.push_digest_at: dict[str, float] = {}
+        self.push_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="linepassport-push"
+        )
         self.room_states_cache: dict[str, dict[str, dict[str, Any]]] = {}
         self.presence_cache: list[dict[str, Any]] | None = None
         self.presence_lock = threading.RLock()
@@ -18145,6 +18298,10 @@ class WebState:
 
     def close(self) -> None:
         self.ai_auto_reply_engine.close()
+        for watcher in list(self.ops_watchers.values()):
+            watcher.stop()
+        self.ops_refresh_executor.shutdown(wait=False, cancel_futures=True)
+        self.push_executor.shutdown(wait=False, cancel_futures=True)
         with self.inbox_events:
             self.inbox_events.notify_all()
         try:
@@ -18175,14 +18332,17 @@ class WebState:
         api: OkLine,
         *,
         force: bool = False,
+        max_age: float | None = None,
     ) -> dict[str, Any]:
+        ttl = INBOX_SNAPSHOT_TTL_SECONDS if max_age is None else max_age
+
         def fresh_snapshot() -> dict[str, Any] | None:
             with self.inbox_snapshot_lock:
                 cached = self.inbox_snapshots.get(account_id)
                 if cached is None:
                     return None
                 fetched_at, payload = cached
-                if time.monotonic() - fetched_at >= INBOX_SNAPSHOT_TTL_SECONDS:
+                if time.monotonic() - fetched_at >= ttl:
                     return None
                 return payload
 
@@ -18849,6 +19009,7 @@ class WebState:
         }
 
     def _commit_account_removal(self, account_id: str) -> dict[str, Any]:
+        self.stop_ops_watcher(account_id)
         with (
             self.lock,
             self.web_auth.lock,
@@ -19222,6 +19383,7 @@ class WebState:
         """Keep every signed-in account's inbox fresh, not only AI-enabled ones."""
         ai_accounts = self._ai_auto_reply_all()["accounts"]
         now = time.monotonic()
+        eligible: set[str] = set()
         for account in list(self.account_store.data.get("accounts", [])):
             if not isinstance(account, dict):
                 continue
@@ -19233,15 +19395,18 @@ class WebState:
                 continue
             if self.web_auth.user_for_account(account_id) is None:
                 continue
+            eligible.add(account_id)
+            self._ensure_ops_watcher(account_id)
             record = ai_accounts.get(account_id)
             watched = (
                 now - self.inbox_watchers.get(account_id, -1e9) < INBOX_WATCH_TTL_SECONDS
             )
-            interval = (
-                INBOX_ACTIVE_REFRESH_SECONDS
-                if watched or (isinstance(record, dict) and record.get("enabled"))
-                else INBOX_IDLE_REFRESH_SECONDS
-            )
+            if self.ops_stream_healthy(account_id):
+                interval = OPS_FALLBACK_REFRESH_SECONDS
+            elif watched or (isinstance(record, dict) and record.get("enabled")):
+                interval = INBOX_ACTIVE_REFRESH_SECONDS
+            else:
+                interval = INBOX_IDLE_REFRESH_SECONDS
             if now - self.inbox_refreshed_at.get(account_id, -1e9) < interval:
                 continue
             self.inbox_refreshed_at[account_id] = now
@@ -19251,6 +19416,318 @@ class WebState:
                 # A broken session is reported by the views that need it; keep
                 # polling the remaining accounts.
                 continue
+        for account_id in set(self.ops_watchers) - eligible:
+            # Signed out, deleted or needing a new QR login: stop streaming.
+            self.stop_ops_watcher(account_id)
+        try:
+            self.process_push_queue()
+        except Exception:
+            traceback.print_exc()
+
+    def _ensure_ops_watcher(self, account_id: str) -> None:
+        watcher = self.ops_watchers.get(account_id)
+        if watcher is not None and watcher.thread.is_alive():
+            return
+        try:
+            api = self.get_api(account_id)
+        except Exception:
+            return
+        if not hasattr(getattr(api, "ops", None), "stream"):
+            return
+        self.ops_watchers[account_id] = OpsWatcher(self, account_id)
+
+    def stop_ops_watcher(self, account_id: str) -> None:
+        watcher = self.ops_watchers.pop(account_id, None)
+        if watcher is not None:
+            watcher.stop()
+
+    def ops_stream_healthy(self, account_id: str) -> bool:
+        watcher = self.ops_watchers.get(account_id)
+        return bool(watcher and watcher.healthy())
+
+    def inbox_max_age(self, account_id: str) -> float:
+        """How stale a cached inbox may be: longer while LINE pushes changes."""
+        if self.ops_stream_healthy(account_id):
+            return OPS_FALLBACK_REFRESH_SECONDS
+        return INBOX_SNAPSHOT_TTL_SECONDS
+
+    def request_inbox_refresh(self, account_id: str) -> None:
+        """Called by the operation stream; coalesces bursts into one fetch."""
+        with self.room_state_lock:
+            if account_id in self.ops_refresh_pending:
+                return
+            self.ops_refresh_pending.add(account_id)
+        try:
+            self.ops_refresh_executor.submit(self._ops_refresh, account_id)
+        except RuntimeError:
+            with self.room_state_lock:
+                self.ops_refresh_pending.discard(account_id)
+
+    def _ops_refresh(self, account_id: str) -> None:
+        time.sleep(OPS_REFRESH_DEBOUNCE_SECONDS)
+        with self.room_state_lock:
+            self.ops_refresh_pending.discard(account_id)
+        try:
+            self.inbox_message_boxes(account_id, self.get_api(account_id), force=True)
+        except Exception:
+            # The regular refresh loop retries; never kill the executor thread.
+            return
+
+    # -- Web Push for staff without an open page (B7) --------------------------
+    def _vapid(self) -> VapidKeys:
+        with self.push_lock:
+            if self.vapid_keys is None:
+                self.vapid_keys = VapidKeys.load_or_create(
+                    Path(self.config.state_dir) / ".vapid_private.pem"
+                )
+            return self.vapid_keys
+
+    def push_public_key(self) -> dict[str, Any]:
+        return {"ok": True, "publicKey": self._vapid().public_key_b64}
+
+    def _push_subscriptions(self) -> list[dict[str, Any]]:
+        with self.push_lock:
+            if self.push_subscriptions_cache is None:
+                raw = self.store.get("push_subscriptions", {"subscriptions": []})
+                items = raw.get("subscriptions") if isinstance(raw, dict) else None
+                self.push_subscriptions_cache = (
+                    [item for item in items if isinstance(item, dict)]
+                    if isinstance(items, list)
+                    else []
+                )
+            return list(self.push_subscriptions_cache)
+
+    def _save_push_subscriptions(self, items: list[dict[str, Any]]) -> None:
+        with self.push_lock:
+            self.store.set("push_subscriptions", {"subscriptions": items})
+            self.push_subscriptions_cache = list(items)
+
+    def save_push_subscription(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        user_id = str((user or {}).get("id") or "")
+        if not user_id:
+            raise WebError(HTTPStatus.UNAUTHORIZED, "User authentication required.")
+        endpoint = str(body.get("endpoint") or "").strip()
+        raw_keys = body.get("keys")
+        keys: dict[str, Any] = raw_keys if isinstance(raw_keys, dict) else {}
+        p256dh = str(keys.get("p256dh") or "").strip()
+        auth = str(keys.get("auth") or "").strip()
+        if len(endpoint) > 1024 or not push_endpoint_allowed(endpoint):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST, "Unsupported push service.", "push_endpoint_invalid"
+            )
+        if not re.fullmatch(r"[A-Za-z0-9_-]{80,100}", p256dh) or not re.fullmatch(
+            r"[A-Za-z0-9_-]{16,32}", auth
+        ):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST, "Push subscription keys are invalid.", "push_keys_invalid"
+            )
+        with self.push_lock:
+            items = [item for item in self._push_subscriptions() if item.get("endpoint") != endpoint]
+            mine = [item for item in items if item.get("userId") == user_id]
+            if len(mine) >= MAX_PUSH_SUBSCRIPTIONS_PER_USER:
+                oldest = min(mine, key=lambda item: str(item.get("createdAt") or ""))
+                items.remove(oldest)
+            items.append(
+                {
+                    "id": uuid.uuid4().hex,
+                    "userId": user_id,
+                    "endpoint": endpoint,
+                    "p256dh": p256dh,
+                    "auth": auth,
+                    "createdAt": _now_iso(),
+                }
+            )
+            self._save_push_subscriptions(items)
+        return {"ok": True}
+
+    def remove_push_subscription(
+        self, endpoint: str, user: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        user_id = str((user or {}).get("id") or "")
+        with self.push_lock:
+            items = self._push_subscriptions()
+            kept = [
+                item
+                for item in items
+                if not (
+                    item.get("endpoint") == endpoint
+                    and (not user_id or item.get("userId") == user_id)
+                )
+            ]
+            if len(kept) != len(items):
+                self._save_push_subscriptions(kept)
+        return {"ok": True}
+
+    def _ai_covers_contacts(self, account_id: str) -> bool:
+        record = self._ai_auto_reply_record(account_id)
+        if not record.get("enabled") or not record.get("contactsEnabled"):
+            return False
+        owner = self.web_auth.user_for_account(account_id)
+        return bool(self._assistant_settings_for(self._global_ai_all(), owner).get("configured"))
+
+    def queue_push_for_rooms(self, account_id: str, chat_mids: list[str]) -> None:
+        """New customer chats waiting; the AI gets a moment to answer first."""
+        if not self._push_subscriptions():
+            return
+        delay = PUSH_AI_GRACE_SECONDS if self._ai_covers_contacts(account_id) else 0.0
+        due = time.time() + delay
+        with self.push_lock:
+            for chat_mid in chat_mids:
+                self.push_pending.setdefault((account_id, chat_mid), due)
+
+    def _push_recipients(self, account_id: str) -> list[tuple[str, list[dict[str, Any]]]]:
+        subscriptions = self._push_subscriptions()
+        if not subscriptions:
+            return []
+        settings = self._kpi_settings_for_owner(self._account_owner_id(account_id))
+        now = time.time()
+        now_ms = int(now * 1000)
+        recipients = []
+        for member in self._kpi_members(account_id):
+            if not member.get("active"):
+                continue
+            user_id = member["id"]
+            mine = [item for item in subscriptions if item.get("userId") == user_id]
+            if not mine:
+                continue
+            current = self.presence_current.get(user_id)
+            if current and now_ms - _coerce_int(current.get("at")) <= PRESENCE_OFFLINE_SECONDS * 1000:
+                # A LinePassport page is open; it shows its own notifications.
+                continue
+            if not settings.get("notifyOutsideHours"):
+                rules = (settings.get("shifts") or {}).get(user_id)
+                hours = settings.get("businessHours") or {}
+                if not rules and hours.get("enabled"):
+                    rules = [hours]
+                if rules and not _time_windows(rules, now_ms, now_ms + 1):
+                    continue
+            recipients.append((user_id, mine))
+        return recipients
+
+    def process_push_queue(self) -> None:
+        if not self.push_pending and not self._push_subscriptions():
+            return
+        now = time.time()
+        with self.push_lock:
+            due = [key for key, at in self.push_pending.items() if at <= now]
+            for key in due:
+                self.push_pending.pop(key, None)
+        by_account: dict[str, list[str]] = {}
+        for account_id, chat_mid in due:
+            room = self.room_states(account_id).get(chat_mid) or {}
+            if room.get("status") == "waiting":
+                by_account.setdefault(account_id, []).append(chat_mid)
+        for account_id, chat_mids in by_account.items():
+            self._dispatch_push(account_id, chat_mids)
+        # One louder reminder for chats still waiting past the reply target.
+        if not self._push_subscriptions():
+            return
+        for account_id in list(self.room_states_cache):
+            sla = int(
+                self._kpi_settings_for_owner(self._account_owner_id(account_id)).get(
+                    "slaSeconds"
+                )
+                or DEFAULT_KPI_SLA_SECONDS
+            )
+            overdue = []
+            with self.room_state_lock:
+                rooms = self._room_states(account_id)
+                for chat_mid, room in rooms.items():
+                    asked = _coerce_int(room.get("firstUnansweredAt"))
+                    if (
+                        room.get("status") == "waiting"
+                        and asked
+                        and not room.get("pushEscalated")
+                        and now * 1000 - asked > sla * 1000
+                    ):
+                        room["pushEscalated"] = True
+                        overdue.append(chat_mid)
+                if overdue:
+                    self._save_room_states(account_id, rooms)
+            if overdue:
+                self._dispatch_push(account_id, overdue, escalate=True)
+
+    def _dispatch_push(
+        self, account_id: str, chat_mids: list[str], *, escalate: bool = False
+    ) -> None:
+        account = self.account_store.get(account_id) or {}
+        label = str(account.get("label") or "LINE")
+        now = time.time()
+        for user_id, subscriptions in self._push_recipients(account_id):
+            with self.push_lock:
+                fresh = [
+                    mid
+                    for mid in chat_mids
+                    if escalate
+                    or now - self.push_last_sent.get((user_id, account_id, mid), 0)
+                    >= PUSH_ROOM_COOLDOWN_SECONDS
+                ]
+                if not fresh:
+                    continue
+                recent = [
+                    at
+                    for at in self.push_recent.get(user_id, [])
+                    if now - at < PUSH_DIGEST_WINDOW_SECONDS
+                ]
+                for mid in fresh:
+                    self.push_last_sent[(user_id, account_id, mid)] = now
+                if not escalate and len(recent) + len(fresh) > PUSH_DIGEST_THRESHOLD:
+                    if now - self.push_digest_at.get(user_id, 0) < PUSH_DIGEST_WINDOW_SECONDS:
+                        continue
+                    self.push_digest_at[user_id] = now
+                    waiting = sum(
+                        1
+                        for room in self.room_states(account_id).values()
+                        if room.get("status") == "waiting"
+                    )
+                    payloads: list[dict[str, Any]] = [
+                        {
+                            "title": f"ลูกค้า {waiting} คนรอตอบ",
+                            "body": f"{label} · เปิด LinePassport เพื่อตอบ",
+                            "titleEn": f"{waiting} customers waiting",
+                            "bodyEn": f"{label} · open LinePassport to reply",
+                            "tag": "linepassport:digest",
+                            "accountId": account_id,
+                        }
+                    ]
+                else:
+                    recent.extend(now for _ in fresh)
+                    payloads = [
+                        {
+                            "title": "ลูกค้ารอตอบนานแล้ว" if escalate else "ลูกค้าทักมาใหม่",
+                            "body": f"{label} · "
+                            + ("รอเกินเวลาที่ตั้งไว้" if escalate else "เปิด LinePassport เพื่อตอบ"),
+                            "titleEn": "A customer has been waiting"
+                            if escalate
+                            else "New customer message",
+                            "bodyEn": f"{label} · "
+                            + ("past the reply target" if escalate else "open LinePassport to reply"),
+                            "tag": f"linepassport:{account_id}:{mid}",
+                            "accountId": account_id,
+                            "mid": mid,
+                            "requireInteraction": escalate,
+                        }
+                        for mid in fresh
+                    ]
+                self.push_recent[user_id] = recent
+            for subscription in subscriptions:
+                for payload in payloads:
+                    try:
+                        self.push_executor.submit(self._deliver_push, subscription, payload)
+                    except RuntimeError:
+                        return
+
+    def _deliver_push(self, subscription: dict[str, Any], payload: dict[str, Any]) -> None:
+        subject = str(os.getenv("LINEPASSPORT_VAPID_SUBJECT") or DEFAULT_VAPID_SUBJECT)
+        try:
+            send_web_push(subscription, payload, self._vapid(), subject=subject)
+        except WebPushError as exc:
+            if exc.subscription_gone:
+                self.remove_push_subscription(str(subscription.get("endpoint") or ""))
+        except Exception:
+            traceback.print_exc()
 
     def _after_inbox_fetch(self, account_id: str, payload: dict[str, Any]) -> None:
         try:
@@ -19408,6 +19885,7 @@ class WebState:
         self, account_id: str, own_mid: str, boxes: list[dict[str, Any]]
     ) -> None:
         now_ms = int(time.time() * 1000)
+        newly_waiting: list[str] = []
         with self.room_state_lock:
             rooms = self._room_states(account_id)
             changed = False
@@ -19431,6 +19909,7 @@ class WebState:
                         "answeredAt": None,
                     }
                 assert room is not None
+                was_waiting = room.get("status") == "waiting"
                 cursor = _coerce_int(room.get("cursorAt"))
                 start_cursor = cursor
                 for message in messages:
@@ -19471,6 +19950,9 @@ class WebState:
                     room["cursorAt"] = cursor
                     rooms[chat_mid] = room
                     changed = True
+                if not is_new and not was_waiting and room.get("status") == "waiting":
+                    room["pushEscalated"] = False
+                    newly_waiting.append(chat_mid)
             for chat_mid, room in rooms.items():
                 last = max(
                     _coerce_int(room.get("lastIncomingAt")),
@@ -19498,6 +19980,8 @@ class WebState:
                     changed = True
             if changed:
                 self._save_room_states(account_id, rooms)
+        if newly_waiting:
+            self.queue_push_for_rooms(account_id, newly_waiting)
 
     def room_states(self, account_id: str) -> dict[str, dict[str, Any]]:
         with self.room_state_lock:
@@ -22608,7 +23092,9 @@ class WebState:
         enabled_at_ms = _coerce_int(record.get("enabledAtMs"))
         api = self.get_api(account_id)
         with self.api_lock_for(account_id):
-            boxes = self.inbox_message_boxes(account_id, api)
+            boxes = self.inbox_message_boxes(
+                account_id, api, max_age=self.inbox_max_age(account_id)
+            )
             own_mid = str(account.get("mid") or "")
             if not own_mid:
                 profile = api.get_profile()
@@ -23807,6 +24293,18 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.update_staff(self._read_json(), self.current_user)
         if method == "POST" and path == "/api/team/delete":
             return self.state.delete_staff(self._read_json(), self.current_user)
+        if method == "GET" and path == "/api/push/key":
+            self._require_permission("read")
+            return self.state.push_public_key()
+        if method == "POST" and path == "/api/push/subscribe":
+            self._require_permission("read")
+            return self.state.save_push_subscription(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/push/unsubscribe":
+            self._require_permission("read")
+            body = self._read_json()
+            return self.state.remove_push_subscription(
+                str(body.get("endpoint") or ""), self.current_user
+            )
         if method == "POST" and path == "/api/presence":
             self._require_permission("read")
             return self.state.record_presence(self.current_user, self._read_json())

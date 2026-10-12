@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import threading
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -759,3 +760,106 @@ def test_add_account_goes_straight_to_qr():
     assert "startLogin().catch(toastError);" in block
     assert 'id="loginAdvancedDetails"' in INDEX_HTML
     assert ".login-panel.qr-first .login-steps" in INDEX_HTML
+
+
+# -- B6: LINE operation stream --------------------------------------------------
+class _OpsEvent:
+    def __init__(self, event):
+        self.event = event
+
+
+class _OpsFakeApi:
+    def __init__(self, events=None, fail=False):
+        self.events = events or []
+        self.fail = fail
+        self.box_calls = 0
+        self.stream_calls = 0
+        self.release = threading.Event()
+        self.ops = self
+
+    def stream(self, *, reconnect=True):
+        self.stream_calls += 1
+        if self.fail:
+            raise RuntimeError("SSE open failed: HTTP 500")
+        for name in self.events:
+            yield _OpsEvent(name)
+        # Keep the stream open until the test is done, like the real gateway.
+        self.release.wait(5)
+
+    def get_message_boxes(self, *, limit=100, last_messages_per_box=5):
+        self.box_calls += 1
+        return {"messageBoxes": [_box(_CUSTOMER_MID, (_CUSTOMER_MID, 1000 + self.box_calls))]}
+
+
+def _wait_for(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_ops_stream_refreshes_inbox_and_relaxes_polling(web_state, monkeypatch):
+    _seed_owned_account(web_state, _owner(web_state))
+    monkeypatch.setattr(webapp_module, "OPS_REFRESH_DEBOUNCE_SECONDS", 0.0)
+    fake = _OpsFakeApi(events=["ping", "message", "message"])
+    monkeypatch.setattr(web_state, "get_api", lambda account_id=None, require_auth=True: fake)
+    try:
+        web_state._ensure_ops_watcher("acct")
+        assert _wait_for(lambda: fake.box_calls >= 1)
+        assert web_state.ops_stream_healthy("acct") is True
+        assert web_state.inbox_max_age("acct") == webapp_module.OPS_FALLBACK_REFRESH_SECONDS
+        # A burst of operations is coalesced; pings alone never fetch.
+        assert fake.box_calls <= 2
+        assert web_state.inbox_version("acct") >= 1
+    finally:
+        fake.release.set()
+        web_state.stop_ops_watcher("acct")
+
+
+def test_ops_stream_falls_back_to_polling_after_three_failures(web_state, monkeypatch):
+    _seed_owned_account(web_state, _owner(web_state))
+    monkeypatch.setattr(webapp_module, "OPS_FAILURE_LIMIT", 3)
+    fake = _OpsFakeApi(fail=True)
+    monkeypatch.setattr(web_state, "get_api", lambda account_id=None, require_auth=True: fake)
+    waits = []
+    watcher = webapp_module.OpsWatcher.__new__(webapp_module.OpsWatcher)
+    watcher.state = web_state
+    watcher.account_id = "acct"
+    watcher.connected = False
+    watcher.last_event_at = 0.0
+    watcher.failures = 0
+    watcher.disabled_until = 0.0
+
+    class _Stop:
+        def __init__(self):
+            self.calls = 0
+
+        def is_set(self):
+            return fake.stream_calls >= 3 and watcher.disabled_until > 0
+
+        def wait(self, seconds):
+            waits.append(seconds)
+
+    watcher.stop_event = _Stop()
+    watcher._run()
+    assert fake.stream_calls == 3
+    assert watcher.disabled_until > time.monotonic()
+    assert watcher.healthy() is False
+    assert web_state.inbox_max_age("acct") == webapp_module.INBOX_SNAPSHOT_TTL_SECONDS
+
+
+def test_ops_watchers_stop_when_account_is_removed(web_state, monkeypatch):
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    fake = _OpsFakeApi(events=["message"])
+    monkeypatch.setattr(web_state, "get_api", lambda account_id=None, require_auth=True: fake)
+    monkeypatch.setattr(web_state, "close_api", lambda account_id: None)
+    try:
+        web_state._ensure_ops_watcher("acct")
+        watcher = web_state.ops_watchers["acct"]
+        web_state.delete_account("acct", owner)
+        assert "acct" not in web_state.ops_watchers
+        assert watcher.stop_event.is_set()
+    finally:
+        fake.release.set()

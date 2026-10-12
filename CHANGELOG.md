@@ -43,6 +43,16 @@ All notable changes to OkLine are documented here. The format follows
   when many customers write at once, one reminder past the reply target, no alert
   when the AI already answered, and quiet outside your shift. A chip shows how
   fresh the chat list is.
+- **LINE operation stream.** The server follows each signed-in account's LINE
+  operation stream (the Chrome client's fetchOps) and refreshes the inbox as soon
+  as something happens; `getMessageBoxes` polling drops to a once-a-minute safety
+  net, and the stream pauses for 15 minutes after 3 failures in a row.
+- **Web Push.** Staff with no LinePassport page open still get notified: the
+  browser subscribes once notifications are allowed (`/api/push/*`, VAPID key in
+  the state dir), and the server applies the same policy — one push per chat per
+  2 minutes, a digest for many chats, one reminder past the reply target, a
+  30-second wait when the AI may answer, and nothing outside the person's shift.
+  Only known browser push services are accepted as endpoints.
 
 ## [2.8.0] - 2026-07-08
 
