@@ -755,11 +755,15 @@ def test_auto_reply_setup_checklist_and_shop_topics():
     assert "setTimeout(() => saveKbTopics().catch(toastError), 2000)" in INDEX_HTML
 
 
-def test_add_account_goes_straight_to_qr():
+def test_add_account_waits_for_the_start_button_before_showing_qr():
+    # No LINE account yet: the 4-step wizard opens on "Start"; the QR is only
+    # requested after the person presses it (proxy can be set first).
     block = _js_block("    function openAddAccount(", "    async function cancelLogin()")
-    assert "startLogin().catch(toastError);" in block
-    assert 'id="loginAdvancedDetails"' in INDEX_HTML
-    assert ".login-panel.qr-first .login-steps" in INDEX_HTML
+    assert "startLogin()" not in block
+    assert 'id="beginAddAccountButton" class="primary wizard-start"' in INDEX_HTML
+    assert '$("beginAddAccountButton").addEventListener("click", () => startLogin()' in INDEX_HTML
+    assert "qr-first" not in INDEX_HTML
+    assert INDEX_HTML.index('id="loginProxyEnabled"') < INDEX_HTML.index('id="beginAddAccountButton"')
 
 
 # -- B6: LINE operation stream --------------------------------------------------

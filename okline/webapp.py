@@ -3671,9 +3671,6 @@ INDEX_HTML = r"""<!doctype html>
     .stepper button.done b { background: var(--accent); color: #fff; }
 
     /* Login: QR-first page for people without an account. */
-    .login-panel.qr-first .login-steps,
-    .login-panel.qr-first [data-login-step="1"] .wizard-start { display: none; }
-    .login-panel.qr-first .login-step .pill.ok { display: none; }
     .qr-howto { margin: 0; padding-left: 20px; display: grid; gap: 6px; color: var(--ink); }
     .login-proxy-details { margin-top: 12px; text-align: left; }
 
@@ -4233,11 +4230,6 @@ INDEX_HTML = r"""<!doctype html>
               <div class="qr" id="qrBox" tabindex="-1">
                 <span class="muted" data-i18n="login.qr_placeholder">QR will appear here</span>
               </div>
-              <details class="ux-advanced login-proxy-details" id="loginAdvancedDetails">
-                <summary data-i18n="login.advanced">Advanced options (proxy)</summary>
-                <div id="loginProxySlot"></div>
-                <button id="loginRestartButton" type="button" data-i18n="login.restart_with_proxy">Make a new QR with these settings</button>
-              </details>
               <div class="qr-actions" id="qrActions" hidden>
                 <a id="qrLink" class="mono" href="#" target="_blank" rel="noreferrer"></a>
                 <button id="qrCopyButton" type="button" data-i18n="common.copy">Copy link</button>
@@ -9279,10 +9271,6 @@ INDEX_HTML = r"""<!doctype html>
       }
       setAccountControls(false);
       setView("login");
-      // No separate "Start" step: request the QR straight away.
-      if ((reset || (state.loginStep || 1) === 1) && !$("beginAddAccountButton").disabled) {
-        startLogin().catch(toastError);
-      }
     }
 
     async function cancelLogin() {
@@ -14334,13 +14322,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "var.name_hint": {th: "ชื่อของเพื่อนหรือกลุ่มที่รับข้อความ", en: "Name of the friend or group receiving it"},
       "var.rand": {th: "เลขสุ่ม 1–100", en: "random 1–100"},
       "var.rand_hint": {th: "ตัวเลขสุ่มใหม่ทุกครั้งที่ส่ง", en: "A new random number every send"},
-      "login.subtitle": {th: "สแกน QR ด้วยแอป LINE บนมือถือ ใช้เวลาไม่ถึง 1 นาที LinePassport จะใช้ชื่อจากบัญชี LINE ของคุณ", en: "Scan the QR with LINE on your phone — it takes under a minute. LinePassport uses the name from your LINE account."},
       "login.howto_1": {th: "เปิดแอป LINE บนมือถือ ไปที่หน้าหลัก", en: "Open LINE on your phone and go to Home."},
       "login.howto_2": {th: "แตะไอคอนสแกน QR มุมขวาบน", en: "Tap the QR scanner at the top right."},
       "login.howto_3": {th: "สแกนโค้ดนี้ แล้วกดยืนยันบนมือถือ", en: "Scan this code, then confirm on your phone."},
-      "login.advanced": {th: "ตัวเลือกขั้นสูง (พร็อกซี)", en: "Advanced options (proxy)"},
-      "login.restart_with_proxy": {th: "สร้าง QR ใหม่ด้วยค่านี้", en: "Make a new QR with these settings"},
-      "login.start": {th: "ลองอีกครั้ง", en: "Try again"},
       "errors.file_too_large": {th: "ไฟล์ใหญ่เกิน 30 MB", en: "File is larger than 30 MB"},
       "errors.assistant_not_configured": {th: "ยังไม่ได้เลือก AI — ไปที่ ตอบอัตโนมัติ → เลือกสมอง AI", en: "No AI chosen yet — open Auto reply → choose the AI brain"},
       "scheduler.run_now": {th: "ส่งตอนนี้", en: "Send now"},
@@ -14419,13 +14403,6 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       imageAi.classList.remove("hidden", "bot-page");
       $("settingsImageAiSlot").appendChild(imageAi);
       $("botNavAiSettings").classList.add("hidden");
-    })();
-
-    // Proxy options move from the old "Start" step into the QR card.
-    (function relocateLoginProxy() {
-      const box = document.querySelector(".login-proxy-box");
-      if (box) $("loginProxySlot").appendChild(box);
-      $("loginPanel").classList.add("qr-first");
     })();
 
     $("accountCard").addEventListener("click", (event) => { event.stopPropagation(); toggleAccountPopover(); });
@@ -14556,11 +14533,6 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       $(id).addEventListener("change", () => { state.wizard[key] = $(id).value; updateWizardSummary(); });
     }
     $("wizardEncrypt").addEventListener("change", () => { state.wizard.encrypt = $("wizardEncrypt").checked; });
-    $("loginRestartButton").addEventListener("click", async () => {
-      clearInterval(state.loginTimer);
-      try { await post("/api/login/cancel"); } catch (_) { /* best effort */ }
-      startLogin().catch(toastError);
-    });
 
     state.wizard = newWizardDraft();
     setInterval(renderFreshness, 1000);

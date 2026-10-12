@@ -12,8 +12,8 @@ All notable changes to OkLine are documented here. The format follows
   Tools and Activity log), an account card with one connection dot, a phone
   bottom bar, and Thai-only wording in Thai mode. Clicking a chat opens it
   (paste a chat ID into search to open any chat); the Send button has a label.
-- **QR-first sign-up.** Adding a LINE account shows the QR immediately with
-  three how-to steps; proxy settings moved into "Advanced options".
+- **QR how-to.** The QR step of "Add LINE account" lists the three steps for
+  scanning it with the LINE app.
 - **Scheduled sends: list + 3-step wizard** (who → what → when) with recipient
   names, coloured status, failed jobs pinned on top with a fix button, last-3
   send history, an on/off switch and a ⋯ menu. The wizard has Thai variable
