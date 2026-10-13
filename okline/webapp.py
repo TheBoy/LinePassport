@@ -3800,6 +3800,10 @@ INDEX_HTML = r"""<!doctype html>
     .hub-tab[aria-selected="true"] svg { color: var(--accent); }
     .hub-tab[aria-selected="true"] .badge { background: #E9F9EF; color: #087443; }
     .sched-hub-hint { margin: 0; }
+    /* The tabs lead; the action stays a normal-sized button beside the title. */
+    .sched-hub-top { flex-wrap: nowrap; }
+    .sched-hub-top [data-hub-action] { min-height: 36px; padding: 0 14px; font-size: 14px; white-space: nowrap; }
+    .sched-hub-top .ux-help { width: 32px; min-height: 32px; }
     .jobs-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
     .stat-tile {
       display: grid;
@@ -3891,9 +3895,9 @@ INDEX_HTML = r"""<!doctype html>
       .jobs-toolbar button { flex: 0 0 auto; width: auto; white-space: nowrap; }
       .job-facts { grid-template-columns: 60px minmax(0, 1fr); }
       .job-facts dd { white-space: normal; overflow-wrap: anywhere; }
-      .sched-hub-top > .ux-row { width: 100%; flex-wrap: nowrap; }
-      .sched-hub-top > .ux-row > .primary { flex: 1 1 auto; }
-      .sched-hub-top > .ux-row > .ux-help { flex: 0 0 auto; width: 36px; }
+      .sched-hub-top > .ux-row { width: auto; flex: 0 0 auto; flex-wrap: nowrap; gap: 6px; }
+      .sched-hub-top > .ux-row > .primary { flex: 0 0 auto; width: auto; min-height: 38px; padding: 0 12px; font-size: 14px; }
+      .sched-hub-top > .ux-row > .ux-help { flex: 0 0 auto; width: 32px; }
       #botPatterns .pattern-chip { width: auto; }
       #botPatterns .pattern-settings-button { width: auto; flex: 0 0 auto; }
       #botPatterns .pattern-card-foot .item-actions { display: flex; flex-wrap: wrap; width: auto; }
@@ -5213,7 +5217,7 @@ INDEX_HTML = r"""<!doctype html>
               <h2 style="margin:0" data-i18n="jobs.title">Scheduled sends</h2>
               <div class="ux-row">
                 <button id="jobsNewButton" class="primary" type="button" data-hub-action="schedules" data-requires-account data-requires-permission="schedule" data-i18n="jobs.new">+ New scheduled send</button>
-                <button id="patternFormToggle" class="primary hidden" type="button" data-hub-action="patterns" aria-expanded="false" aria-controls="patternFormSection" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.add_pattern_new">+ Add pattern</button>
+                <button id="patternFormToggle" class="primary hidden" type="button" data-hub-action="patterns" aria-expanded="false" aria-controls="patternFormSection" data-requires-account data-requires-permission="schedule" data-i18n="hub.add_pattern">+ Add pattern</button>
                 <button class="ux-help" id="jobsHelpButton" type="button" data-i18n-title="common.help" title="Help">?</button>
               </div>
             </div>
@@ -14915,6 +14919,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "jobs.fact_what": {th: "ข้อความ", en: "Message"},
       "jobs.fact_last": {th: "ผลล่าสุด", en: "Last sends"},
       "hub.tab_jobs": {th: "งานที่ตั้งไว้", en: "Jobs"},
+      "hub.add_pattern": {th: "+ เพิ่มข้อความ", en: "+ Add pattern"},
       "hub.tab_patterns": {th: "ข้อความสำเร็จรูป", en: "Message patterns"},
       "patterns.search_ph": {th: "ค้นหาชื่อหรือข้อความ", en: "Search name or text"},
       "patterns.showing": {th: "แสดง {n} จาก {total} ข้อความ", en: "Showing {n} of {total}"},
@@ -14926,7 +14931,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "patterns.back": {th: "← ข้อความสำเร็จรูป", en: "← Message patterns"},
       "patterns.delete_used_confirm": {th: "ข้อความนี้ใช้อยู่ใน {n} งาน งานเหล่านั้นจะยังส่งข้อความเดิมได้ ลบเลยไหม?", en: "This pattern is used in {n} jobs. They keep sending their saved copy. Delete it?"},
       "jobs.subtitle": {th: "ข้อความที่ระบบส่งให้เองตามเวลาที่ตั้งไว้", en: "Messages that go out by themselves at the time you choose."},
-      "jobs.new": {th: "+ สร้างงานส่งตามเวลา", en: "+ New scheduled send"},
+      "jobs.new": {th: "+ สร้างงาน", en: "+ New job"},
       "jobs.when_once": {th: "ครั้งเดียว {at}", en: "Once on {at}"},
       "jobs.every_day": {th: "ทุกวัน", en: "Every day"},
       "jobs.weekdays": {th: "จ–ศ", en: "Mon–Fri"},
