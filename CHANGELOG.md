@@ -7,6 +7,9 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Settings is a normal page.** It opens inside the workspace with the
+  sidebar still visible, scrolls like every other page, and lists its
+  sections in a menu on the left (a scrollable row on phones).
 - **Plain-language usage guides.** All seven guides (Chat, Auto reply,
   Scheduled sends, Activity log, Tools, Incoming API, Settings) share one
   layout: what the page is for, numbered steps with jump buttons, a

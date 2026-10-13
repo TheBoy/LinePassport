@@ -3766,6 +3766,63 @@ INDEX_HTML = r"""<!doctype html>
     .wizard-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
     .wizard-summary { position: sticky; top: 0; display: grid; gap: 10px; color: var(--ink); }
     .wizard-summary label { color: var(--muted); }
+    /* Settings page: menu on the left, the chosen section on the right. */
+    .tab-panel[data-tab-panel="settings"].active { overflow: auto; padding: 16px; }
+    .settings-page { display: grid; gap: 16px; width: min(1080px, 100%); }
+    .settings-page-head { display: grid; gap: 2px; }
+    .settings-page-head h2 { margin: 0; }
+    .settings-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 20px; align-items: start; }
+    .settings-page .settings-tabs {
+      position: sticky;
+      top: 0;
+      display: grid;
+      gap: 2px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .settings-page .settings-tabs button {
+      justify-content: flex-start;
+      width: 100%;
+      min-height: 38px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 600;
+      text-align: left;
+    }
+    .settings-page .settings-tabs button:hover { background: var(--surface-2); color: var(--ink); }
+    .settings-page .settings-tabs button.active { background: #E9F9EF; color: #075f2c; font-weight: 700; }
+    .settings-content { min-width: 0; }
+    .settings-content > .settings-pane {
+      grid-template-columns: minmax(0, 1fr);
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .settings-content > #settingsGuidePane { padding: 0; border: 0; background: transparent; }
+    .settings-content .wizard-card,
+    .settings-content .ux-grid { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+    @media (max-width: 760px) {
+      .settings-layout { grid-template-columns: 1fr; gap: 12px; }
+      .settings-page .settings-tabs {
+        position: static;
+        display: flex;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .settings-page .settings-tabs button { flex: 0 0 auto; width: auto; white-space: nowrap; }
+      /* Cards inside each section already have frames; keep the full width. */
+      .settings-content > .settings-pane { padding: 0; border: 0; background: transparent; }
+      .settings-content .wizard-card { padding: 14px; }
+      /* Shift rows: name on top, days on their own line, then the hours. */
+      #kpiShiftList > .ux-row { display: flex; flex-wrap: wrap; }
+      #kpiShiftList > .ux-row > .day-picker { flex: 1 1 100%; }
+    }
     /* Usage guides: one layout everywhere (header, steps, tips, FAQ). */
     .help-page { display: grid; gap: 14px; max-width: 860px; }
     .help-head { display: flex; align-items: flex-start; gap: 12px; }
@@ -4173,203 +4230,6 @@ INDEX_HTML = r"""<!doctype html>
         </div>
       </section>
 
-      <section class="settings-panel section" id="settingsPanel">
-        <div class="section-head">
-          <div>
-            <h2 data-i18n="settings.title">Settings</h2>
-            <span class="muted" id="settingsSubtitle" data-i18n="settings.subtitle">Manage access and LINE accounts.</span>
-          </div>
-          <button id="settingsBackButton" data-i18n="settings.back">Back</button>
-        </div>
-        <div class="section-body login-body">
-          <div class="settings-tabs">
-            <button id="passwordTabButton" data-settings-pane="password" data-i18n="topbar.change_password">Change Password</button>
-            <button id="accountsTabButton" data-settings-pane="accounts" data-i18n="topbar.line_account_management">LINE Account Management</button>
-            <button id="usersTabButton" data-settings-pane="users" data-i18n="topbar.user_management">User Management</button>
-            <button id="teamTabButton" data-settings-pane="team" data-i18n="settings.nav_team">Team</button>
-            <button id="aiTabButton" data-settings-pane="ai" data-i18n="settings.nav_ai">AI</button>
-            <button id="kpiSettingsTabButton" data-settings-pane="kpi" data-i18n="settings.nav_kpi">KPI &amp; shifts</button>
-            <button id="notifySettingsTabButton" data-settings-pane="notify" data-i18n="settings.nav_notify">Notifications</button>
-            <button id="settingsGuideTabButton" data-settings-pane="guide" data-i18n="settings.nav_guide">วิธีใช้</button>
-          </div>
-
-          <div class="settings-pane" id="teamPane">
-            <div class="section-head">
-              <div>
-                <h3 data-i18n="team.title">Team</h3>
-                <span class="muted" data-i18n="team.subtitle">Staff sign in with their own email and reply from your LINE account. Each reply is credited to them in KPI.</span>
-              </div>
-            </div>
-            <div class="wizard-card">
-              <h3 data-i18n="team.add">Add staff member</h3>
-              <div class="two-col">
-                <label><span data-i18n="users.email">Email</span><input id="teamNewEmail" type="email" inputmode="email" autocomplete="off" placeholder="staff@example.com"></label>
-                <label><span data-i18n="users.displayname">Display name</span><input id="teamNewName" autocomplete="off" maxlength="80"></label>
-              </div>
-              <label><span data-i18n="users.password">Password</span><input id="teamNewPassword" type="password" autocomplete="new-password"></label>
-              <div><span class="ux-muted" data-i18n="team.accounts">LINE accounts they can use</span><div class="ux-row" id="teamNewAccounts"></div></div>
-              <button id="teamCreateButton" class="primary" type="button" data-i18n="team.add">Add staff member</button>
-            </div>
-            <div class="management-list" id="teamList"></div>
-          </div>
-
-          <div class="settings-pane" id="aiSettingsPane">
-            <div class="wizard-card">
-              <h3 data-i18n="brain.title">AI for auto reply</h3>
-              <span class="muted" data-i18n="brain.subtitle">Choose what answers your customers. Changes apply to every staff member on your LINE accounts.</span>
-              <div id="settingsBrainSlot"></div>
-            </div>
-            <div id="settingsImageAiSlot"></div>
-          </div>
-
-          <div class="settings-pane" id="kpiSettingsPane">
-            <div class="wizard-card">
-              <h3 data-i18n="kpi.settings">KPI settings</h3>
-              <span class="muted" id="kpiSettingsAccountLabel"></span>
-              <label><span data-i18n="kpi.sla_label">Reply target (minutes)</span><input id="kpiSlaMinutes" type="number" min="1" max="1440" value="5"></label>
-              <label class="checkbox-row"><input id="kpiBusinessEnabled" type="checkbox"><span data-i18n="kpi.business_hours">Count only during business hours</span></label>
-              <div class="ux-row" id="kpiBusinessRow">
-                <div class="day-picker" id="kpiBusinessDays"></div>
-                <input id="kpiBusinessStart" type="time" value="09:00" style="width:auto">
-                <span>–</span>
-                <input id="kpiBusinessEnd" type="time" value="18:00" style="width:auto">
-              </div>
-              <h3 data-i18n="kpi.shifts_title">Shifts</h3>
-              <span class="muted" data-i18n="kpi.shifts_hint">Screen time and notifications count only inside each person's shift. No shift = business hours.</span>
-              <div id="kpiShiftList" class="ux-grid"></div>
-              <button id="kpiSettingsSave" class="primary" type="button" data-i18n="common.save">Save</button>
-            </div>
-            <div class="wizard-card">
-              <h3 data-i18n="presence.explain_title">What staff status means</h3>
-              <ul class="ux-muted" style="margin:0;padding-left:18px;display:grid;gap:4px">
-                <li data-i18n="presence.explain_active">Replying: this tab is open and focused, and a chat is waiting or you typed in the last minute.</li>
-                <li data-i18n="presence.explain_standby">Standby: tab open and focused, nothing waiting.</li>
-                <li data-i18n="presence.explain_away">Switched away: another tab or app is in front.</li>
-                <li data-i18n="presence.explain_idle">Idle: no typing or clicks for 15 minutes.</li>
-                <li data-i18n="presence.explain_busy">On other work: you pressed "On other work" yourself.</li>
-                <li data-i18n="presence.explain_offline">Offline: no page open for 2 minutes.</li>
-                <li data-i18n="presence.explain_visible">Everyone always sees their own status in the chat header.</li>
-              </ul>
-            </div>
-          </div>
-
-          <div class="settings-pane" id="notifySettingsPane">
-            <div class="wizard-card">
-              <h3 data-i18n="notify.settings_title">Browser notifications</h3>
-              <span class="muted" id="notifySettingsState"></span>
-              <div class="ux-row">
-                <button id="notifySettingsEnable" class="primary" type="button" data-i18n="notify.banner_enable">Turn on notifications</button>
-                <button id="notifySettingsTest" type="button" data-i18n="notify.test">Send a test</button>
-              </div>
-              <label class="checkbox-row"><input id="notifyOutsideShift" type="checkbox"><span data-i18n="notify.outside_shift">Also notify me outside my shift</span></label>
-              <span class="muted" data-i18n="notify.policy">While this page is in front you hear one soft sound per new chat. When it's hidden you get at most one notification per chat every 2 minutes, a single summary when many customers write at once, and one louder reminder when a chat waits past the reply target. No alert when the AI already replied.</span>
-            </div>
-          </div>
-
-          <div class="settings-pane" id="passwordPane">
-            <div class="wizard-card">
-              <h3 data-i18n="password.title">Change Password</h3>
-              <label>
-                <span data-i18n="password.current">Current password</span>
-                <input id="currentPasswordInput" type="password" autocomplete="current-password">
-              </label>
-              <label>
-                <span data-i18n="password.new">New password</span>
-                <input id="newPasswordInput" type="password" autocomplete="new-password">
-              </label>
-              <label>
-                <span data-i18n="password.confirm">Confirm new password</span>
-                <input id="confirmNewPasswordInput" type="password" autocomplete="new-password">
-              </label>
-              <button id="changePasswordButton" class="primary" data-i18n="password.update">Update Password</button>
-            </div>
-          </div>
-
-          <div class="settings-pane" id="accountsPane">
-            <div class="section-head">
-              <div>
-                <h3 data-i18n="accounts.title">LINE Accounts</h3>
-                <span class="muted" data-i18n="accounts.subtitle">Add, edit, or delete local LINE sessions.</span>
-              </div>
-              <button id="addAccountButton" class="primary" data-i18n="accounts.add">Add Account</button>
-            </div>
-            <div class="management-list" id="lineAccountList"></div>
-          </div>
-
-          <div class="settings-pane" id="usersPane">
-            <div class="wizard-card hidden" id="secureCard">
-              <h3 data-i18n="secure.title">Require a password to open LinePassport</h3>
-              <span class="muted" data-i18n="secure.body">LinePassport currently opens without a login. Set a web password (separate from LINE, and not recoverable) to require sign-in.</span>
-              <button id="secureButton" class="primary" data-i18n="secure.action">Set a password</button>
-            </div>
-
-            <div class="section-head" id="userManagementHead">
-              <div>
-                <h3 data-i18n="users.title">Users &amp; Access</h3>
-                <span class="muted" data-i18n="users.subtitle">Assign roles and choose which LINE accounts each user can access.</span>
-              </div>
-            </div>
-            <div class="wizard-card" id="createUserCard">
-              <h3 data-i18n="users.create">Create User</h3>
-              <div class="two-col">
-                <label>
-                  <span data-i18n="users.email">Email</span>
-                  <input id="newUserEmail" type="email" inputmode="email" autocomplete="off" placeholder="operator@example.com">
-                </label>
-                <label>
-                  <span data-i18n="users.displayname">Display name</span>
-                  <input id="newUserDisplayName" autocomplete="off" placeholder="Shop Operator">
-                </label>
-              </div>
-              <div class="two-col">
-                <label>
-                  <span data-i18n="users.password">Password</span>
-                  <input id="newUserPassword" type="password" autocomplete="new-password">
-                </label>
-                <label>
-                  <span data-i18n="users.role">Role</span>
-                  <select id="newUserRole"></select>
-                </label>
-              </div>
-              <button id="createUserButton" class="primary" data-i18n="users.create">Create User</button>
-            </div>
-            <div class="management-list" id="userList"></div>
-          </div>
-
-          <div class="settings-pane" id="settingsGuidePane">
-            <div class="help-page">
-              <header class="help-head">
-                <span class="help-icon" aria-hidden="true">⚙️</span>
-                <div class="help-head-text"><h2 data-i18n="help.settings.title">วิธีใช้หน้าตั้งค่า</h2><p class="ux-muted" data-i18n="help.settings.intro">จัดการบัญชี LINE ทีมงาน AI และการแจ้งเตือนของร้าน</p></div>
-              </header>
-              <section class="help-card">
-                <h3 data-i18n="help.common.steps">ทำตามนี้</h3>
-                <ol class="help-steps">
-                  <li><span class="help-num" aria-hidden="true">1</span><div><strong data-i18n="help.settings.s1_title">จัดการบัญชี LINE</strong><p data-i18n="help.settings.s1_body">กด “เพิ่มบัญชี” → เริ่ม → สแกน QR ด้วยแอป LINE → ยืนยัน PIN บนมือถือถ้ามีการขอ ถ้าบัญชีหลุดให้กด “เชื่อมต่อใหม่” แล้วสแกนบัญชีเดิม</p></div></li>
-                  <li><span class="help-num" aria-hidden="true">2</span><div><strong data-i18n="help.settings.s2_title">ทีมงาน</strong><p data-i18n="help.settings.s2_body">เพิ่มพนักงานด้วยอีเมลและรหัสผ่าน พนักงานตอบลูกค้าจากบัญชี LINE ของร้านได้ และนับผลงานใน KPI</p></div></li>
-                  <li><span class="help-num" aria-hidden="true">3</span><div><strong data-i18n="help.settings.s3_title">AI</strong><p data-i18n="help.settings.s3_body">เลือก AI ที่ใช้ตอบลูกค้าอัตโนมัติและ AI ที่ใช้สร้างรูป</p></div></li>
-                  <li><span class="help-num" aria-hidden="true">4</span><div><strong data-i18n="help.settings.s4_title">KPI และกะงาน</strong><p data-i18n="help.settings.s4_body">ตั้งเวลาทำการ กะของพนักงาน และเป้าเวลาตอบลูกค้า</p></div></li>
-                  <li><span class="help-num" aria-hidden="true">5</span><div><strong data-i18n="help.settings.s5_title">การแจ้งเตือน</strong><p data-i18n="help.settings.s5_body">เปิดให้มือถือหรือคอมแจ้งเมื่อลูกค้าทัก แล้วกด “ทดลองแจ้งเตือน” เพื่อเช็ก</p></div></li>
-                  <li><span class="help-num" aria-hidden="true">6</span><div><strong data-i18n="help.settings.s6_title">เปลี่ยนรหัสผ่าน</strong><p data-i18n="help.settings.s6_body">รหัสที่ใช้เข้า LinePassport ไม่ใช่รหัสผ่าน LINE</p></div></li>
-                </ol>
-              </section>
-              <section class="help-card help-tips">
-                <h3 data-i18n="help.common.tips">💡 ควรรู้</h3>
-                <ul>
-                  <li data-i18n="help.settings.tip1">เมนูทีมงานเห็นเฉพาะเจ้าของร้าน</li>
-                  <li data-i18n="help.settings.tip2">ข้อมูลของแต่ละร้านแยกจากกัน พนักงานเห็นเฉพาะบัญชี LINE ที่ได้รับสิทธิ์</li>
-                  <li data-i18n="help.settings.tip3">ใช้ Proxy เฉพาะเมื่อผู้ให้บริการบอกให้ใช้ กรอกผิดจะสแกน QR หรือส่งข้อความไม่ได้</li>
-                </ul>
-              </section>
-              <section class="help-card">
-                <h3 data-i18n="help.common.faq">เจอปัญหา?</h3>
-                <details class="help-faq"><summary data-i18n="help.settings.q1">ไม่เห็นเมนู หรือปุ่มกดไม่ได้</summary><p data-i18n="help.settings.a1">บทบาทของคุณอาจไม่มีสิทธิ์ ให้เจ้าของร้านหรือผู้ดูแลปรับให้</p></details>
-                <details class="help-faq"><summary data-i18n="help.settings.q2">สแกน QR แล้วไม่ผ่าน</summary><p data-i18n="help.settings.a2">รอให้ QR ขึ้นใหม่แล้วสแกนอีกครั้ง ถ้ามีการขอ PIN ให้กรอกบนมือถือภายในเวลาที่กำหนด</p></details>
-              </section>
-            </div>
-          </div>
-        </div>
-      </section>
 
       <section class="login-panel section" id="loginPanel">
         <div class="section-head">
@@ -4496,7 +4356,7 @@ INDEX_HTML = r"""<!doctype html>
           <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 14h.01M15 14h.01"/></svg><span data-i18n="tabs.assistant">Auto reply</span></button>
           <button class="tab" id="tabBot" type="button" role="tab" aria-selected="false" aria-controls="tabPanelBot" data-tab="bot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span data-i18n="tabs.bot">Scheduled sends</span></button>
           <button class="tab" id="tabKpi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelKpi" data-tab="kpi" data-requires-permission="manage_accounts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span data-i18n="tabs.kpi">Staff KPI</span><span class="nav-badge hidden" id="navKpiBadge"></span></button>
-          <button class="tab mobile-hide" id="tabSettings" type="button" data-nav-settings="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-i18n="tabs.settings">Settings</span></button>
+          <button class="tab mobile-hide" id="tabSettings" type="button" role="tab" aria-selected="false" aria-controls="tabPanelSettings" data-tab="settings" data-nav-settings="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-i18n="tabs.settings">Settings</span></button>
           <div class="sidenav-spacer"></div>
           <div class="sidenav-group-label" data-i18n="tabs.dev_group">For developers</div>
           <button class="tab dev" id="tabIncomingApi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelIncomingApi" data-tab="incoming-api" data-requires-permission="manage_api"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 8-4 4 4 4M16 8l4 4-4 4"/></svg><span data-i18n="tabs.incoming_api">API</span></button>
@@ -5198,6 +5058,205 @@ INDEX_HTML = r"""<!doctype html>
             </div>
           </div>
 
+          <div class="tab-panel" data-tab-panel="settings" id="tabPanelSettings" role="tabpanel" aria-labelledby="tabSettings">
+        <div class="settings-page" id="settingsPanel">
+        <header class="settings-page-head">
+          <h2 data-i18n="settings.title">Settings</h2>
+          <span class="ux-muted" id="settingsSubtitle" data-i18n="settings.subtitle">Manage access and LINE accounts.</span>
+          <button id="settingsBackButton" class="hidden" type="button" data-i18n="settings.back">Back</button>
+        </header>
+        <div class="settings-layout">
+          <nav class="settings-tabs" aria-label="Settings">
+            <button id="passwordTabButton" data-settings-pane="password" data-i18n="topbar.change_password">Change Password</button>
+            <button id="accountsTabButton" data-settings-pane="accounts" data-i18n="topbar.line_account_management">LINE Account Management</button>
+            <button id="usersTabButton" data-settings-pane="users" data-i18n="topbar.user_management">User Management</button>
+            <button id="teamTabButton" data-settings-pane="team" data-i18n="settings.nav_team">Team</button>
+            <button id="aiTabButton" data-settings-pane="ai" data-i18n="settings.nav_ai">AI</button>
+            <button id="kpiSettingsTabButton" data-settings-pane="kpi" data-i18n="settings.nav_kpi">KPI &amp; shifts</button>
+            <button id="notifySettingsTabButton" data-settings-pane="notify" data-i18n="settings.nav_notify">Notifications</button>
+            <button id="settingsGuideTabButton" data-settings-pane="guide" data-i18n="settings.nav_guide">วิธีใช้</button>
+          </nav>
+          <div class="settings-content">
+
+          <div class="settings-pane" id="teamPane">
+            <div class="section-head">
+              <div>
+                <h3 data-i18n="team.title">Team</h3>
+                <span class="muted" data-i18n="team.subtitle">Staff sign in with their own email and reply from your LINE account. Each reply is credited to them in KPI.</span>
+              </div>
+            </div>
+            <div class="wizard-card">
+              <h3 data-i18n="team.add">Add staff member</h3>
+              <div class="two-col">
+                <label><span data-i18n="users.email">Email</span><input id="teamNewEmail" type="email" inputmode="email" autocomplete="off" placeholder="staff@example.com"></label>
+                <label><span data-i18n="users.displayname">Display name</span><input id="teamNewName" autocomplete="off" maxlength="80"></label>
+              </div>
+              <label><span data-i18n="users.password">Password</span><input id="teamNewPassword" type="password" autocomplete="new-password"></label>
+              <div><span class="ux-muted" data-i18n="team.accounts">LINE accounts they can use</span><div class="ux-row" id="teamNewAccounts"></div></div>
+              <button id="teamCreateButton" class="primary" type="button" data-i18n="team.add">Add staff member</button>
+            </div>
+            <div class="management-list" id="teamList"></div>
+          </div>
+
+          <div class="settings-pane" id="aiSettingsPane">
+            <div class="wizard-card">
+              <h3 data-i18n="brain.title">AI for auto reply</h3>
+              <span class="muted" data-i18n="brain.subtitle">Choose what answers your customers. Changes apply to every staff member on your LINE accounts.</span>
+              <div id="settingsBrainSlot"></div>
+            </div>
+            <div id="settingsImageAiSlot"></div>
+          </div>
+
+          <div class="settings-pane" id="kpiSettingsPane">
+            <div class="wizard-card">
+              <h3 data-i18n="kpi.settings">KPI settings</h3>
+              <span class="muted" id="kpiSettingsAccountLabel"></span>
+              <label><span data-i18n="kpi.sla_label">Reply target (minutes)</span><input id="kpiSlaMinutes" type="number" min="1" max="1440" value="5"></label>
+              <label class="checkbox-row"><input id="kpiBusinessEnabled" type="checkbox"><span data-i18n="kpi.business_hours">Count only during business hours</span></label>
+              <div class="ux-row" id="kpiBusinessRow">
+                <div class="day-picker" id="kpiBusinessDays"></div>
+                <input id="kpiBusinessStart" type="time" value="09:00" style="width:auto">
+                <span>–</span>
+                <input id="kpiBusinessEnd" type="time" value="18:00" style="width:auto">
+              </div>
+              <h3 data-i18n="kpi.shifts_title">Shifts</h3>
+              <span class="muted" data-i18n="kpi.shifts_hint">Screen time and notifications count only inside each person's shift. No shift = business hours.</span>
+              <div id="kpiShiftList" class="ux-grid"></div>
+              <button id="kpiSettingsSave" class="primary" type="button" data-i18n="common.save">Save</button>
+            </div>
+            <div class="wizard-card">
+              <h3 data-i18n="presence.explain_title">What staff status means</h3>
+              <ul class="ux-muted" style="margin:0;padding-left:18px;display:grid;gap:4px">
+                <li data-i18n="presence.explain_active">Replying: this tab is open and focused, and a chat is waiting or you typed in the last minute.</li>
+                <li data-i18n="presence.explain_standby">Standby: tab open and focused, nothing waiting.</li>
+                <li data-i18n="presence.explain_away">Switched away: another tab or app is in front.</li>
+                <li data-i18n="presence.explain_idle">Idle: no typing or clicks for 15 minutes.</li>
+                <li data-i18n="presence.explain_busy">On other work: you pressed "On other work" yourself.</li>
+                <li data-i18n="presence.explain_offline">Offline: no page open for 2 minutes.</li>
+                <li data-i18n="presence.explain_visible">Everyone always sees their own status in the chat header.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="settings-pane" id="notifySettingsPane">
+            <div class="wizard-card">
+              <h3 data-i18n="notify.settings_title">Browser notifications</h3>
+              <span class="muted" id="notifySettingsState"></span>
+              <div class="ux-row">
+                <button id="notifySettingsEnable" class="primary" type="button" data-i18n="notify.banner_enable">Turn on notifications</button>
+                <button id="notifySettingsTest" type="button" data-i18n="notify.test">Send a test</button>
+              </div>
+              <label class="checkbox-row"><input id="notifyOutsideShift" type="checkbox"><span data-i18n="notify.outside_shift">Also notify me outside my shift</span></label>
+              <span class="muted" data-i18n="notify.policy">While this page is in front you hear one soft sound per new chat. When it's hidden you get at most one notification per chat every 2 minutes, a single summary when many customers write at once, and one louder reminder when a chat waits past the reply target. No alert when the AI already replied.</span>
+            </div>
+          </div>
+
+          <div class="settings-pane" id="passwordPane">
+            <div class="wizard-card">
+              <h3 data-i18n="password.title">Change Password</h3>
+              <label>
+                <span data-i18n="password.current">Current password</span>
+                <input id="currentPasswordInput" type="password" autocomplete="current-password">
+              </label>
+              <label>
+                <span data-i18n="password.new">New password</span>
+                <input id="newPasswordInput" type="password" autocomplete="new-password">
+              </label>
+              <label>
+                <span data-i18n="password.confirm">Confirm new password</span>
+                <input id="confirmNewPasswordInput" type="password" autocomplete="new-password">
+              </label>
+              <button id="changePasswordButton" class="primary" data-i18n="password.update">Update Password</button>
+            </div>
+          </div>
+
+          <div class="settings-pane" id="accountsPane">
+            <div class="section-head">
+              <div>
+                <h3 data-i18n="accounts.title">LINE Accounts</h3>
+                <span class="muted" data-i18n="accounts.subtitle">Add, edit, or delete local LINE sessions.</span>
+              </div>
+              <button id="addAccountButton" class="primary" data-i18n="accounts.add">Add Account</button>
+            </div>
+            <div class="management-list" id="lineAccountList"></div>
+          </div>
+
+          <div class="settings-pane" id="usersPane">
+            <div class="wizard-card hidden" id="secureCard">
+              <h3 data-i18n="secure.title">Require a password to open LinePassport</h3>
+              <span class="muted" data-i18n="secure.body">LinePassport currently opens without a login. Set a web password (separate from LINE, and not recoverable) to require sign-in.</span>
+              <button id="secureButton" class="primary" data-i18n="secure.action">Set a password</button>
+            </div>
+
+            <div class="section-head" id="userManagementHead">
+              <div>
+                <h3 data-i18n="users.title">Users &amp; Access</h3>
+                <span class="muted" data-i18n="users.subtitle">Assign roles and choose which LINE accounts each user can access.</span>
+              </div>
+            </div>
+            <div class="wizard-card" id="createUserCard">
+              <h3 data-i18n="users.create">Create User</h3>
+              <div class="two-col">
+                <label>
+                  <span data-i18n="users.email">Email</span>
+                  <input id="newUserEmail" type="email" inputmode="email" autocomplete="off" placeholder="operator@example.com">
+                </label>
+                <label>
+                  <span data-i18n="users.displayname">Display name</span>
+                  <input id="newUserDisplayName" autocomplete="off" placeholder="Shop Operator">
+                </label>
+              </div>
+              <div class="two-col">
+                <label>
+                  <span data-i18n="users.password">Password</span>
+                  <input id="newUserPassword" type="password" autocomplete="new-password">
+                </label>
+                <label>
+                  <span data-i18n="users.role">Role</span>
+                  <select id="newUserRole"></select>
+                </label>
+              </div>
+              <button id="createUserButton" class="primary" data-i18n="users.create">Create User</button>
+            </div>
+            <div class="management-list" id="userList"></div>
+          </div>
+
+          <div class="settings-pane" id="settingsGuidePane">
+            <div class="help-page">
+              <header class="help-head">
+                <span class="help-icon" aria-hidden="true">⚙️</span>
+                <div class="help-head-text"><h2 data-i18n="help.settings.title">วิธีใช้หน้าตั้งค่า</h2><p class="ux-muted" data-i18n="help.settings.intro">จัดการบัญชี LINE ทีมงาน AI และการแจ้งเตือนของร้าน</p></div>
+              </header>
+              <section class="help-card">
+                <h3 data-i18n="help.common.steps">ทำตามนี้</h3>
+                <ol class="help-steps">
+                  <li><span class="help-num" aria-hidden="true">1</span><div><strong data-i18n="help.settings.s1_title">จัดการบัญชี LINE</strong><p data-i18n="help.settings.s1_body">กด “เพิ่มบัญชี” → เริ่ม → สแกน QR ด้วยแอป LINE → ยืนยัน PIN บนมือถือถ้ามีการขอ ถ้าบัญชีหลุดให้กด “เชื่อมต่อใหม่” แล้วสแกนบัญชีเดิม</p></div></li>
+                  <li><span class="help-num" aria-hidden="true">2</span><div><strong data-i18n="help.settings.s2_title">ทีมงาน</strong><p data-i18n="help.settings.s2_body">เพิ่มพนักงานด้วยอีเมลและรหัสผ่าน พนักงานตอบลูกค้าจากบัญชี LINE ของร้านได้ และนับผลงานใน KPI</p></div></li>
+                  <li><span class="help-num" aria-hidden="true">3</span><div><strong data-i18n="help.settings.s3_title">AI</strong><p data-i18n="help.settings.s3_body">เลือก AI ที่ใช้ตอบลูกค้าอัตโนมัติและ AI ที่ใช้สร้างรูป</p></div></li>
+                  <li><span class="help-num" aria-hidden="true">4</span><div><strong data-i18n="help.settings.s4_title">KPI และกะงาน</strong><p data-i18n="help.settings.s4_body">ตั้งเวลาทำการ กะของพนักงาน และเป้าเวลาตอบลูกค้า</p></div></li>
+                  <li><span class="help-num" aria-hidden="true">5</span><div><strong data-i18n="help.settings.s5_title">การแจ้งเตือน</strong><p data-i18n="help.settings.s5_body">เปิดให้มือถือหรือคอมแจ้งเมื่อลูกค้าทัก แล้วกด “ทดลองแจ้งเตือน” เพื่อเช็ก</p></div></li>
+                  <li><span class="help-num" aria-hidden="true">6</span><div><strong data-i18n="help.settings.s6_title">เปลี่ยนรหัสผ่าน</strong><p data-i18n="help.settings.s6_body">รหัสที่ใช้เข้า LinePassport ไม่ใช่รหัสผ่าน LINE</p></div></li>
+                </ol>
+              </section>
+              <section class="help-card help-tips">
+                <h3 data-i18n="help.common.tips">💡 ควรรู้</h3>
+                <ul>
+                  <li data-i18n="help.settings.tip1">เมนูทีมงานเห็นเฉพาะเจ้าของร้าน</li>
+                  <li data-i18n="help.settings.tip2">ข้อมูลของแต่ละร้านแยกจากกัน พนักงานเห็นเฉพาะบัญชี LINE ที่ได้รับสิทธิ์</li>
+                  <li data-i18n="help.settings.tip3">ใช้ Proxy เฉพาะเมื่อผู้ให้บริการบอกให้ใช้ กรอกผิดจะสแกน QR หรือส่งข้อความไม่ได้</li>
+                </ul>
+              </section>
+              <section class="help-card">
+                <h3 data-i18n="help.common.faq">เจอปัญหา?</h3>
+                <details class="help-faq"><summary data-i18n="help.settings.q1">ไม่เห็นเมนู หรือปุ่มกดไม่ได้</summary><p data-i18n="help.settings.a1">บทบาทของคุณอาจไม่มีสิทธิ์ ให้เจ้าของร้านหรือผู้ดูแลปรับให้</p></details>
+                <details class="help-faq"><summary data-i18n="help.settings.q2">สแกน QR แล้วไม่ผ่าน</summary><p data-i18n="help.settings.a2">รอให้ QR ขึ้นใหม่แล้วสแกนอีกครั้ง ถ้ามีการขอ PIN ให้กรอกบนมือถือภายในเวลาที่กำหนด</p></details>
+              </section>
+            </div>
+          </div>
+          </div>
+        </div>
+        </div>
+          </div>
           <div class="tab-panel" data-tab-panel="kpi" id="tabPanelKpi" role="tabpanel" aria-labelledby="tabKpi">
             <div class="tab-panel-inner ux-grid">
               <div class="ux-row space">
@@ -6911,7 +6970,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     // ---- top-level tabs -------------------------------------------------
-    const TABS = ["line", "assistant", "incoming-api", "tools", "bot", "logs", "kpi"];
+    const TABS = ["line", "assistant", "incoming-api", "tools", "bot", "logs", "kpi", "settings"];
     const BOT_PAGES = ["schedules", "schedule", "wizard", "patterns", "pattern-categories", "ai-settings", "guide"];
     function setTab(tab) {
       if (!TABS.includes(tab)) tab = "line";
@@ -6946,6 +7005,9 @@ INDEX_HTML = r"""<!doctype html>
       }
       if (tab === "incoming-api") loadIncomingApiLinks().catch(toastError);
       if (tab === "kpi") loadKpi().catch(toastError);
+      if (tab === "settings" && !document.querySelector(".settings-pane.active")) {
+        setSettingsPane(state.simpleMode ? "accounts" : "password");
+      }
     }
 
     function setBotPage(page) {
@@ -7161,7 +7223,6 @@ INDEX_HTML = r"""<!doctype html>
       document.body.classList.toggle("login-page-scroll", view === "login");
       $("accountGate").classList.toggle("hidden", view !== "gate");
       $("loginPanel").classList.toggle("active", view === "login");
-      $("settingsPanel").classList.toggle("active", view === "settings");
       $("workspace").classList.toggle("hidden", view !== "workspace");
     }
 
@@ -7472,12 +7533,14 @@ INDEX_HTML = r"""<!doctype html>
       $("settingsButton").setAttribute("aria-expanded", String(!isHidden));
     }
 
+    // Settings is a page inside the workspace, so the sidebar stays and it scrolls.
     function openSettings(pane) {
       pane = pane || (state.simpleMode ? "accounts" : "password");
       closeSettingsMenu();
       setSettingsPane(pane);
-      setAccountControls(false);
-      setView("settings");
+      setView("workspace");
+      setTab("settings");
+      $("tabPanelSettings").scrollTop = 0;
     }
 
     function setSettingsPane(pane) {

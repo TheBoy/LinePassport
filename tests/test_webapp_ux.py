@@ -913,8 +913,18 @@ def test_ai_prompt_digit_tokens_are_filled_on_every_send():
 
 def test_every_settings_tab_has_a_click_handler():
     html = webapp_module.INDEX_HTML
-    panes = re.findall(r'class="settings-tabs">(.*?)</div>', html, re.S)[0]
+    panes = re.findall(r'class="settings-tabs"[^>]*>(.*?)</nav>', html, re.S)[0]
     names = re.findall(r'data-settings-pane="([a-z]+)"', panes)
     assert {"team", "ai", "kpi", "notify"} <= set(names)
     assert 'document.querySelectorAll(".settings-tabs [data-settings-pane]")' in html
     assert "setSettingsPane(btn.dataset.settingsPane)" in html
+
+
+def test_settings_is_a_scrolling_workspace_page():
+    html = webapp_module.INDEX_HTML
+    assert 'data-tab-panel="settings" id="tabPanelSettings"' in html
+    assert '"kpi", "settings"];' in html
+    assert 'data-tab="settings" data-nav-settings="true"' in html
+    assert '.tab-panel[data-tab-panel="settings"].active { overflow: auto;' in html
+    # The settings page lives inside the workspace, after the sidebar.
+    assert html.index('id="workspace"') < html.index('id="tabPanelSettings"')
