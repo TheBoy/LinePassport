@@ -3044,38 +3044,33 @@ def test_assistant_has_an_in_app_usage_guide():
     assert 'data-assistant-view="guide"' in INDEX_HTML
     assert 'id="assistantGuideKnowledgeButton"' in INDEX_HTML
     assert 'id="assistantGuideChatButton"' in INDEX_HTML
-    assert 'assistant.guide_step_4_body' in INDEX_HTML
+    assert '"help.assistant.s4_body"' in INDEX_HTML
 
 
 def test_every_primary_menu_and_settings_has_a_detailed_usage_guide():
-    assert 'id="lineGuideView"' in INDEX_HTML
+    # Every guide uses the same layout: header, numbered steps, tips and FAQ.
+    for container, name in (
+        ('id="lineGuideView"', "line"),
+        ('id="assistantGuideView"', "assistant"),
+        ('id="incomingApiGuidePage"', "incoming"),
+        ('data-bot-page="guide"', "bot"),
+        ('id="logsGuideView"', "logs"),
+        ('id="toolsGuideView"', "tools"),
+        ('id="settingsGuidePane"', "settings"),
+    ):
+        assert container in INDEX_HTML
+        for part in ("title", "intro", "s1_title", "s1_body", "tip1", "q1", "a1"):
+            assert f'data-i18n="help.{name}.{part}"' in INDEX_HTML, (name, part)
+            assert f'"help.{name}.{part}": {{th: ' in INDEX_HTML, (name, part)
+    assert INDEX_HTML.count('<div class="help-page">') == 7
     assert 'id="lineGuideButton"' in INDEX_HTML
-    assert 'line_guide.step_5_body' in INDEX_HTML
-
     assert 'id="assistantGuideAutoReplyButton"' in INDEX_HTML
-    assert 'assistant.guide_step_6_body' in INDEX_HTML
-    assert 'assistant.guide_knowledge_rules_title' in INDEX_HTML
-
-    assert 'id="incomingApiGuidePage"' in INDEX_HTML
-    assert 'incoming_api.guide_start_5' in INDEX_HTML
-    assert 'incoming_api.guide_manage_title' in INDEX_HTML
-
-    assert 'id="toolsGuideView"' in INDEX_HTML
     assert 'id="toolsGuideViewButton"' in INDEX_HTML
-    assert 'tools.guide_step_4_body' in INDEX_HTML
-
-    assert 'data-bot-page="guide"' in INDEX_HTML
-    assert 'bot.guide_step_6_body' in INDEX_HTML
-    assert 'bot.guide_fields_title' in INDEX_HTML
-
-    assert 'id="logsGuideView"' in INDEX_HTML
     assert 'id="logsGuideViewButton"' in INDEX_HTML
-    assert 'botlog.guide_step_5_body' in INDEX_HTML
-    assert 'botlog.guide_errors_title' in INDEX_HTML
-
-    assert 'id="settingsGuidePane"' in INDEX_HTML
     assert 'id="settingsGuideTabButton"' in INDEX_HTML
-    assert 'settings.guide_isolation_body' in INDEX_HTML
+    # The Incoming API guide keeps its ready-to-copy request examples.
+    assert 'id="incomingApiGuideGetCode"' in INDEX_HTML
+    assert 'data-i18n="help.common.dev_examples"' in INDEX_HTML
 
     assert 'data-god-page-target="guide"' in GOD_HTML
     assert 'data-god-page="guide"' in GOD_HTML
@@ -3640,7 +3635,8 @@ def test_bot_has_an_in_app_usage_guide():
     assert 'id="botGuidePatternsButton"' in INDEX_HTML
     assert 'id="botGuideLogsButton"' in INDEX_HTML
     assert 'id="botGuideAiButton"' in INDEX_HTML
-    assert '"bot.guide_step_5_body"' in INDEX_HTML
+    assert '"help.bot.s5_body"' in INDEX_HTML
+    assert 'id="botGuideBackButton"' in INDEX_HTML
     assert '"ai-settings", "guide"' in INDEX_HTML
 
 

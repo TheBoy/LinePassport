@@ -7,6 +7,10 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Plain-language usage guides.** All seven guides (Chat, Auto reply,
+  Scheduled sends, Activity log, Tools, Incoming API, Settings) share one
+  layout: what the page is for, numbered steps with jump buttons, a
+  "good to know" box and a tap-to-open FAQ. The text matches today's screens.
 - **Scheduled sends page with two tabs**, *Scheduled sends* and *Message
   patterns*, under one header whose main button follows the tab. Patterns show
   as cards with category chips, search, a "used in N jobs" badge and a
