@@ -5366,6 +5366,7 @@ INDEX_HTML = r"""<!doctype html>
                   </div>
                   <div class="ux-grid" style="margin-top:14px" data-wizard-fields="ai_image" hidden>
                     <label><span data-i18n="scheduler.lbl_ai_prompt">AI image prompt</span><textarea id="wizardAiPrompt" rows="3" maxlength="20000"></textarea></label>
+                    <div class="ph-chips" id="wizardAiVarChips"></div>
                     <span class="ux-muted" data-i18n="wizard.ai_key_hint">Uses the picture AI from Settings → AI.</span>
                   </div>
                   <div class="ux-grid" style="margin-top:14px" data-wizard-fields="api" hidden>
@@ -13680,6 +13681,16 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       ["{name}", "var.name"],
       ["{rand:1-100}", "var.rand"]
     ];
+    // Chips under each editor: [text inserted, tooltip key]. Random numbers use
+    // the short {1D} {2D} {3D} tokens; {rand:1-100} still displays for old jobs.
+    const WIZARD_TEXT_CHIPS = [
+      ["{date}", "var.date_hint"],
+      ["{time}", "var.time_hint"],
+      ["{name}", "var.name_hint"],
+      ["{1D}", "var.1d_hint"],
+      ["{2D}", "var.2d_hint"],
+      ["{3D}", "var.3d_hint"]
+    ];
     const MAX_WIZARD_TARGETS = 20;
     const CLASH_WINDOW_MINUTES = 10;
 
@@ -14129,7 +14140,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         attachUrl: job.attachImage ? job.imageSource || "" : "",
         attachName: job.attachImage ? job.imageName || job.imageSource || "" : "",
         attachKept: Boolean(job.attachImage),
-        aiPrompt: job.aiPrompt || (job.contentSource === "ai_image" && !split.picked.length ? texts[0] || "" : ""),
+        aiPrompt: varsToDisplay(job.aiPrompt || (job.contentSource === "ai_image" && !split.picked.length ? texts[0] || "" : "")),
         apiMethod: job.apiMethod || "GET",
         apiUrl: job.apiUrl || "",
         apiBody: job.apiBody || "",
@@ -14299,21 +14310,26 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     }
 
     function renderWizardVars() {
-      const root = $("wizardVarChips");
-      root.replaceChildren();
-      for (const [, key] of WIZARD_VARS) {
-        const chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "ph-chip";
-        chip.textContent = `{${t(key)}}`;
-        chip.title = t(key + "_hint");
-        chip.addEventListener("click", () => {
-          const box = state.wizardLastTextBox || $("wizardText");
-          insertAtCursor(box, `{${t(key)}}`);
-          box.dispatchEvent(new Event("input"));
-        });
-        root.appendChild(chip);
-      }
+      const build = (root, chips, target) => {
+        root.replaceChildren();
+        for (const [token, hint] of chips) {
+          const label = varsToDisplay(token);
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "ph-chip";
+          chip.textContent = label;
+          chip.title = t(hint);
+          chip.addEventListener("click", () => {
+            const box = target();
+            insertAtCursor(box, label);
+            box.dispatchEvent(new Event("input"));
+          });
+          root.appendChild(chip);
+        }
+      };
+      build($("wizardVarChips"), WIZARD_TEXT_CHIPS, () => state.wizardLastTextBox || $("wizardText"));
+      // The AI prompt is the same for every chat, so it has no recipient name.
+      build($("wizardAiVarChips"), WIZARD_TEXT_CHIPS.filter(([token]) => token !== "{name}"), () => $("wizardAiPrompt"));
     }
 
     function wizardPickedPatterns() {
@@ -14552,7 +14568,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const texts = wizardTextPool();
       const typed = [d.text, ...d.extras].map((x) => varsToTokens(x)).filter((x) => x.trim());
       const picked = wizardPickedPatterns();
-      const prompts = [d.aiPrompt, ...picked.map((p) => p.text)].filter((x) => String(x).trim());
+      const prompts = [varsToTokens(d.aiPrompt), ...picked.map((p) => p.text)].filter((x) => String(x).trim());
       const repeat = d.freq !== "once";
       const attach = wizardHasAttachment();
       const firstTarget = d.targets[0] || {mid: "", name: ""};
@@ -14572,7 +14588,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         imageData: d.type === "image" ? d.imageData : (attach ? d.attachData : ""),
         imageName: d.type === "image" ? d.imageName : (attach ? d.attachName : ""),
         attachImage: attach,
-        aiPrompt: d.type === "ai_image" ? d.aiPrompt : "",
+        aiPrompt: d.type === "ai_image" ? varsToTokens(d.aiPrompt) : "",
         apiMethod: d.apiMethod,
         apiUrl: d.type === "api" ? d.apiUrl.trim() : "",
         apiBody: d.type === "api" ? d.apiBody : "",
@@ -15074,6 +15090,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "var.name_hint": {th: "ชื่อของเพื่อนหรือกลุ่มที่รับข้อความ", en: "Name of the friend or group receiving it"},
       "var.rand": {th: "เลขสุ่ม 1–100", en: "random 1–100"},
       "var.rand_hint": {th: "ตัวเลขสุ่มใหม่ทุกครั้งที่ส่ง", en: "A new random number every send"},
+      "var.1d_hint": {th: "เลขสุ่ม 1 หลัก (0–9) ใหม่ทุกครั้งที่ส่ง", en: "A random 1-digit number (0–9), new every send"},
+      "var.2d_hint": {th: "เลขสุ่ม 2 หลัก (00–99) ใหม่ทุกครั้งที่ส่ง", en: "A random 2-digit number (00–99), new every send"},
+      "var.3d_hint": {th: "เลขสุ่ม 3 หลัก (000–999) ใหม่ทุกครั้งที่ส่ง", en: "A random 3-digit number (000–999), new every send"},
       "login.howto_1": {th: "เปิดแอป LINE บนมือถือ ไปที่หน้าหลัก", en: "Open LINE on your phone and go to Home."},
       "login.howto_2": {th: "แตะไอคอนสแกน QR มุมขวาบน", en: "Tap the QR scanner at the top right."},
       "login.howto_3": {th: "สแกนโค้ดนี้ แล้วกดยืนยันบนมือถือ", en: "Scan this code, then confirm on your phone."},

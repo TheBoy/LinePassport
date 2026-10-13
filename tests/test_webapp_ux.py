@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -893,3 +894,18 @@ def test_scheduled_sends_page_has_jobs_and_patterns_tabs():
     assert 'id="openPatternsButton"' not in html and 'id="closePatternsButton"' not in html
     assert "function useStartJobWithPattern" in html
     assert '"patterns.used_in"' in html
+
+
+def test_wizard_chips_use_digit_tokens_in_text_and_ai_prompt():
+    html = webapp_module.INDEX_HTML
+    for token in ('["{1D}", "var.1d_hint"]', '["{2D}", "var.2d_hint"]', '["{3D}", "var.3d_hint"]'):
+        assert token in html
+    assert '["{rand:1-100}", "var.rand_hint"]' not in html
+    assert 'id="wizardAiVarChips"' in html
+    # The AI prompt converts Thai chip labels back to tokens before saving.
+    assert 'aiPrompt: d.type === "ai_image" ? varsToTokens(d.aiPrompt) : ""' in html
+
+
+def test_ai_prompt_digit_tokens_are_filled_on_every_send():
+    prompt = webapp_module._apply_placeholders("cat number {1D}-{2D}-{3D}")
+    assert re.fullmatch(r"cat number \d-\d{2}-\d{3}", prompt)

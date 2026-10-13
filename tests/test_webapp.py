@@ -631,8 +631,8 @@ def test_mobile_scheduler_uses_primary_tabs_and_compact_job_actions():
 
 
 def test_placeholder_chips_stay_in_one_scrollable_row_on_mobile():
-    # Schedule form, pattern form and the scheduled-send wizard.
-    assert INDEX_HTML.count('class="ph-chips"') == 3
+    # Schedule form, pattern form, the wizard's message and its AI prompt.
+    assert INDEX_HTML.count('class="ph-chips"') == 4
     assert ".ph-chips {\n      display: flex;\n      flex-wrap: nowrap;" in INDEX_HTML
     assert "overflow-x: auto;" in INDEX_HTML
     assert ".ph-chip {\n      flex: 0 0 auto;\n      width: auto;" in INDEX_HTML
