@@ -909,3 +909,12 @@ def test_wizard_chips_use_digit_tokens_in_text_and_ai_prompt():
 def test_ai_prompt_digit_tokens_are_filled_on_every_send():
     prompt = webapp_module._apply_placeholders("cat number {1D}-{2D}-{3D}")
     assert re.fullmatch(r"cat number \d-\d{2}-\d{3}", prompt)
+
+
+def test_every_settings_tab_has_a_click_handler():
+    html = webapp_module.INDEX_HTML
+    panes = re.findall(r'class="settings-tabs">(.*?)</div>', html, re.S)[0]
+    names = re.findall(r'data-settings-pane="([a-z]+)"', panes)
+    assert {"team", "ai", "kpi", "notify"} <= set(names)
+    assert 'document.querySelectorAll(".settings-tabs [data-settings-pane]")' in html
+    assert "setSettingsPane(btn.dataset.settingsPane)" in html

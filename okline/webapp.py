@@ -12072,10 +12072,11 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     $("accountManagementMenuButton").addEventListener("click", () => openSettings("accounts"));
     $("userManagementMenuButton").addEventListener("click", () => openSettings("users"));
     $("settingsBackButton").addEventListener("click", () => refreshStatus(false));
-    $("passwordTabButton").addEventListener("click", () => setSettingsPane("password"));
-    $("accountsTabButton").addEventListener("click", () => setSettingsPane("accounts"));
-    $("usersTabButton").addEventListener("click", () => setSettingsPane("users"));
-    $("settingsGuideTabButton").addEventListener("click", () => setSettingsPane("guide"));
+    // Every settings tab switches by its data-settings-pane (Team, AI, KPI and
+    // Notifications were added later and had no handler).
+    document.querySelectorAll(".settings-tabs [data-settings-pane]").forEach((btn) => {
+      btn.addEventListener("click", () => setSettingsPane(btn.dataset.settingsPane));
+    });
     $("changePasswordButton").addEventListener("click", () => changePassword().catch(toastError));
     $("secureButton").addEventListener("click", () => secureWithPassword().catch(toastError));
     $("createUserButton").addEventListener("click", () => createUser().catch(toastError));
