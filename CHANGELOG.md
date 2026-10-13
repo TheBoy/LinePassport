@@ -11,6 +11,10 @@ All notable changes to OkLine are documented here. The format follows
   patterns*, under one header whose main button follows the tab. Patterns show
   as cards with category chips, search, a "used in N jobs" badge and a
   *Use in a job* button that opens the wizard with that pattern ticked.
+- **Clearer scheduled sends list.** The two tabs are a segmented switch with a
+  one-line explanation; three summary tiles show active jobs, the next send
+  and today's usage; every job card leads with the job name, a type icon and
+  labelled rows (to · when · message · last sends); paused jobs are dimmed.
 - **Redesigned LinePassport web UI.** Left sidebar (Chat · Auto reply ·
   Scheduled sends · Staff KPI · Settings, plus a small developer group for API,
   Tools and Activity log), an account card with one connection dot, a phone

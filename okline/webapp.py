@@ -3767,10 +3767,72 @@ INDEX_HTML = r"""<!doctype html>
     .wizard-summary { position: sticky; top: 0; display: grid; gap: 10px; color: var(--ink); }
     .wizard-summary label { color: var(--muted); }
     /* Scheduled sends page: one header, two tabs (jobs | message patterns). */
-    .sched-hub { display: grid; gap: 6px; margin-bottom: 14px; }
-    .sched-hub-tabs { border-bottom: 1px solid var(--line); gap: 14px; }
-    .sched-hub-tabs .subtab { display: inline-flex; align-items: center; gap: 6px; padding: 0 2px; }
-    .sched-hub-tabs .subtab[aria-selected="true"] .badge { background: var(--accent-soft); color: #087443; }
+    .sched-hub { display: grid; gap: 12px; margin-bottom: 16px; }
+    .sched-hub-tabs {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      width: max-content;
+      max-width: 100%;
+      border-radius: 12px;
+      background: var(--surface-2);
+    }
+    .hub-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 0 18px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .hub-tab svg { width: 18px; height: 18px; }
+    .hub-tab:hover { color: var(--ink); }
+    .hub-tab[aria-selected="true"] {
+      background: var(--surface);
+      color: var(--ink);
+      box-shadow: 0 1px 3px rgba(16, 24, 40, .14);
+    }
+    .hub-tab[aria-selected="true"] svg { color: var(--accent); }
+    .hub-tab[aria-selected="true"] .badge { background: #E9F9EF; color: #087443; }
+    .sched-hub-hint { margin: 0; }
+    .jobs-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+    .stat-tile {
+      display: grid;
+      gap: 2px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      min-width: 0;
+    }
+    .stat-tile .stat-label { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .stat-tile strong { font-size: 20px; line-height: 1.3; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .stat-tile .ux-muted { font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .stat-tile.warn { border-color: #FEC84B; background: var(--warn-bg); }
+    .stat-tile.warn strong { color: var(--warn); }
+    .jobs-toolbar { margin-bottom: 12px; }
+    .scheduler-list-panel > .section-head { display: none; }
+    .job-type-icon {
+      display: grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: #E9F9EF;
+      font-size: 19px;
+    }
+    .job-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .job-card-title strong { font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
+    .job-facts { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 4px 10px; margin: 6px 0 0; font-size: 13px; }
+    .job-facts dt { color: var(--muted); }
+    .job-facts dd { margin: 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .job-card.off .job-type-icon { background: var(--surface-2); filter: grayscale(1); }
+    .job-card.off .job-facts { opacity: .7; }
     .pattern-filter-panel { border: 0; box-shadow: none; background: transparent; margin-bottom: 12px; }
     .pattern-filter-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
     .pattern-chips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
@@ -3782,7 +3844,7 @@ INDEX_HTML = r"""<!doctype html>
       font-weight: 600;
       background: var(--surface);
     }
-    .pattern-chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: #06251a; }
+    .pattern-chip[aria-pressed="true"] { border-color: var(--accent); background: #E9F9EF; color: #06251a; }
     .pattern-chip .count { color: var(--muted); font-weight: 500; margin-left: 4px; }
     .pattern-filter-tools { flex-wrap: nowrap; }
     .pattern-filter-tools input[type="search"] { width: 220px; min-height: 34px; }
@@ -3817,6 +3879,18 @@ INDEX_HTML = r"""<!doctype html>
       .pattern-chip { flex: 0 0 auto; }
       .pattern-form-grid { grid-template-columns: 1fr; }
       .pattern-cards { grid-template-columns: 1fr; }
+      .sched-hub-tabs { display: flex; width: 100%; }
+      .hub-tab { flex: 1 1 0; justify-content: center; gap: 6px; padding: 0 6px; font-size: 14px; white-space: nowrap; }
+      .hub-tab svg { display: none; }
+      .jobs-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .jobs-stats .stat-tile:nth-child(2) { grid-column: 1 / -1; order: -1; }
+      .stat-tile { padding: 10px 12px; }
+      .stat-tile strong { font-size: 17px; }
+      .jobs-toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+      .jobs-toolbar > .ux-row { flex-wrap: nowrap; width: auto; }
+      .jobs-toolbar button { flex: 0 0 auto; width: auto; white-space: nowrap; }
+      .job-facts { grid-template-columns: 60px minmax(0, 1fr); }
+      .job-facts dd { white-space: normal; overflow-wrap: anywhere; }
       .sched-hub-top > .ux-row { width: 100%; flex-wrap: nowrap; }
       .sched-hub-top > .ux-row > .primary { flex: 1 1 auto; }
       .sched-hub-top > .ux-row > .ux-help { flex: 0 0 auto; width: 36px; }
@@ -5136,27 +5210,43 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <header class="sched-hub" id="schedHub">
             <div class="ux-row space sched-hub-top">
-              <div>
-                <h2 style="margin:0" data-i18n="jobs.title">Scheduled sends</h2>
-                <span class="ux-muted" data-i18n="hub.subtitle">Messages that go out by themselves, and the texts you reuse in them.</span>
-              </div>
+              <h2 style="margin:0" data-i18n="jobs.title">Scheduled sends</h2>
               <div class="ux-row">
                 <button id="jobsNewButton" class="primary" type="button" data-hub-action="schedules" data-requires-account data-requires-permission="schedule" data-i18n="jobs.new">+ New scheduled send</button>
                 <button id="patternFormToggle" class="primary hidden" type="button" data-hub-action="patterns" aria-expanded="false" aria-controls="patternFormSection" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.add_pattern_new">+ Add pattern</button>
                 <button class="ux-help" id="jobsHelpButton" type="button" data-i18n-title="common.help" title="Help">?</button>
               </div>
             </div>
-            <nav class="subtabs sched-hub-tabs" role="tablist" aria-label="Scheduled sends">
-              <button type="button" class="subtab" role="tab" id="hubTabSchedules" data-hub-tab="schedules" aria-selected="true"><span data-i18n="hub.tab_jobs">Scheduled sends</span> <span class="badge" id="hubJobCount">0</span></button>
-              <button type="button" class="subtab" role="tab" id="hubTabPatterns" data-hub-tab="patterns" aria-selected="false"><span data-i18n="hub.tab_patterns">Message patterns</span> <span class="badge" id="hubPatternCount">0</span></button>
+            <nav class="sched-hub-tabs" role="tablist" aria-label="Scheduled sends">
+              <button type="button" class="hub-tab" role="tab" id="hubTabSchedules" data-hub-tab="schedules" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span data-i18n="hub.tab_jobs">Scheduled sends</span><span class="badge" id="hubJobCount">0</span></button>
+              <button type="button" class="hub-tab" role="tab" id="hubTabPatterns" data-hub-tab="patterns" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8 10h8M8 14h5"/></svg><span data-i18n="hub.tab_patterns">Message patterns</span><span class="badge" id="hubPatternCount">0</span></button>
             </nav>
+            <p class="ux-muted sched-hub-hint" id="hubHint"></p>
           </header>
           <div id="botScheduler" class="bot-page" data-bot-page="schedules">
+          <div class="jobs-stats" id="jobsStats">
+            <div class="stat-tile">
+              <span class="stat-label" data-i18n="jobs.stat_active">Active jobs</span>
+              <strong id="jobsStatActive">0</strong>
+              <span class="ux-muted" id="jobsStatActiveSub"></span>
+            </div>
+            <div class="stat-tile">
+              <span class="stat-label" data-i18n="jobs.stat_next">Next send</span>
+              <strong id="jobsStatNext">-</strong>
+              <span class="ux-muted" id="jobsStatNextSub"></span>
+            </div>
+            <div class="stat-tile" id="jobsStatUsageTile">
+              <span class="stat-label" data-i18n="jobs.stat_day">Sent in 24 h</span>
+              <strong id="jobsStatDay">0</strong>
+              <span class="ux-muted" id="jobsUsage" data-i18n-title="jobs.usage_title" title="Sent in the last hour / day"></span>
+            </div>
+          </div>
           <div class="ux-row space jobs-toolbar">
-            <span class="badge" id="jobsUsage" data-i18n-title="jobs.usage_title" title="Sent in the last hour / day"></span>
+            <button id="jobsViewToggle" type="button" data-i18n="jobs.view_calendar">Next 7 days</button>
             <div class="ux-row">
-              <button id="jobsViewToggle" type="button" data-i18n="jobs.view_calendar">Next 7 days</button>
+              <button id="openBotLogsButton" type="button" data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
               <button id="jobsLimitsButton" type="button" class="hidden" data-i18n="jobs.limits">Sending limits</button>
+              <button id="clearStuckSchedulesButton" type="button" class="danger hidden" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.clear_stuck">Clear stuck jobs</button>
               <button id="jobsPauseButton" type="button" data-requires-account data-requires-permission="schedule" data-i18n="jobs.pause_all">Pause all</button>
             </div>
           </div>
@@ -5181,8 +5271,6 @@ INDEX_HTML = r"""<!doctype html>
               <h2 data-i18n="scheduler.title">Scheduler</h2>
               <div class="row compact scheduler-list-actions">
                 <span class="pill" id="scheduleCount">0</span>
-                <button id="openBotLogsButton" type="button" data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
-                <button id="clearStuckSchedulesButton" type="button" class="danger hidden" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.clear_stuck">Clear stuck jobs</button>
                 <button id="scheduleFormToggle" class="primary" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.new">+ New scheduled message</button>
               </div>
             </div>
@@ -7090,6 +7178,7 @@ INDEX_HTML = r"""<!doctype html>
       document.querySelectorAll("[data-hub-action]").forEach((btn) => {
         btn.classList.toggle("hidden", btn.dataset.hubAction !== tab || page === "pattern-categories");
       });
+      $("hubHint").textContent = t(tab === "patterns" ? "hub.hint_patterns" : "hub.hint_jobs");
     }
 
     function updateHubCounts() {
@@ -13681,15 +13770,11 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       if (!data) return;
       const settings = data.settings || {};
       const usage = data.usage || {};
-      $("jobsUsage").textContent = t("jobs.usage", {
-        hour: usage.lastHour || 0,
-        maxHour: settings.maxPerHour,
-        day: usage.lastDay || 0,
-        maxDay: settings.maxPerDay
-      });
+      $("jobsStatDay").textContent = `${usage.lastDay || 0} / ${settings.maxPerDay}`;
+      $("jobsUsage").textContent = t("jobs.usage_hour", {hour: usage.lastHour || 0, maxHour: settings.maxPerHour});
       const nearLimit = (usage.lastHour || 0) >= settings.maxPerHour * 0.8
         || (usage.lastDay || 0) >= settings.maxPerDay * 0.8;
-      $("jobsUsage").className = "badge " + (nearLimit ? "warn" : "");
+      $("jobsStatUsageTile").classList.toggle("warn", nearLimit);
       $("jobsPausedBanner").classList.toggle("hidden", !settings.paused);
       $("jobsPauseButton").textContent = t(settings.paused ? "jobs.resume_all" : "jobs.pause_all");
       $("jobsPauseButton").className = settings.paused ? "primary" : "";
@@ -13833,28 +13918,29 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         const rank = (job) => (["error", "login_required"].includes(jobStatus(job)[0]) ? 0 : (job.enabled ? 1 : 2));
         return rank(a) - rank(b) || (a.nextRunAt || Infinity) - (b.nextRunAt || Infinity);
       });
+      renderJobStats();
       for (const job of ordered) {
         const item = document.createElement("div");
         item.className = "item schedule-item";
         item.classList.add("ux-card", "job-card");
+        item.classList.toggle("off", !job.enabled);
         const name = jobTargetName(job);
         const avatar = document.createElement("span");
-        avatar.className = "avatar";
-        avatar.textContent = initialsOf(name);
+        avatar.className = "job-type-icon";
+        avatar.setAttribute("aria-hidden", "true");
+        avatar.textContent = JOB_TYPE_ICONS[job.contentSource] || JOB_TYPE_ICONS.text;
         const main = document.createElement("div");
         main.className = "job-card-main";
         const titleRow = document.createElement("div");
-        titleRow.className = "ux-row";
+        titleRow.className = "job-card-title";
         const [statusKey, statusKind] = jobStatus(job);
-        titleRow.append(textSpan(name, "strong"), textSpan(t("jobs.status_" + statusKey), "badge " + statusKind));
+        titleRow.append(textSpan(job.name || t("scheduler.default_name"), "strong"), textSpan(t("jobs.status_" + statusKey), "badge " + statusKind));
         const approx = job.exactTime ? "" : "~";
-        const when = textSpan(`${jobScheduleLabel(job)}${job.enabled && job.nextRunAt ? " · " + t("jobs.next", {at: approx + fmtEpoch(job.nextRunAt)}) : ""}`, "ux-muted");
-        const preview = textSpan(jobPreview(job), "preview");
+        const when = jobScheduleLabel(job) + (job.enabled && job.nextRunAt ? " · " + t("jobs.next", {at: approx + fmtEpoch(job.nextRunAt)}) : "");
         const history = document.createElement("div");
         history.className = "job-history";
         const recent = (job.history || []).slice(-3).reverse();
         if (recent.length) {
-          history.appendChild(textSpan(t("jobs.recent"), "ux-muted"));
           for (const entry of recent) {
             const mark = textSpan(entry.ok ? "✓" : (entry.retry ? "↻" : "✗"), entry.ok ? "ok" : "bad");
             mark.title = `${String(entry.at || "").replace("T", " ")}${entry.error ? " · " + entry.error : ""}`;
@@ -13863,7 +13949,20 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         } else {
           history.appendChild(textSpan(t("jobs.never_sent"), "ux-muted"));
         }
-        main.append(titleRow, when, preview, history);
+        const facts = document.createElement("dl");
+        facts.className = "job-facts";
+        const fact = (key, value) => {
+          const dt = document.createElement("dt");
+          dt.textContent = t(key);
+          const dd = document.createElement("dd");
+          if (typeof value === "string") { dd.textContent = value; dd.title = value; } else dd.appendChild(value);
+          facts.append(dt, dd);
+        };
+        fact("jobs.fact_to", name);
+        fact("jobs.fact_when", when);
+        fact("jobs.fact_what", jobPreview(job));
+        fact("jobs.fact_last", history);
+        main.append(titleRow, facts);
         const side = document.createElement("div");
         side.className = "job-card-side";
         const sw = document.createElement("label");
@@ -13887,6 +13986,19 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         list.appendChild(empty);
       }
       if (state.scheduleSettings) renderScheduleSettings();
+    }
+
+    const JOB_TYPE_ICONS = {text: "💬", image: "🖼️", ai_image: "✨", api: "🔗"};
+
+    function renderJobStats() {
+      const jobs = state.schedules || [];
+      const active = jobs.filter((job) => job.enabled);
+      $("jobsStatActive").textContent = `${active.length} / ${jobs.length}`;
+      const failing = jobs.filter((job) => ["error", "login_required"].includes(jobStatus(job)[0])).length;
+      $("jobsStatActiveSub").textContent = failing ? t("jobs.stat_failing", {n: failing}) : t("jobs.stat_all_ok");
+      const next = active.filter((job) => job.nextRunAt).sort((a, b) => a.nextRunAt - b.nextRunAt)[0];
+      $("jobsStatNext").textContent = next ? fmtEpoch(next.nextRunAt) : "-";
+      $("jobsStatNextSub").textContent = next ? (next.name || jobTargetName(next)) : t("jobs.stat_nothing");
     }
 
     function jobKebab(job) {
@@ -14789,8 +14901,20 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "kb.full_text": {th: "ข้อมูลร้านทั้งหมดแบบข้อความ (หัวข้อขึ้นต้นด้วย ##)", en: "All shop info as text (topics start with ##)"},
       "kb.not_synced": {th: "ยังไม่ได้ดึงข้อมูล", en: "Not synced yet"},
       "jobs.title": {th: "ส่งตามเวลา", en: "Scheduled sends"},
-      "hub.subtitle": {th: "ตั้งข้อความให้ระบบส่งเองตามเวลา และเก็บข้อความที่ใช้บ่อยไว้ใช้ซ้ำ", en: "Messages that go out by themselves, and the texts you reuse in them."},
-      "hub.tab_jobs": {th: "งานส่งตามเวลา", en: "Scheduled sends"},
+      "hub.hint_jobs": {th: "งานที่ระบบจะส่งข้อความให้เองตามเวลาที่ตั้งไว้ เปิด/ปิดได้ที่สวิตช์ของแต่ละงาน", en: "Jobs the system sends by itself at the times you set. Turn each one on or off with its switch."},
+      "hub.hint_patterns": {th: "ข้อความที่บันทึกไว้ใช้ซ้ำ ติ๊กเลือกได้ตอนสร้างงาน ถ้าเลือกหลายข้อความระบบจะสุ่มส่ง", en: "Saved texts to reuse. Tick them when creating a job; with several, one is picked at random."},
+      "jobs.stat_active": {th: "งานที่เปิดอยู่", en: "Active jobs"},
+      "jobs.stat_next": {th: "ส่งครั้งถัดไป", en: "Next send"},
+      "jobs.stat_day": {th: "ส่งแล้วใน 24 ชม.", en: "Sent in 24 h"},
+      "jobs.stat_failing": {th: "มี {n} งานส่งไม่สำเร็จ", en: "{n} failing"},
+      "jobs.stat_all_ok": {th: "ทุกงานปกติ", en: "All fine"},
+      "jobs.stat_nothing": {th: "ไม่มีงานที่รอส่ง", en: "Nothing waiting"},
+      "jobs.usage_hour": {th: "ชั่วโมงนี้ {hour} / {maxHour}", en: "This hour {hour} / {maxHour}"},
+      "jobs.fact_to": {th: "ส่งให้", en: "To"},
+      "jobs.fact_when": {th: "เวลา", en: "When"},
+      "jobs.fact_what": {th: "ข้อความ", en: "Message"},
+      "jobs.fact_last": {th: "ผลล่าสุด", en: "Last sends"},
+      "hub.tab_jobs": {th: "งานที่ตั้งไว้", en: "Jobs"},
       "hub.tab_patterns": {th: "ข้อความสำเร็จรูป", en: "Message patterns"},
       "patterns.search_ph": {th: "ค้นหาชื่อหรือข้อความ", en: "Search name or text"},
       "patterns.showing": {th: "แสดง {n} จาก {total} ข้อความ", en: "Showing {n} of {total}"},
