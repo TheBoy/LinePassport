@@ -3801,9 +3801,19 @@ INDEX_HTML = r"""<!doctype html>
     .hub-tab[aria-selected="true"] .badge { background: #E9F9EF; color: #087443; }
     .sched-hub-hint { margin: 0; }
     /* The tabs lead; the action stays a normal-sized button beside the title. */
-    .sched-hub-top { flex-wrap: nowrap; }
-    .sched-hub-top [data-hub-action] { min-height: 36px; padding: 0 14px; font-size: 14px; white-space: nowrap; }
-    .sched-hub-top .ux-help { width: 32px; min-height: 32px; }
+    .sched-hub-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .hub-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+    .hub-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 34px;
+      padding: 0 12px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .hub-action > span[aria-hidden] { font-size: 16px; line-height: 1; }
+    .hub-actions .ux-help { width: 32px; min-height: 32px; }
     .jobs-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
     .stat-tile {
       display: grid;
@@ -3883,8 +3893,14 @@ INDEX_HTML = r"""<!doctype html>
       .pattern-chip { flex: 0 0 auto; }
       .pattern-form-grid { grid-template-columns: 1fr; }
       .pattern-cards { grid-template-columns: 1fr; }
-      .sched-hub-tabs { display: flex; width: 100%; }
-      .hub-tab { flex: 1 1 0; justify-content: center; gap: 6px; padding: 0 6px; font-size: 14px; white-space: nowrap; }
+      .sched-hub-tabs { display: flex; flex: 1 1 auto; min-width: 0; width: auto; }
+      .hub-tab { flex: 1 1 0; justify-content: center; gap: 4px; min-width: 0; min-height: 38px; padding: 0 6px; font-size: 13px; white-space: nowrap; }
+      .hub-tab .badge { padding: 1px 6px; font-size: 11px; }
+      .hub-actions { gap: 4px; }
+      .hub-actions .hub-action { width: 36px; min-height: 36px; padding: 0; justify-content: center; }
+      /* Phones show just "+"; the label stays for screen readers. */
+      .hub-action .hub-action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+      .hub-actions .ux-help { width: 30px; min-height: 30px; }
       .hub-tab svg { display: none; }
       .jobs-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
       .jobs-stats .stat-tile:nth-child(2) { grid-column: 1 / -1; order: -1; }
@@ -3895,9 +3911,6 @@ INDEX_HTML = r"""<!doctype html>
       .jobs-toolbar button { flex: 0 0 auto; width: auto; white-space: nowrap; }
       .job-facts { grid-template-columns: 60px minmax(0, 1fr); }
       .job-facts dd { white-space: normal; overflow-wrap: anywhere; }
-      .sched-hub-top > .ux-row { width: auto; flex: 0 0 auto; flex-wrap: nowrap; gap: 6px; }
-      .sched-hub-top > .ux-row > .primary { flex: 0 0 auto; width: auto; min-height: 38px; padding: 0 12px; font-size: 14px; }
-      .sched-hub-top > .ux-row > .ux-help { flex: 0 0 auto; width: 32px; }
       #botPatterns .pattern-chip { width: auto; }
       #botPatterns .pattern-settings-button { width: auto; flex: 0 0 auto; }
       #botPatterns .pattern-card-foot .item-actions { display: flex; flex-wrap: wrap; width: auto; }
@@ -5213,18 +5226,18 @@ INDEX_HTML = r"""<!doctype html>
             <button type="button" id="botNavGuide" data-bot-page-target="guide" role="tab" aria-selected="false" data-i18n="bot.nav_guide">Usage guide</button>
           </div>
           <header class="sched-hub" id="schedHub">
-            <div class="ux-row space sched-hub-top">
-              <h2 style="margin:0" data-i18n="jobs.title">Scheduled sends</h2>
-              <div class="ux-row">
-                <button id="jobsNewButton" class="primary" type="button" data-hub-action="schedules" data-requires-account data-requires-permission="schedule" data-i18n="jobs.new">+ New scheduled send</button>
-                <button id="patternFormToggle" class="primary hidden" type="button" data-hub-action="patterns" aria-expanded="false" aria-controls="patternFormSection" data-requires-account data-requires-permission="schedule" data-i18n="hub.add_pattern">+ Add pattern</button>
+            <h2 style="margin:0" data-i18n="jobs.title">Scheduled sends</h2>
+            <div class="sched-hub-bar">
+              <nav class="sched-hub-tabs" role="tablist" aria-label="Scheduled sends">
+                <button type="button" class="hub-tab" role="tab" id="hubTabSchedules" data-hub-tab="schedules" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span data-i18n="hub.tab_jobs">Scheduled sends</span><span class="badge" id="hubJobCount">0</span></button>
+                <button type="button" class="hub-tab" role="tab" id="hubTabPatterns" data-hub-tab="patterns" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8 10h8M8 14h5"/></svg><span data-i18n="hub.tab_patterns">Message patterns</span><span class="badge" id="hubPatternCount">0</span></button>
+              </nav>
+              <div class="hub-actions">
+                <button id="jobsNewButton" class="primary hub-action" type="button" data-hub-action="schedules" data-requires-account data-requires-permission="schedule"><span aria-hidden="true">+</span><span class="hub-action-label" data-i18n="hub.new_job">New job</span></button>
+                <button id="patternFormToggle" class="primary hub-action hidden" type="button" data-hub-action="patterns" aria-expanded="false" aria-controls="patternFormSection" data-requires-account data-requires-permission="schedule"><span aria-hidden="true">+</span><span class="hub-action-label" data-i18n="hub.new_pattern">Add pattern</span></button>
                 <button class="ux-help" id="jobsHelpButton" type="button" data-i18n-title="common.help" title="Help">?</button>
               </div>
             </div>
-            <nav class="sched-hub-tabs" role="tablist" aria-label="Scheduled sends">
-              <button type="button" class="hub-tab" role="tab" id="hubTabSchedules" data-hub-tab="schedules" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span data-i18n="hub.tab_jobs">Scheduled sends</span><span class="badge" id="hubJobCount">0</span></button>
-              <button type="button" class="hub-tab" role="tab" id="hubTabPatterns" data-hub-tab="patterns" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8 10h8M8 14h5"/></svg><span data-i18n="hub.tab_patterns">Message patterns</span><span class="badge" id="hubPatternCount">0</span></button>
-            </nav>
             <p class="ux-muted sched-hub-hint" id="hubHint"></p>
           </header>
           <div id="botScheduler" class="bot-page" data-bot-page="schedules">
@@ -14919,7 +14932,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "jobs.fact_what": {th: "ข้อความ", en: "Message"},
       "jobs.fact_last": {th: "ผลล่าสุด", en: "Last sends"},
       "hub.tab_jobs": {th: "งานที่ตั้งไว้", en: "Jobs"},
-      "hub.add_pattern": {th: "+ เพิ่มข้อความ", en: "+ Add pattern"},
+      "hub.new_job": {th: "สร้างงาน", en: "New job"},
+      "hub.new_pattern": {th: "เพิ่มข้อความ", en: "Add pattern"},
       "hub.tab_patterns": {th: "ข้อความสำเร็จรูป", en: "Message patterns"},
       "patterns.search_ph": {th: "ค้นหาชื่อหรือข้อความ", en: "Search name or text"},
       "patterns.showing": {th: "แสดง {n} จาก {total} ข้อความ", en: "Showing {n} of {total}"},
@@ -14931,7 +14945,6 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "patterns.back": {th: "← ข้อความสำเร็จรูป", en: "← Message patterns"},
       "patterns.delete_used_confirm": {th: "ข้อความนี้ใช้อยู่ใน {n} งาน งานเหล่านั้นจะยังส่งข้อความเดิมได้ ลบเลยไหม?", en: "This pattern is used in {n} jobs. They keep sending their saved copy. Delete it?"},
       "jobs.subtitle": {th: "ข้อความที่ระบบส่งให้เองตามเวลาที่ตั้งไว้", en: "Messages that go out by themselves at the time you choose."},
-      "jobs.new": {th: "+ สร้างงาน", en: "+ New job"},
       "jobs.when_once": {th: "ครั้งเดียว {at}", en: "Once on {at}"},
       "jobs.every_day": {th: "ทุกวัน", en: "Every day"},
       "jobs.weekdays": {th: "จ–ศ", en: "Mon–Fri"},
