@@ -867,3 +867,16 @@ def test_ops_watchers_stop_when_account_is_removed(web_state, monkeypatch):
         assert watcher.stop_event.is_set()
     finally:
         fake.release.set()
+
+
+def test_narrow_screens_show_one_chat_pane_at_a_time():
+    assert 'id="convoBackButton"' in INDEX_HTML
+    assert '.tab-panel[data-tab-panel="line"].active.convo-open > .line-list { display: none; }' in INDEX_HTML
+    assert '$("tabPanelLine").classList.toggle("convo-open", Boolean(mid));' in INDEX_HTML
+    # The hidden legacy row must not steal the stretch row from the messages.
+    assert ".line-convo { grid-template-rows: auto minmax(0, 1fr) auto; }" in INDEX_HTML
+
+
+def test_chat_background_is_white_in_every_color_scheme():
+    assert "--line-msg-bg: #ffffff;" in INDEX_HTML
+    assert "#202b36" not in INDEX_HTML

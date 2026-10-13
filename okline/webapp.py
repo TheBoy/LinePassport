@@ -2228,7 +2228,7 @@ INDEX_HTML = r"""<!doctype html>
        (list column + conversation pane)
        ============================================================ */
     :root {
-      --line-msg-bg: #e9eef2;
+      --line-msg-bg: #ffffff;
       --line-out: #06c755;
       --line-in: #ffffff;
     }
@@ -3251,20 +3251,6 @@ INDEX_HTML = r"""<!doctype html>
       gap: 12px;
     }
 
-    @media (prefers-color-scheme: dark) {
-      .line-convo { --line-msg-bg: #202b36; }
-      .line-messages { background: #202b36; }
-      /* received stays LINE green + white; own becomes dark grey + light text */
-      .line-messages .bubble { background: #3a4650; color: #eef2f5; }
-      .line-messages .bubble.me { background: var(--line-out); color: #fff; }
-      .line-messages .bubble .msg-chip { background: rgba(255, 255, 255, .14); color: #eef2f5; }
-      .line-messages .bubble .by,
-      .line-messages .bubble .at { color: #b8c2cc; }
-      .msg-sender { color: #a7b3bd; }
-      .msg-time { color: #8494a0; }
-      .date-chip span { background: rgba(255, 255, 255, .22); }
-    }
-
     /* ===== LinePassport redesign (UX plan): sidebar shell & shared pieces ===== */
     :root {
       --accent: #06C755;
@@ -3430,6 +3416,8 @@ INDEX_HTML = r"""<!doctype html>
 
     /* Chat: click a row to open; the legacy target/count row is gone. */
     .convo-advanced { display: none !important; }
+    /* Header, messages, composer: the hidden legacy row must not take the 1fr slot. */
+    .line-convo { grid-template-rows: auto minmax(0, 1fr) auto; }
     .send-btn.with-label {
       display: inline-flex;
       align-items: center;
@@ -3795,6 +3783,12 @@ INDEX_HTML = r"""<!doctype html>
     .scheduler-list-head button { min-height: 32px; font-size: 13px; }
     #schedulesList { display: grid; gap: 10px; max-height: none; overflow: visible; }
     .job-card { overflow: visible; }
+    .jobs-toolbar button { min-height: 32px; font-size: 13px; }
+    #jobsLimitsCard label { min-width: 110px; }
+    .calendar-day { display: grid; gap: 6px; }
+    .calendar-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 13px; }
+    .calendar-row.busy .calendar-time { color: var(--warn); font-weight: 700; }
+    .calendar-row > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .wizard-summary dl { margin: 0; display: grid; gap: 8px; }
     .wizard-summary dt { color: var(--muted); font-size: 12px; }
     .wizard-summary dd { margin: 0; font-weight: 600; word-break: break-word; }
@@ -3869,6 +3863,29 @@ INDEX_HTML = r"""<!doctype html>
 
     #assistantPanelRoot .assistant-view-nav { display: none; }
     [hidden] { display: none !important; }
+    #convoBackButton { display: none; }
+    /* Narrow screens stack the list above the chat; show one at a time instead,
+       like the LINE app, so a tapped chat never opens below the fold. */
+    @media (max-width: 980px) {
+      .tab-panel[data-tab-panel="line"].active:not(.convo-open) > .line-convo { display: none; }
+      .tab-panel[data-tab-panel="line"].active.convo-open > .line-list { display: none; }
+      .tab-panel[data-tab-panel="line"].active.convo-open > .line-convo {
+        height: calc(100dvh - 52px);
+        min-height: 0;
+      }
+      .tab-panel[data-tab-panel="line"].active.convo-open .line-messages-shell { min-height: 0; }
+      #convoBackButton { display: inline-flex; flex: 0 0 auto; width: auto; }
+      .convo-header { gap: 6px; }
+      .convo-title { min-width: 0; flex: 1 1 auto; }
+      .convo-title h2, .convo-title .convo-sub { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    }
+    @media (max-width: 640px) {
+      .tab-panel[data-tab-panel="line"].active.convo-open > .line-convo {
+        height: calc(100dvh - 44px - 64px - env(safe-area-inset-bottom));
+      }
+      .tab-panel[data-tab-panel="line"].active.convo-open .presence-chip #presenceLabel { display: none; }
+      .tab-panel[data-tab-panel="line"].active.convo-open #lineGuideButton { display: none; }
+    }
     .ux-row > select, .ux-row > input[type="date"], .ux-row > input[type="time"] { width: auto; }
     .line-row-main { display: grid; }
     .fresh-row { display: flex; justify-content: flex-end; padding: 0 12px 4px; min-height: 0; }
@@ -4333,6 +4350,7 @@ INDEX_HTML = r"""<!doctype html>
 
         <section class="line-convo" id="lineConversationPanel">
           <header class="convo-header">
+            <button class="icon-ghost" id="convoBackButton" type="button" data-i18n-title="chat.back_to_list" title="Back to chats" aria-label="Back to chats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
             <div class="convo-title">
               <h2 id="chatTitle" data-i18n="chat.title">Chat</h2>
               <span id="targetLabel" class="convo-sub" data-i18n="chat.no_target">No target selected</span>
@@ -5074,6 +5092,29 @@ INDEX_HTML = r"""<!doctype html>
               <button class="ux-help" id="jobsHelpButton" type="button" data-i18n-title="common.help" title="Help">?</button>
             </div>
           </div>
+          <div class="ux-row space jobs-toolbar">
+            <span class="badge" id="jobsUsage" data-i18n-title="jobs.usage_title" title="Sent in the last hour / day"></span>
+            <div class="ux-row">
+              <button id="jobsViewToggle" type="button" data-i18n="jobs.view_calendar">Next 7 days</button>
+              <button id="jobsLimitsButton" type="button" class="hidden" data-i18n="jobs.limits">Sending limits</button>
+              <button id="jobsPauseButton" type="button" data-requires-account data-requires-permission="schedule" data-i18n="jobs.pause_all">Pause all</button>
+            </div>
+          </div>
+          <div class="ux-warning hidden" id="jobsPausedBanner" data-i18n="jobs.paused_banner">All scheduled sends are paused.</div>
+          <section class="ux-card hidden" id="jobsLimitsCard">
+            <h3 data-i18n="jobs.limits">Sending limits</h3>
+            <span class="ux-muted" data-i18n="jobs.limits_hint">Jobs over the limit wait in the queue and go out later. Lower is safer for a personal LINE account.</span>
+            <div class="ux-row" style="margin-top:10px">
+              <label><span data-i18n="jobs.max_per_hour">Per hour</span><input id="jobsMaxPerHour" type="number" min="1" max="500" style="width:110px"></label>
+              <label><span data-i18n="jobs.max_per_day">Per day</span><input id="jobsMaxPerDay" type="number" min="1" max="5000" style="width:110px"></label>
+              <label><span data-i18n="jobs.jitter">Random delay up to (minutes)</span><input id="jobsJitter" type="number" min="0" max="30" style="width:110px"></label>
+            </div>
+            <div class="ux-row" style="margin-top:10px">
+              <button id="jobsLimitsSave" class="primary" type="button" data-i18n="common.save">Save</button>
+              <button id="jobsLimitsCancel" type="button" data-i18n="common.cancel">Cancel</button>
+            </div>
+          </section>
+          <div id="jobsCalendar" class="ux-grid hidden"></div>
           <div id="jobErrorBanners" class="ux-grid"></div>
           <section class="section scheduler-list-panel">
             <div class="section-head scheduler-list-head">
@@ -5112,6 +5153,11 @@ INDEX_HTML = r"""<!doctype html>
                       </div>
                       <input id="wizardTargetSearch" type="search" data-i18n-ph="contacts.search_ph" placeholder="Search…" style="flex:1 1 160px">
                     </div>
+                    <div class="ux-row space">
+                      <span class="ux-muted" id="wizardTargetCount"></span>
+                      <button id="wizardTargetClear" type="button" class="link-button hidden" data-i18n="wizard.clear_targets">Clear</button>
+                    </div>
+                    <span class="ux-muted hidden" id="wizardSpacingHint" data-i18n="wizard.spacing_hint">Chats are sent one by one, 30-90 seconds apart.</span>
                     <div class="target-picker-list" id="wizardTargetList"></div>
                   </div>
                 </div>
@@ -5126,7 +5172,18 @@ INDEX_HTML = r"""<!doctype html>
                     <label><span data-i18n="wizard.message">Message</span><textarea id="wizardText" rows="4" maxlength="20000"></textarea></label>
                     <div class="ph-chips" id="wizardVarChips"></div>
                     <div id="wizardExtraMessages" class="ux-grid"></div>
-                    <div><button id="wizardAddExtra" type="button" data-i18n="wizard.add_extra">+ Add message version 2</button></div>
+                    <div class="ux-row">
+                      <button id="wizardAddExtra" type="button" data-i18n="wizard.add_extra">+ Add message version 2</button>
+                      <select id="wizardSavedSelect" aria-label="Saved messages" style="width:auto;max-width:100%"></select>
+                    </div>
+                    <details class="ux-advanced" id="wizardAttachDetails">
+                      <summary data-i18n="wizard.attach_picture">Add a picture (optional)</summary>
+                      <div class="ux-grid">
+                        <div class="ux-row"><input type="file" id="wizardAttachFile" accept="image/*" hidden><button id="wizardAttachUpload" type="button" data-i18n="scheduler.upload_image">Upload image…</button><span class="ux-muted" id="wizardAttachName"></span><button id="wizardAttachRemove" type="button" class="link-button" data-i18n="common.remove">Remove</button></div>
+                        <label><span data-i18n="wizard.image_url">…or picture link</span><input id="wizardAttachUrl" type="url" placeholder="https://"></label>
+                        <span class="ux-muted" data-i18n="wizard.attach_hint">The text is sent first, then the picture.</span>
+                      </div>
+                    </details>
                     <span class="ux-muted" data-i18n="wizard.extra_hint">With 2 or more versions, one is picked at random each time so customers don't see the same text.</span>
                   </div>
                   <div class="ux-grid" style="margin-top:14px" data-wizard-fields="image" hidden>
@@ -5150,17 +5207,20 @@ INDEX_HTML = r"""<!doctype html>
                     <button type="button" class="choice-card" data-wizard-freq="once"><strong data-i18n="wizard.freq_once">Once</strong><span data-i18n="wizard.freq_once_hint">On one date</span></button>
                     <button type="button" class="choice-card" data-wizard-freq="daily"><strong data-i18n="wizard.freq_daily">Every day</strong><span data-i18n="wizard.freq_daily_hint">Same time daily</span></button>
                     <button type="button" class="choice-card" data-wizard-freq="weekly"><strong data-i18n="wizard.freq_weekly">Every week</strong><span data-i18n="wizard.freq_weekly_hint">On the days you pick</span></button>
+                    <button type="button" class="choice-card" data-wizard-freq="monthly"><strong data-i18n="wizard.freq_monthly">Every month</strong><span data-i18n="wizard.freq_monthly_hint">On a day of the month</span></button>
                     <button type="button" class="choice-card" data-wizard-freq="custom"><strong data-i18n="wizard.freq_custom">Custom</strong><span data-i18n="wizard.freq_custom_hint">Repeat within a time window</span></button>
                   </div>
                   <div class="ux-grid" style="margin-top:14px">
                     <label data-wizard-when="once"><span data-i18n="wizard.date">Date</span><input id="wizardDate" type="date"></label>
                     <div data-wizard-when="weekly custom"><span class="ux-muted" data-i18n="wizard.days">Days</span><div class="day-picker" id="wizardDays"></div></div>
-                    <label data-wizard-when="once daily weekly"><span data-i18n="wizard.time">Time</span><input id="wizardTime" type="time" value="09:00"></label>
+                    <label data-wizard-when="monthly"><span data-i18n="wizard.month_day_label">Day of the month</span><select id="wizardMonthDay" style="width:auto"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="13">13</option><option value="14">14</option><option value="15">15</option><option value="16">16</option><option value="17">17</option><option value="18">18</option><option value="19">19</option><option value="20">20</option><option value="21">21</option><option value="22">22</option><option value="23">23</option><option value="24">24</option><option value="25">25</option><option value="26">26</option><option value="27">27</option><option value="28">28</option><option value="29">29</option><option value="30">30</option><option value="31">31</option><option value="-1" data-i18n="wizard.month_last">Last day</option></select></label>
+                    <label data-wizard-when="once daily weekly monthly"><span data-i18n="wizard.time">Time</span><input id="wizardTime" type="time" value="09:00"></label>
                     <div class="two grid" data-wizard-when="custom">
-                      <label><span data-i18n="scheduler.window_start">From</span><input id="wizardWindowStart" type="time" value="09:00"></label>
-                      <label><span data-i18n="scheduler.window_end">Until</span><input id="wizardWindowEnd" type="time" value="18:00"></label>
+                      <label><span data-i18n="scheduler.window_start">From</span><input id="wizardWindowStart" type="time" step="1" value="00:00:00"></label>
+                      <label><span data-i18n="scheduler.window_end">Until</span><input id="wizardWindowEnd" type="time" step="1" value="23:59:59"></label>
                     </div>
-                    <details class="ux-advanced" data-wizard-when="daily weekly custom" id="wizardRangeDetails">
+                    <div class="ux-warning hidden" id="wizardClash"></div>
+                    <details class="ux-advanced" data-wizard-when="daily weekly monthly custom" id="wizardRangeDetails">
                       <summary data-i18n="wizard.date_range">Only between certain dates</summary>
                       <div class="two grid">
                         <label><span data-i18n="scheduler.active_from">Start date</span><input id="wizardActiveFrom" type="date"></label>
@@ -5173,9 +5233,10 @@ INDEX_HTML = r"""<!doctype html>
                         <div class="ux-warning" data-i18n="wizard.ban_warning">Sending often or to many chats can get a personal LINE account suspended. Keep repeats to a few times a day.</div>
                         <div class="two grid">
                           <label data-wizard-when="custom"><span data-i18n="wizard.every_minutes">Send every (minutes)</span><input id="wizardInterval" type="number" min="1" max="1440" value="60"></label>
-                          <label data-wizard-when="daily weekly custom"><span data-i18n="wizard.max_runs">Stop after this many sends (blank = no limit)</span><input id="wizardMaxRuns" type="number" min="1" placeholder="∞"></label>
+                          <label data-wizard-when="daily weekly monthly custom"><span data-i18n="wizard.max_runs">Stop after this many sends (blank = no limit)</span><input id="wizardMaxRuns" type="number" min="1" placeholder="∞"></label>
                         </div>
                         <label class="checkbox-row"><input id="wizardEncrypt" type="checkbox"><span data-i18n="wizard.encrypt">Encrypt (text only)</span></label>
+                        <label class="checkbox-row"><input id="wizardExactTime" type="checkbox"><span data-i18n="wizard.exact_time">Send at the exact time (no random delay)</span></label>
                       </div>
                     </details>
                   </div>
@@ -9881,8 +9942,8 @@ INDEX_HTML = r"""<!doctype html>
       fill("scheduleWindowEndM", 60);
       fill("scheduleRunAtH", 24);
       fill("scheduleRunAtM", 60);
-      setHm("scheduleWindowStart", "09:00");
-      setHm("scheduleWindowEnd", "18:00");
+      setHm("scheduleWindowStart", "00:00");
+      setHm("scheduleWindowEnd", "23:59");
     }
 
     function runAtValue() {
@@ -9938,8 +9999,8 @@ INDEX_HTML = r"""<!doctype html>
       $("scheduleAiPrompt").value = "";
       $("scheduleMode").value = "once";
       $("scheduleEncrypt").value = "false";
-      setHm("scheduleWindowStart", "09:00");
-      setHm("scheduleWindowEnd", "18:00");
+      setHm("scheduleWindowStart", "00:00");
+      setHm("scheduleWindowEnd", "23:59");
       $("scheduleActiveFrom").value = "";
       $("scheduleActiveUntil").value = "";
       syncDateDisplay("scheduleActiveFrom");
@@ -9983,8 +10044,8 @@ INDEX_HTML = r"""<!doctype html>
       $("scheduleMode").value = job.mode || "once";
       $("scheduleEncrypt").value = job.encrypt ? "true" : "false";
       setRunAt(job.runAt);
-      setHm("scheduleWindowStart", job.windowStart || "09:00");
-      setHm("scheduleWindowEnd", job.windowEnd || "18:00");
+      setHm("scheduleWindowStart", job.windowStart || "00:00");
+      setHm("scheduleWindowEnd", job.windowEnd || "23:59");
       $("scheduleActiveFrom").value = job.activeFrom || "";
       $("scheduleActiveUntil").value = job.activeUntil || "";
       syncDateDisplay("scheduleActiveFrom");
@@ -13358,6 +13419,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       ["{name}", "var.name"],
       ["{rand:1-100}", "var.rand"]
     ];
+    const MAX_WIZARD_TARGETS = 20;
+    const CLASH_WINDOW_MINUTES = 10;
 
     function varsToDisplay(text) {
       let out = String(text || "");
@@ -13389,9 +13452,25 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       return all.find((item) => item.mid === mid) || null;
     }
 
+    function jobTargets(job) {
+      const list = (job.targets || []).length
+        ? job.targets
+        : [{mid: job.to, name: job.targetName || ""}];
+      return list.map((target) => {
+        const found = conversationLookup(target.mid);
+        return {mid: target.mid, name: (found && found.name) || target.name || target.mid};
+      });
+    }
+
     function jobTargetName(job) {
-      const found = conversationLookup(job.to);
-      return (found && found.name) || job.targetName || job.to;
+      const targets = jobTargets(job);
+      return targets.length > 1
+        ? t("jobs.target_many", {name: targets[0].name, n: targets.length - 1})
+        : (targets[0] ? targets[0].name : "-");
+    }
+
+    function monthDayLabel(day) {
+      return Number(day) === -1 ? t("wizard.month_last") : t("wizard.month_day", {n: day});
     }
 
     function jobScheduleLabel(job) {
@@ -13399,18 +13478,23 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         const at = String(job.runAt || "").replace("T", " ");
         return t("jobs.when_once", {at: at ? isoToDmy(at.slice(0, 10)) + " " + at.slice(11, 16) : "-"});
       }
-      const days = (job.weekdays || []);
-      const dayText = !days.length
-        ? t("jobs.every_day")
-        : (days.join(",") === "0,1,2,3,4" ? t("jobs.weekdays") : (days.join(",") === "0,1,2,3,4,5" ? t("jobs.mon_sat") : days.map((d) => t(DAY_KEYS[d])).join(" ")));
+      const monthDays = job.monthDays || [];
+      const days = job.weekdays || [];
+      const dayText = monthDays.length
+        ? t("jobs.monthly", {days: monthDays.map(monthDayLabel).join(", ")})
+        : !days.length
+          ? t("jobs.every_day")
+          : (days.join(",") === "0,1,2,3,4" ? t("jobs.weekdays") : (days.join(",") === "0,1,2,3,4,5" ? t("jobs.mon_sat") : days.map((d) => t(DAY_KEYS[d])).join(" ")));
       if (Number(job.intervalMinutes) >= 1440) return `${dayText} ${job.windowStart}`;
-      return t("jobs.when_window", {days: dayText, start: job.windowStart, end: job.windowEnd, n: job.intervalMinutes});
+      return t("jobs.when_window", {days: dayText, start: job.windowStart, end: `${job.windowEnd}:59`, n: job.intervalMinutes});
     }
 
     function jobStatus(job) {
       const raw = String(job.status || "").toLowerCase();
       if (job.running || raw === "running") return ["running", "info"];
       if (raw === "login required") return ["login_required", "bad"];
+      if (raw === "retrying") return ["retrying", "warn"];
+      if (raw === "queued") return ["queued", "warn"];
       if (raw === "error" || job.lastError) return ["error", "bad"];
       if (raw === "completed") return ["completed", ""];
       if (!job.enabled) return ["paused", ""];
@@ -13421,11 +13505,138 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const source = job.contentSource || "text";
       if (source === "text") {
         const texts = (job.patternTexts || []).length ? job.patternTexts : [job.text];
-        return varsToDisplay(texts[0] || "") + (texts.length > 1 ? ` (+${texts.length - 1})` : "");
+        return varsToDisplay(texts[0] || "") + (texts.length > 1 ? ` (+${texts.length - 1})` : "")
+          + (job.attachImage ? ` · ${t("wizard.with_picture")}` : "");
       }
       if (source === "image") return t("wizard.type_image") + (job.imageName ? ` · ${job.imageName}` : "");
       if (source === "ai_image") return t("wizard.type_ai_image") + " · " + (job.aiPrompt || (job.patternTexts || [])[0] || "");
       return t("wizard.type_api") + " · " + (job.apiUrl || "");
+    }
+
+    // ---- account-wide safety: limits, pause, calendar --------------------------
+    async function loadScheduleSettings() {
+      const accountId = selectedAccountId();
+      if (!accountId) return;
+      state.scheduleSettings = await api(`/api/schedules/settings?${accountQuery(accountId)}`);
+      renderScheduleSettings();
+    }
+
+    function renderScheduleSettings() {
+      const data = state.scheduleSettings;
+      if (!data) return;
+      const settings = data.settings || {};
+      const usage = data.usage || {};
+      $("jobsUsage").textContent = t("jobs.usage", {
+        hour: usage.lastHour || 0,
+        maxHour: settings.maxPerHour,
+        day: usage.lastDay || 0,
+        maxDay: settings.maxPerDay
+      });
+      const nearLimit = (usage.lastHour || 0) >= settings.maxPerHour * 0.8
+        || (usage.lastDay || 0) >= settings.maxPerDay * 0.8;
+      $("jobsUsage").className = "badge " + (nearLimit ? "warn" : "");
+      $("jobsPausedBanner").classList.toggle("hidden", !settings.paused);
+      $("jobsPauseButton").textContent = t(settings.paused ? "jobs.resume_all" : "jobs.pause_all");
+      $("jobsPauseButton").className = settings.paused ? "primary" : "";
+      $("jobsLimitsButton").classList.toggle("hidden", !data.canEditLimits);
+      $("jobsMaxPerHour").value = settings.maxPerHour;
+      $("jobsMaxPerDay").value = settings.maxPerDay;
+      $("jobsJitter").value = settings.jitterMinutes;
+    }
+
+    async function toggleSchedulesPaused() {
+      const accountId = requireAccount();
+      if (!accountId || !state.scheduleSettings) return;
+      const pausing = !state.scheduleSettings.settings.paused;
+      if (!pausing) {
+        const now = Date.now() / 1000;
+        const overdue = (state.schedules || []).filter((job) => job.enabled && job.mode === "once" && job.nextRunAt && job.nextRunAt < now).length;
+        if (overdue && !confirm(t("jobs.resume_overdue_confirm", {n: overdue}))) return;
+      }
+      state.scheduleSettings = await post("/api/schedules/pause-all", {accountId, paused: pausing});
+      renderScheduleSettings();
+      toast(t(pausing ? "jobs.paused_toast" : "jobs.resumed_toast"));
+      await loadSchedules();
+    }
+
+    async function saveScheduleLimits() {
+      const accountId = requireAccount();
+      if (!accountId) return;
+      state.scheduleSettings = await post("/api/schedules/limits", {
+        accountId,
+        maxPerHour: Number($("jobsMaxPerHour").value || 0),
+        maxPerDay: Number($("jobsMaxPerDay").value || 0),
+        jitterMinutes: Number($("jobsJitter").value || 0)
+      });
+      renderScheduleSettings();
+      $("jobsLimitsCard").classList.add("hidden");
+      toast(t("common.saved"));
+    }
+
+    async function toggleJobsCalendar() {
+      state.jobsView = state.jobsView === "calendar" ? "list" : "calendar";
+      const calendar = state.jobsView === "calendar";
+      $("jobsCalendar").classList.toggle("hidden", !calendar);
+      document.querySelector(".scheduler-list-panel").classList.toggle("hidden", calendar);
+      $("jobsViewToggle").textContent = t(calendar ? "jobs.view_list" : "jobs.view_calendar");
+      if (calendar) await loadJobsCalendar();
+    }
+
+    async function loadJobsCalendar() {
+      const accountId = selectedAccountId();
+      if (!accountId) return;
+      const data = await api(`/api/schedules/upcoming?${accountQuery(accountId)}&days=7`);
+      renderJobsCalendar(data.events || [], data.paused);
+    }
+
+    function renderJobsCalendar(events, paused) {
+      const root = $("jobsCalendar");
+      root.replaceChildren();
+      if (paused) root.appendChild(textSpan(t("jobs.paused_banner"), "ux-warning"));
+      const byDay = new Map();
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      for (let offset = 0; offset < 7; offset += 1) {
+        const day = new Date(start.getTime() + offset * 86400000);
+        byDay.set(day.toDateString(), {day, events: []});
+      }
+      for (const event of events) {
+        const at = new Date(event.at * 1000);
+        const bucket = byDay.get(at.toDateString());
+        if (bucket) bucket.events.push(event);
+      }
+      for (const {day, events: dayEvents} of byDay.values()) {
+        const card = document.createElement("section");
+        card.className = "ux-card calendar-day";
+        const total = dayEvents.reduce((sum, event) => sum + event.targets, 0);
+        const head = document.createElement("div");
+        head.className = "ux-row space";
+        head.append(
+          textSpan(day.toLocaleDateString(state.lang === "th" ? "th-TH" : "en-US", {weekday: "long", day: "numeric", month: "short"}), "strong"),
+          textSpan(t("jobs.calendar_total", {n: total}), "badge " + (total > 30 ? "warn" : ""))
+        );
+        card.appendChild(head);
+        const hourCounts = new Map();
+        for (const event of dayEvents) {
+          const hour = new Date(event.at * 1000).getHours();
+          hourCounts.set(hour, (hourCounts.get(hour) || 0) + event.targets);
+        }
+        for (const event of dayEvents.slice(0, 50)) {
+          const at = new Date(event.at * 1000);
+          const row = document.createElement("div");
+          row.className = "calendar-row" + ((hourCounts.get(at.getHours()) || 0) > 3 ? " busy" : "");
+          const names = event.targetNames.slice(0, 2).join(", ") + (event.targetNames.length > 2 ? ` +${event.targetNames.length - 2}` : "");
+          row.append(
+            textSpan(at.toLocaleTimeString(state.lang === "th" ? "th-TH" : "en-US", {hour: "2-digit", minute: "2-digit"}), "calendar-time"),
+            textSpan(event.name || "-", "strong"),
+            textSpan(names, "ux-muted")
+          );
+          card.appendChild(row);
+        }
+        if (!dayEvents.length) card.appendChild(textSpan(t("jobs.calendar_empty"), "ux-muted"));
+        if (dayEvents.length > 50) card.appendChild(textSpan(t("jobs.calendar_more", {n: dayEvents.length - 50}), "ux-muted"));
+        root.appendChild(card);
+      }
     }
 
     function renderSchedules() {
@@ -13480,7 +13691,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         titleRow.className = "ux-row";
         const [statusKey, statusKind] = jobStatus(job);
         titleRow.append(textSpan(name, "strong"), textSpan(t("jobs.status_" + statusKey), "badge " + statusKind));
-        const when = textSpan(`${jobScheduleLabel(job)}${job.enabled && job.nextRunAt ? " · " + t("jobs.next", {at: fmtEpoch(job.nextRunAt)}) : ""}`, "ux-muted");
+        const approx = job.exactTime ? "" : "~";
+        const when = textSpan(`${jobScheduleLabel(job)}${job.enabled && job.nextRunAt ? " · " + t("jobs.next", {at: approx + fmtEpoch(job.nextRunAt)}) : ""}`, "ux-muted");
         const preview = textSpan(jobPreview(job), "preview");
         const history = document.createElement("div");
         history.className = "job-history";
@@ -13488,7 +13700,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         if (recent.length) {
           history.appendChild(textSpan(t("jobs.recent"), "ux-muted"));
           for (const entry of recent) {
-            const mark = textSpan(entry.ok ? "✓" : "✗", entry.ok ? "ok" : "bad");
+            const mark = textSpan(entry.ok ? "✓" : (entry.retry ? "↻" : "✗"), entry.ok ? "ok" : "bad");
             mark.title = `${String(entry.at || "").replace("T", " ")}${entry.error ? " · " + entry.error : ""}`;
             history.appendChild(mark);
           }
@@ -13518,6 +13730,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         empty.append(textSpan(t("jobs.empty"), "ux-muted"));
         list.appendChild(empty);
       }
+      if (state.scheduleSettings) renderScheduleSettings();
     }
 
     function jobKebab(job) {
@@ -13561,8 +13774,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const pad = (n) => String(n).padStart(2, "0");
       return {
         id: null,
-        to: "",
-        targetName: "",
+        targets: [],
         targetTab: "people",
         type: "text",
         text: "",
@@ -13571,6 +13783,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         imageData: "",
         imageName: "",
         imageUrl: "",
+        attachData: "",
+        attachName: "",
+        attachUrl: "",
         aiPrompt: "",
         apiMethod: "GET",
         apiUrl: "",
@@ -13579,13 +13794,15 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         date: `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`,
         time: "09:00",
         days: [0, 1, 2, 3, 4],
-        windowStart: "09:00",
-        windowEnd: "18:00",
+        monthDay: "1",
+        windowStart: "00:00:00",
+        windowEnd: "23:59:59",
         interval: 60,
         maxRuns: "",
         activeFrom: "",
         activeUntil: "",
         encrypt: false,
+        exactTime: false,
         name: "",
         nameTouched: false,
         step: 1
@@ -13595,22 +13812,26 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     function draftFromJob(job) {
       const draft = newWizardDraft();
       const texts = (job.patternTexts || []).filter((x) => String(x).trim());
+      const targets = jobTargets(job);
       Object.assign(draft, {
         id: job.id,
-        to: job.to,
-        targetName: jobTargetName(job),
-        targetTab: (state.groups || []).some((g) => g.mid === job.to) ? "groups" : "people",
+        targets,
+        targetTab: targets.length && targets[0].mid.charAt(0).toLowerCase() !== "u" ? "groups" : "people",
         type: job.contentSource || "text",
         text: varsToDisplay(job.contentSource === "text" ? (texts[0] || job.text || "") : (job.text || "")),
         extras: job.contentSource === "text" ? texts.slice(1).map(varsToDisplay) : [],
         patternIds: (job.patternIds || []).slice(),
-        imageUrl: job.imageSource || "",
-        imageName: job.imageName || "",
+        imageUrl: job.contentSource === "image" ? job.imageSource || "" : "",
+        imageName: job.contentSource === "image" ? job.imageName || "" : "",
+        attachUrl: job.attachImage ? job.imageSource || "" : "",
+        attachName: job.attachImage ? job.imageName || job.imageSource || "" : "",
+        attachKept: Boolean(job.attachImage),
         aiPrompt: job.aiPrompt || (job.contentSource === "ai_image" ? texts[0] || "" : ""),
         apiMethod: job.apiMethod || "GET",
         apiUrl: job.apiUrl || "",
         apiBody: job.apiBody || "",
         encrypt: Boolean(job.encrypt),
+        exactTime: Boolean(job.exactTime),
         name: job.name || "",
         nameTouched: true,
         activeFrom: job.activeFrom || "",
@@ -13622,6 +13843,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         const [date, time] = String(job.runAt || "").split("T");
         draft.date = date || draft.date;
         draft.time = (time || "09:00").slice(0, 5);
+      } else if ((job.monthDays || []).length) {
+        draft.freq = "monthly";
+        draft.monthDay = String(job.monthDays[0]);
+        draft.time = job.windowStart || "09:00";
       } else if (Number(job.intervalMinutes) >= 1440) {
         draft.freq = (job.weekdays || []).length ? "weekly" : "daily";
         draft.days = (job.weekdays || []).length ? job.weekdays.slice() : draft.days;
@@ -13629,8 +13854,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       } else {
         draft.freq = "custom";
         draft.days = (job.weekdays || []).length ? job.weekdays.slice() : [0, 1, 2, 3, 4, 5, 6];
-        draft.windowStart = job.windowStart || "09:00";
-        draft.windowEnd = job.windowEnd || "18:00";
+        draft.windowStart = `${job.windowStart || "00:00"}:00`;
+        draft.windowEnd = `${job.windowEnd || "23:59"}:59`;
         draft.interval = job.intervalMinutes || 60;
       }
       return draft;
@@ -13639,15 +13864,15 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     function openScheduleWizard(job, preset) {
       state.wizard = job ? draftFromJob(job) : newWizardDraft();
       if (preset && preset.to) {
-        state.wizard.to = preset.to;
-        state.wizard.targetName = preset.name || preset.to;
+        state.wizard.targets = [{mid: preset.to, name: preset.name || preset.to}];
         state.wizard.targetTab = preset.to.charAt(0).toLowerCase() === "u" ? "people" : "groups";
       }
       $("wizardTitle").textContent = t(job ? "wizard.title_edit" : "wizard.title_new");
       setTab("bot");
       setBotPage("wizard");
       fillWizardInputs();
-      setWizardStep(state.wizard.to && !job ? 2 : 1);
+      setWizardStep(state.wizard.targets.length && !job ? 2 : 1);
+      if (!state.patterns || !state.patterns.length) loadPatterns();
     }
 
     function fillWizardInputs() {
@@ -13655,12 +13880,16 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       $("wizardText").value = d.text;
       $("wizardImageUrl").value = d.imageUrl;
       $("wizardImageName").textContent = d.imageName || "";
+      $("wizardAttachUrl").value = d.attachUrl;
+      $("wizardAttachName").textContent = d.attachName || "";
+      $("wizardAttachDetails").open = Boolean(d.attachName || d.attachUrl);
       $("wizardAiPrompt").value = d.aiPrompt;
       $("wizardApiMethod").value = d.apiMethod;
       $("wizardApiUrl").value = d.apiUrl;
       $("wizardApiBody").value = d.apiBody;
       $("wizardDate").value = d.date;
       $("wizardTime").value = d.time;
+      $("wizardMonthDay").value = d.monthDay;
       $("wizardWindowStart").value = d.windowStart;
       $("wizardWindowEnd").value = d.windowEnd;
       $("wizardInterval").value = String(d.interval);
@@ -13669,11 +13898,13 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       $("wizardActiveUntil").value = d.activeUntil;
       $("wizardRangeDetails").open = Boolean(d.activeFrom || d.activeUntil);
       $("wizardEncrypt").checked = d.encrypt;
+      $("wizardExactTime").checked = d.exactTime;
       $("wizardName").value = d.name;
       $("wizardTargetSearch").value = "";
       setWizardTargetTab(d.targetTab);
       renderWizardVars();
       renderWizardExtras();
+      renderSavedMessagePicker();
       buildDayPicker($("wizardDays"), d.days, (days) => { state.wizard.days = days; updateWizardSummary(); });
       syncWizardType();
       syncWizardFreq();
@@ -13697,7 +13928,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
 
     function wizardStepError(step) {
       const d = state.wizard;
-      if (step >= 1 && !d.to) return "wizard.err_target";
+      if (step >= 1 && !d.targets.length) return "wizard.err_target";
       if (step >= 2) {
         if (d.type === "text" && !d.text.trim() && !d.extras.some((x) => x.trim())) return "wizard.err_text";
         if (d.type === "image" && !d.imageData && !d.imageUrl.trim()) return "wizard.err_image";
@@ -13737,24 +13968,31 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const search = $("wizardTargetSearch").value.trim().toLocaleLowerCase();
       const items = (d.targetTab === "groups" ? state.groups : state.contacts) || [];
       const rows = items.filter((item) => !search || String(item.name || "").toLocaleLowerCase().includes(search) || item.mid === search);
+      const chosen = new Set(d.targets.map((target) => target.mid));
       for (const item of rows.slice(0, 300)) {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.setAttribute("aria-pressed", String(item.mid === d.to));
+        btn.setAttribute("aria-pressed", String(chosen.has(item.mid)));
         const avatar = document.createElement("span");
         avatar.className = "avatar";
-        avatar.textContent = initialsOf(item.name);
+        avatar.textContent = chosen.has(item.mid) ? "✓" : initialsOf(item.name);
         btn.append(avatar, textSpan(item.name || item.mid));
         btn.addEventListener("click", () => {
-          d.to = item.mid;
-          d.targetName = item.name || item.mid;
+          const index = d.targets.findIndex((target) => target.mid === item.mid);
+          if (index >= 0) d.targets.splice(index, 1);
+          else if (d.targets.length >= MAX_WIZARD_TARGETS) return toast(t("wizard.err_too_many", {n: MAX_WIZARD_TARGETS}), true);
+          else d.targets.push({mid: item.mid, name: item.name || item.mid});
           renderWizardTargets();
           updateWizardSummary();
-          setWizardStep(2);
         });
         root.appendChild(btn);
       }
       if (!rows.length) root.appendChild(textSpan(t(items.length ? "contacts.no_match" : "jobs.load_contacts_first"), "ux-muted"));
+      $("wizardTargetCount").textContent = d.targets.length
+        ? t("wizard.selected", {n: d.targets.length})
+        : t("wizard.pick_hint");
+      $("wizardTargetClear").classList.toggle("hidden", !d.targets.length);
+      $("wizardSpacingHint").classList.toggle("hidden", d.targets.length < 2);
     }
 
     function renderWizardVars() {
@@ -13773,6 +14011,37 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         });
         root.appendChild(chip);
       }
+    }
+
+    function renderSavedMessagePicker() {
+      const select = $("wizardSavedSelect");
+      select.replaceChildren();
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = (state.patterns || []).length ? t("wizard.saved_pick") : t("wizard.saved_none");
+      select.appendChild(placeholder);
+      for (const pattern of state.patterns || []) {
+        const option = document.createElement("option");
+        option.value = pattern.id;
+        option.textContent = pattern.name || String(pattern.text || "").slice(0, 40);
+        select.appendChild(option);
+      }
+    }
+
+    function useSavedMessage() {
+      const pattern = (state.patterns || []).find((item) => item.id === $("wizardSavedSelect").value);
+      if (!pattern) return;
+      const d = state.wizard;
+      const text = varsToDisplay(pattern.text || "");
+      if (!d.text.trim()) {
+        d.text = text;
+        $("wizardText").value = text;
+      } else {
+        d.extras.push(text);
+        renderWizardExtras();
+      }
+      $("wizardSavedSelect").value = "";
+      updateWizardSummary();
     }
 
     function renderWizardExtras() {
@@ -13801,11 +14070,16 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       $("wizardAddExtra").textContent = t("wizard.add_extra_n", {n: d.extras.length + 2});
     }
 
+    function wizardHasAttachment() {
+      const d = state.wizard;
+      return d.type === "text" && Boolean(d.attachData || d.attachUrl.trim() || d.attachKept);
+    }
+
     function syncWizardType() {
       const d = state.wizard;
       document.querySelectorAll("[data-wizard-type]").forEach((card) => card.setAttribute("aria-pressed", String(card.dataset.wizardType === d.type)));
       document.querySelectorAll("[data-wizard-fields]").forEach((box) => { box.hidden = box.dataset.wizardFields !== d.type; });
-      const imageType = d.type === "image" || d.type === "ai_image";
+      const imageType = d.type === "image" || d.type === "ai_image" || wizardHasAttachment();
       $("wizardEncrypt").disabled = imageType;
       if (imageType) { d.encrypt = false; $("wizardEncrypt").checked = false; }
       updateWizardSummary();
@@ -13825,10 +14099,11 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       if (d.freq === "once") return t("jobs.when_once", {at: `${isoToDmy(d.date)} ${d.time}`});
       const job = {
         mode: "repeat",
-        weekdays: d.freq === "daily" ? [] : d.days,
+        weekdays: d.freq === "weekly" || d.freq === "custom" ? d.days : [],
+        monthDays: d.freq === "monthly" ? [Number(d.monthDay)] : [],
         intervalMinutes: d.freq === "custom" ? d.interval : 1440,
-        windowStart: d.freq === "custom" ? d.windowStart : d.time,
-        windowEnd: d.windowEnd
+        windowStart: d.freq === "custom" ? d.windowStart.slice(0, 5) : d.time,
+        windowEnd: d.windowEnd.slice(0, 5)
       };
       return jobScheduleLabel(job);
     }
@@ -13838,67 +14113,138 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const what = d.type === "text"
         ? (d.text.trim().split("\n")[0] || t("wizard.type_text")).slice(0, 24)
         : t("wizard.type_" + d.type);
-      return `${what} → ${d.targetName || "?"}`;
+      const who = d.targets.length > 1
+        ? t("jobs.target_many", {name: d.targets[0].name, n: d.targets.length - 1})
+        : (d.targets[0] ? d.targets[0].name : "?");
+      return `${what} → ${who}`;
+    }
+
+    // Other jobs already sending within ±10 minutes of this time on the same day.
+    function wizardClashes() {
+      const d = state.wizard;
+      if (d.freq === "custom") return {count: 0, suggestion: ""};
+      const minutesOf = (hhmm) => {
+        const [h, m] = String(hhmm || "0:0").split(":").map(Number);
+        return h * 60 + m;
+      };
+      const mine = minutesOf(d.time);
+      const mineDays = d.freq === "weekly" ? d.days : (d.freq === "once" ? [((new Date(d.date + "T00:00").getDay()) + 6) % 7] : [0, 1, 2, 3, 4, 5, 6]);
+      const busyMinutes = [];
+      for (const job of state.schedules || []) {
+        if (!job.enabled || job.id === d.id) continue;
+        let minute;
+        let days;
+        if (job.mode === "once") {
+          const at = String(job.runAt || "");
+          minute = minutesOf(at.slice(11, 16));
+          days = [((new Date(at.slice(0, 10) + "T00:00").getDay()) + 6) % 7];
+        } else if (Number(job.intervalMinutes) >= 1440) {
+          minute = minutesOf(job.windowStart);
+          days = (job.weekdays || []).length ? job.weekdays : [0, 1, 2, 3, 4, 5, 6];
+        } else {
+          continue;
+        }
+        if (!days.some((day) => mineDays.includes(day))) continue;
+        busyMinutes.push(minute);
+      }
+      const near = (value) => busyMinutes.filter((minute) => Math.abs(minute - value) <= CLASH_WINDOW_MINUTES).length;
+      const count = near(mine);
+      let suggestion = "";
+      if (count) {
+        for (let step = 15; step <= 180; step += 15) {
+          for (const candidate of [mine + step, mine - step]) {
+            if (candidate < 0 || candidate >= 1440 || near(candidate)) continue;
+            suggestion = `${String(Math.floor(candidate / 60)).padStart(2, "0")}:${String(candidate % 60).padStart(2, "0")}`;
+            break;
+          }
+          if (suggestion) break;
+        }
+      }
+      return {count, suggestion};
+    }
+
+    function renderWizardClash() {
+      const box = $("wizardClash");
+      const {count, suggestion} = wizardClashes();
+      box.classList.toggle("hidden", !count);
+      if (!count) return;
+      box.replaceChildren(textSpan(t("wizard.clash", {n: count})));
+      if (suggestion) {
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "link-button";
+        use.textContent = t("wizard.clash_use", {time: suggestion});
+        use.addEventListener("click", () => {
+          state.wizard.time = suggestion;
+          $("wizardTime").value = suggestion;
+          updateWizardSummary();
+        });
+        box.append(" ", use);
+      }
     }
 
     function updateWizardSummary() {
       const d = state.wizard;
       if (!d) return;
-      $("wizardSumTo").textContent = d.targetName || "-";
+      $("wizardSumTo").textContent = d.targets.length
+        ? d.targets.map((target) => target.name).join(", ")
+        : "-";
       const what = $("wizardSumWhat");
-      if (d.type === "text") what.textContent = previewWizardText(d.text || "", d.targetName) || "-";
+      const firstName = d.targets[0] ? d.targets[0].name : "";
+      if (d.type === "text") what.textContent = previewWizardText(d.text || "", firstName) || "-";
       else if (d.type === "image") what.textContent = d.imageName || d.imageUrl || t("wizard.type_image");
       else if (d.type === "ai_image") what.textContent = `${t("wizard.type_ai_image")}: ${d.aiPrompt || "-"}`;
       else what.textContent = `${t("wizard.type_api")}: ${d.apiUrl || "-"}`;
       if (d.type === "text" && d.extras.some((x) => x.trim())) {
         what.textContent += `\n\n${t("wizard.random_versions", {n: 1 + d.extras.filter((x) => x.trim()).length})}`;
       }
-      $("wizardSumWhen").textContent = wizardWhenText();
+      if (wizardHasAttachment()) what.textContent += `\n+ ${t("wizard.with_picture")}: ${d.attachName || d.attachUrl}`;
+      $("wizardSumWhen").textContent = wizardWhenText() + (d.exactTime ? "" : ` (${t("wizard.jitter_note")})`);
       if (!d.nameTouched) {
         d.name = wizardAutoName();
         $("wizardName").value = d.name;
       }
+      renderWizardClash();
     }
 
     function wizardPayload(accountId) {
       const d = state.wizard;
       const texts = [d.text, ...d.extras].map((x) => varsToTokens(x)).filter((x) => x.trim());
       const repeat = d.freq !== "once";
-      const payload = {
+      const attach = wizardHasAttachment();
+      const firstTarget = d.targets[0] || {mid: "", name: ""};
+      return {
         name: (d.name || wizardAutoName()).trim().slice(0, 120),
         accountId,
-        to: d.to,
-        targetName: d.targetName,
+        to: firstTarget.mid,
+        targetName: firstTarget.name,
+        targets: d.targets.map((target) => ({mid: target.mid, name: target.name})),
         contentSource: d.type,
         text: d.type === "text" ? (texts[0] || "") : "",
         patternTexts: d.type === "text" && texts.length > 1 ? texts : [],
         patternIds: d.type === "text" && texts.length > 1 ? d.patternIds : [],
-        imageSource: d.type === "image" ? d.imageUrl.trim() : "",
-        imageData: d.type === "image" ? d.imageData : "",
-        imageName: d.type === "image" ? d.imageName : "",
+        imageSource: d.type === "image" ? d.imageUrl.trim() : (attach ? d.attachUrl.trim() : ""),
+        imageData: d.type === "image" ? d.imageData : (attach ? d.attachData : ""),
+        imageName: d.type === "image" ? d.imageName : (attach ? d.attachName : ""),
+        attachImage: attach,
         aiPrompt: d.type === "ai_image" ? d.aiPrompt : "",
         apiMethod: d.apiMethod,
         apiUrl: d.type === "api" ? d.apiUrl.trim() : "",
         apiBody: d.type === "api" ? d.apiBody : "",
-        encrypt: d.type === "image" || d.type === "ai_image" ? false : d.encrypt,
+        encrypt: d.type === "image" || d.type === "ai_image" || attach ? false : d.encrypt,
+        exactTime: d.exactTime,
         mode: repeat ? "repeat" : "once",
         runAt: repeat ? "" : `${d.date}T${d.time}`,
-        windowStart: d.freq === "custom" ? d.windowStart : d.time,
-        windowEnd: d.freq === "custom" ? d.windowEnd : addMinutes(d.time, 1),
+        windowStart: d.freq === "custom" ? d.windowStart.slice(0, 5) : d.time,
+        windowEnd: d.freq === "custom" ? d.windowEnd.slice(0, 5) : d.time,
         intervalMinutes: d.freq === "custom" ? Math.max(1, Number(d.interval) || 60) : 1440,
         weekdays: d.freq === "weekly" || d.freq === "custom" ? d.days : [],
+        monthDays: d.freq === "monthly" ? [Number(d.monthDay)] : [],
         activeFrom: repeat ? d.activeFrom : "",
         activeUntil: repeat ? d.activeUntil : "",
         maxRuns: repeat && d.maxRuns ? Number(d.maxRuns) : 0,
         enabled: true
       };
-      return payload;
-    }
-
-    function addMinutes(hhmm, minutes) {
-      const [h, m] = String(hhmm || "09:00").split(":").map(Number);
-      const total = (h * 60 + m + minutes) % 1440;
-      return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
     }
 
     // Extra message versions are kept as reusable patterns in "General".
@@ -13961,11 +14307,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         payload = {...job, accountId};
       } else {
         const error = wizardStepError(2);
-        if (error) return toast(t(error), true);
+        if (error && error !== "wizard.err_target") return toast(t(error), true);
         payload = wizardPayload(accountId);
         payload.mode = "once";
         payload.runAt = `${state.wizard.date || "2000-01-01"}T${state.wizard.time || "00:00"}`;
-        payload.to = payload.to || "self";
       }
       const button = $("wizardTest");
       button.disabled = true;
@@ -13985,6 +14330,24 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       state.wizard.imageName = file.name;
       $("wizardImageName").textContent = file.name;
       updateWizardSummary();
+    }
+
+    async function handleWizardAttachment(file) {
+      if (!file) return;
+      if (file.size > 30 * 1024 * 1024) return toast(t("errors.file_too_large"), true);
+      state.wizard.attachData = await fileToBase64(file);
+      state.wizard.attachName = file.name;
+      state.wizard.attachUrl = "";
+      $("wizardAttachUrl").value = "";
+      $("wizardAttachName").textContent = file.name;
+      syncWizardType();
+    }
+
+    function clearWizardAttachment() {
+      Object.assign(state.wizard, {attachData: "", attachName: "", attachUrl: "", attachKept: false});
+      $("wizardAttachUrl").value = "";
+      $("wizardAttachName").textContent = "";
+      syncWizardType();
     }
 
     // ===== UX plan wiring =======================================================
@@ -14051,6 +14414,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "chat.menu_encrypt_on": {th: "✓ เข้ารหัสข้อความในห้องนี้", en: "✓ Encrypt messages in this chat"},
       "chat.menu_schedule": {th: "ตั้งเวลาส่งให้ห้องนี้", en: "Schedule a message to this chat"},
       "chat.menu_copy_id": {th: "คัดลอกรหัสแชท", en: "Copy chat ID"},
+      "chat.back_to_list": {th: "กลับไปหน้ารายชื่อแชท", en: "Back to chats"},
       "chat.kind_friend": {th: "แชทส่วนตัว", en: "Direct chat"},
       "chat.open_mid": {th: "เปิดแชทด้วยรหัสนี้", en: "Open chat with this ID"},
       "chat.target_ph": {th: "ค้นหาชื่อ หรือวางรหัสแชท", en: "Search a name or paste a chat ID"},
@@ -14256,6 +14620,47 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "jobs.empty": {th: "ยังไม่มีงานส่งตามเวลา กด “สร้างงานส่งตามเวลา” เพื่อเริ่ม", en: "No scheduled sends yet. Press \"New scheduled send\" to start."},
       "jobs.send_now": {th: "ส่งตอนนี้", en: "Send now"},
       "jobs.load_contacts_first": {th: "กำลังโหลดรายชื่อ… เปิดหน้าแชทหนึ่งครั้งถ้ายังไม่ขึ้น", en: "Loading contacts… open Chat once if nothing shows."},
+      "jobs.target_many": {th: "{name} และอีก {n} ห้อง", en: "{name} and {n} more"},
+      "jobs.monthly": {th: "ทุกเดือน {days}", en: "Monthly on {days}"},
+      "jobs.status_retrying": {th: "กำลังลองใหม่", en: "Retrying"},
+      "jobs.status_queued": {th: "รอคิว (เกินขีดจำกัด)", en: "Queued (over the limit)"},
+      "jobs.usage": {th: "ส่งไปแล้ว {hour}/{maxHour} ใน 1 ชม. · {day}/{maxDay} ใน 24 ชม.", en: "Sent {hour}/{maxHour} in 1 h · {day}/{maxDay} in 24 h"},
+      "jobs.usage_title": {th: "จำนวนข้อความที่ส่งตามเวลาเทียบกับขีดจำกัดของบัญชีนี้", en: "Scheduled messages sent vs this account's limits"},
+      "jobs.view_calendar": {th: "ดู 7 วันข้างหน้า", en: "Next 7 days"},
+      "jobs.view_list": {th: "กลับไปรายการงาน", en: "Back to the list"},
+      "jobs.limits": {th: "ขีดจำกัดการส่ง", en: "Sending limits"},
+      "jobs.limits_hint": {th: "งานที่เกินขีดจำกัดจะรอคิวแล้วส่งทีหลัง ยิ่งต่ำยิ่งปลอดภัยสำหรับบัญชี LINE ส่วนตัว", en: "Jobs over the limit wait in the queue and go out later. Lower is safer for a personal LINE account."},
+      "jobs.max_per_hour": {th: "ต่อชั่วโมง", en: "Per hour"},
+      "jobs.max_per_day": {th: "ต่อวัน", en: "Per day"},
+      "jobs.jitter": {th: "สุ่มเลื่อนเวลาส่งไม่เกิน (นาที)", en: "Random delay up to (minutes)"},
+      "jobs.pause_all": {th: "หยุดทั้งหมดชั่วคราว", en: "Pause all"},
+      "jobs.resume_all": {th: "เปิดส่งต่อ", en: "Resume all"},
+      "jobs.paused_banner": {th: "หยุดส่งตามเวลาทั้งหมดอยู่ — กด “เปิดส่งต่อ” เมื่อพร้อม", en: "All scheduled sends are paused — press \"Resume all\" when ready."},
+      "jobs.paused_toast": {th: "หยุดส่งตามเวลาทั้งหมดแล้ว", en: "All scheduled sends paused"},
+      "jobs.resumed_toast": {th: "เปิดส่งตามเวลาต่อแล้ว", en: "Scheduled sends resumed"},
+      "jobs.resume_overdue_confirm": {th: "มีงานครั้งเดียว {n} งานที่เลยเวลาไประหว่างหยุด ระบบจะส่งทันทีเมื่อเปิดต่อ ยืนยัน?", en: "{n} one-time jobs passed their time while paused and will send right away. Continue?"},
+      "jobs.calendar_total": {th: "{n} ข้อความ", en: "{n} messages"},
+      "jobs.calendar_empty": {th: "ไม่มีงาน", en: "Nothing scheduled"},
+      "jobs.calendar_more": {th: "และอีก {n} รายการ", en: "and {n} more"},
+      "wizard.selected": {th: "เลือกแล้ว {n} ห้อง", en: "{n} selected"},
+      "wizard.pick_hint": {th: "แตะเพื่อเลือก เลือกได้หลายห้อง", en: "Tap to choose; you can pick several"},
+      "wizard.clear_targets": {th: "ล้างที่เลือก", en: "Clear"},
+      "wizard.spacing_hint": {th: "ระบบจะส่งทีละห้อง เว้นห่างห้องละ 30–90 วินาที", en: "Chats are sent one by one, 30–90 seconds apart."},
+      "wizard.err_too_many": {th: "เลือกได้สูงสุด {n} ห้องต่องาน", en: "At most {n} chats per job"},
+      "wizard.saved_pick": {th: "เลือกจากข้อความที่บันทึกไว้…", en: "Use a saved message…"},
+      "wizard.saved_none": {th: "ยังไม่มีข้อความที่บันทึกไว้", en: "No saved messages yet"},
+      "wizard.attach_picture": {th: "แนบรูปด้วย (ไม่บังคับ)", en: "Add a picture (optional)"},
+      "wizard.attach_hint": {th: "ระบบจะส่งข้อความก่อน แล้วตามด้วยรูป", en: "The text is sent first, then the picture."},
+      "wizard.with_picture": {th: "พร้อมรูป", en: "with picture"},
+      "wizard.freq_monthly": {th: "ทุกเดือน", en: "Every month"},
+      "wizard.freq_monthly_hint": {th: "วันที่เดิมของทุกเดือน", en: "On a day of the month"},
+      "wizard.month_day_label": {th: "วันที่ของเดือน", en: "Day of the month"},
+      "wizard.month_day": {th: "วันที่ {n}", en: "day {n}"},
+      "wizard.month_last": {th: "สิ้นเดือน", en: "Last day"},
+      "wizard.clash": {th: "มีงานอื่นส่งช่วงใกล้เวลานี้อยู่แล้ว {n} งาน — ส่งพร้อมกันหลายงานเสี่ยงโดนระงับ", en: "{n} other jobs send close to this time — many at once risks a suspension."},
+      "wizard.clash_use": {th: "ใช้เวลา {time} แทน", en: "Use {time} instead"},
+      "wizard.exact_time": {th: "ส่งตรงเวลา (ไม่สุ่มเลื่อนเวลา)", en: "Send at the exact time (no random delay)"},
+      "wizard.jitter_note": {th: "อาจช้าไปไม่กี่นาทีเพื่อความปลอดภัย", en: "may be a few minutes late on purpose"},
       "wizard.title_new": {th: "สร้างงานส่งตามเวลา", en: "New scheduled send"},
       "wizard.title_edit": {th: "แก้ไขงานส่งตามเวลา", en: "Edit scheduled send"},
       "wizard.step1": {th: "ส่งให้ใคร", en: "Who"},
@@ -14354,6 +14759,16 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         }
       }
     };
+    function closeMobileConversation() {
+      $("tabPanelLine").classList.remove("convo-open");
+    }
+
+    const baseSetTarget = setTarget;
+    setTarget = function (mid, label) {
+      baseSetTarget(mid, label);
+      $("tabPanelLine").classList.toggle("convo-open", Boolean(mid));
+      if (mid && window.matchMedia("(max-width: 980px)").matches) window.scrollTo(0, 0);
+    };
     const baseClearProfile = clearProfile;
     clearProfile = function () {
       baseClearProfile();
@@ -14450,6 +14865,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       try { await navigator.clipboard.writeText(state.target); toast(t("common.copied")); } catch (_) { toast(state.target); }
     });
     $("presenceChip").addEventListener("click", togglePresenceBusy);
+    $("convoBackButton").addEventListener("click", closeMobileConversation);
     for (const type of ["keydown", "pointerdown"]) {
       document.addEventListener(type, noteUserInput, {capture: true, passive: true});
     }
@@ -14533,6 +14949,33 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       $(id).addEventListener("change", () => { state.wizard[key] = $(id).value; updateWizardSummary(); });
     }
     $("wizardEncrypt").addEventListener("change", () => { state.wizard.encrypt = $("wizardEncrypt").checked; });
+    $("wizardExactTime").addEventListener("change", () => { state.wizard.exactTime = $("wizardExactTime").checked; updateWizardSummary(); });
+    $("wizardMonthDay").addEventListener("change", () => { state.wizard.monthDay = $("wizardMonthDay").value; updateWizardSummary(); });
+    $("wizardTargetClear").addEventListener("click", () => { state.wizard.targets = []; renderWizardTargets(); updateWizardSummary(); });
+    $("wizardSavedSelect").addEventListener("change", useSavedMessage);
+    $("wizardAttachUpload").addEventListener("click", () => $("wizardAttachFile").click());
+    $("wizardAttachFile").addEventListener("change", (event) => handleWizardAttachment(event.target.files[0]).catch(toastError));
+    $("wizardAttachRemove").addEventListener("click", clearWizardAttachment);
+    $("wizardAttachUrl").addEventListener("input", () => {
+      state.wizard.attachUrl = $("wizardAttachUrl").value;
+      if (state.wizard.attachUrl.trim()) {
+        state.wizard.attachData = "";
+        state.wizard.attachName = "";
+        $("wizardAttachName").textContent = "";
+      }
+      syncWizardType();
+    });
+    $("jobsViewToggle").addEventListener("click", () => toggleJobsCalendar().catch(toastError));
+    $("jobsPauseButton").addEventListener("click", () => toggleSchedulesPaused().catch(toastError));
+    $("jobsLimitsButton").addEventListener("click", () => $("jobsLimitsCard").classList.toggle("hidden"));
+    $("jobsLimitsCancel").addEventListener("click", () => $("jobsLimitsCard").classList.add("hidden"));
+    $("jobsLimitsSave").addEventListener("click", () => saveScheduleLimits().catch(toastError));
+    const baseLoadSchedules = loadSchedules;
+    loadSchedules = async function (options = {}) {
+      await baseLoadSchedules(options);
+      if (!options.background || !state.scheduleSettings) await loadScheduleSettings().catch(() => {});
+      if (state.jobsView === "calendar" && !options.background) await loadJobsCalendar().catch(() => {});
+    };
 
     state.wizard = newWizardDraft();
     setInterval(renderFreshness, 1000);
@@ -15747,6 +16190,18 @@ MAX_API_BODY_LENGTH = 64 * 1024
 MAX_NAME_LENGTH = 120
 MAX_PATTERN_REFERENCES = 100
 MAX_SCHEDULES_PER_ACCOUNT = 100
+MAX_SCHEDULE_TARGETS = 20
+# A repeating job's time window defaults to the whole day; the end minute is
+# inclusive (23:59 means up to 23:59:59).
+DEFAULT_WINDOW_START = "00:00"
+DEFAULT_WINDOW_END = "23:59"
+# Account-wide sending limits keep a personal LINE account under the radar.
+DEFAULT_SCHEDULE_MAX_PER_HOUR = 30
+DEFAULT_SCHEDULE_MAX_PER_DAY = 200
+DEFAULT_SCHEDULE_JITTER_MINUTES = 3
+SCHEDULE_QUEUE_RETRY_SECONDS = 300
+SCHEDULE_RETRY_DELAY_SECONDS = 300
+SCHEDULE_TARGET_GAP_SECONDS = (30.0, 90.0)
 MAX_SCHEDULE_IMAGE_STORAGE_PER_ACCOUNT = 100 * 1024 * 1024
 MAX_BOT_LOG_STORAGE_BYTES = 25 * 1024 * 1024
 MAX_SESSION_FILE_BYTES = 5 * 1024 * 1024
@@ -17965,6 +18420,7 @@ class WebState:
         self.presence_lock = threading.RLock()
         self.presence_current: dict[str, dict[str, Any]] = {}
         self.presence_saved_at: dict[str, float] = {}
+        self.schedule_send_cache: dict[str, list[float]] = {}
         self.schedules: list[dict[str, Any]] = self._load_schedules()
         self.schedule_inflight: set[str] = set()
         self.schedule_executor = ThreadPoolExecutor(
@@ -23545,6 +24001,11 @@ class WebState:
         if account is None:
             raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
         draft = dict(body)
+        targets = draft.get("targets") if isinstance(draft.get("targets"), list) else []
+        if targets and isinstance(targets[0], dict):
+            draft["targetName"] = str(targets[0].get("name") or "")
+        draft["targets"] = []
+        draft["to"] = ""
         draft["mode"] = "once"
         draft["runAt"] = draft.get("runAt") or _now_iso()
         draft["to"] = draft.get("to") or "self"
@@ -23586,12 +24047,216 @@ class WebState:
     def run_schedule_now(
         self, schedule_id: str, account_id: str | None = None
     ) -> dict[str, Any]:
-        return self._execute_schedule(schedule_id, manual=True, account_id=account_id)
+        with self.schedule_lock:
+            job = self._find_schedule(schedule_id)
+            _ensure_schedule_account(job, account_id)
+            many = len(job.get("targets") or []) > 1
+            if many and schedule_id in self.schedule_inflight:
+                raise WebError(HTTPStatus.CONFLICT, "Schedule is already running.")
+            if many:
+                self.schedule_inflight.add(schedule_id)
+        if not many:
+            return self._execute_schedule(schedule_id, manual=True, account_id=account_id)
+        # Several chats are spaced 30-90 s apart; don't hold the request open.
+        future = self.schedule_executor.submit(
+            self._execute_schedule, schedule_id, manual=True, account_id=account_id
+        )
+        future.add_done_callback(
+            lambda completed: self._schedule_future_done(schedule_id, completed)
+        )
+        return {"ok": True, "queued": True, "schedule": dict(job)}
+
+    # -- scheduled-send safety: limits, jitter, pause ---------------------------
+    def _schedule_settings_all(self) -> dict[str, Any]:
+        raw = self.store.get("schedule_settings", {"accounts": {}})
+        data = raw if isinstance(raw, dict) else {"accounts": {}}
+        if not isinstance(data.get("accounts"), dict):
+            data["accounts"] = {}
+        return data
+
+    def schedule_settings_for(self, account_id: str) -> dict[str, Any]:
+        stored = self._schedule_settings_all()["accounts"].get(account_id)
+        settings = {
+            "maxPerHour": DEFAULT_SCHEDULE_MAX_PER_HOUR,
+            "maxPerDay": DEFAULT_SCHEDULE_MAX_PER_DAY,
+            "jitterMinutes": DEFAULT_SCHEDULE_JITTER_MINUTES,
+            "paused": False,
+            "pausedAt": "",
+        }
+        if isinstance(stored, dict):
+            settings.update({key: stored[key] for key in settings if key in stored})
+        return settings
+
+    def _schedule_send_times(self, account_id: str) -> list[float]:
+        cached = self.schedule_send_cache.get(account_id)
+        if cached is None:
+            raw = self.store.get(f"schedule_sends:{account_id}", {"times": []})
+            items = raw.get("times") if isinstance(raw, dict) else None
+            cached = [float(x) for x in items if isinstance(x, (int, float))] if isinstance(
+                items, list
+            ) else []
+            self.schedule_send_cache[account_id] = cached
+        cutoff = time.time() - 86_400
+        cached[:] = [stamp for stamp in cached if stamp > cutoff]
+        return cached
+
+    def record_schedule_sends(self, account_id: str, count: int = 1) -> None:
+        with self.schedule_lock:
+            times = self._schedule_send_times(account_id)
+            now = time.time()
+            times.extend(now for _ in range(max(0, count)))
+            self.store.set(f"schedule_sends:{account_id}", {"times": times[-5000:]})
+
+    def schedule_usage(self, account_id: str) -> dict[str, int]:
+        with self.schedule_lock:
+            times = self._schedule_send_times(account_id)
+            hour_ago = time.time() - 3600
+            return {
+                "lastHour": sum(1 for stamp in times if stamp > hour_ago),
+                "lastDay": len(times),
+            }
+
+    def _schedule_quota_left(self, account_id: str) -> int:
+        settings = self.schedule_settings_for(account_id)
+        usage = self.schedule_usage(account_id)
+        return max(
+            0,
+            min(
+                int(settings["maxPerHour"]) - usage["lastHour"],
+                int(settings["maxPerDay"]) - usage["lastDay"],
+            ),
+        )
+
+    def schedule_settings_payload(
+        self, account_id: str, user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(account_id)
+        if not self.web_auth.can_access_account(user, account_id):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+        return {
+            "ok": True,
+            "accountId": account_id,
+            "settings": self.schedule_settings_for(account_id),
+            "usage": self.schedule_usage(account_id),
+            "canEditLimits": self.web_auth.owns_account(user, account_id)
+            and self.web_auth.has_permission(user, "manage_accounts"),
+        }
+
+    def _save_schedule_settings(self, account_id: str, updates: dict[str, Any]) -> None:
+        with self.lock:
+            data = self._schedule_settings_all()
+            current = self.schedule_settings_for(account_id)
+            current.update(updates)
+            data["accounts"][account_id] = current
+            self.store.set("schedule_settings", data)
+
+    def save_schedule_limits(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(str(body.get("accountId") or ""))
+        if not self.web_auth.owns_account(user, account_id) or not self.web_auth.has_permission(
+            user, "manage_accounts"
+        ):
+            raise WebError(HTTPStatus.FORBIDDEN, "Only the account owner can change limits.")
+        try:
+            per_hour = max(1, min(int(str(body.get("maxPerHour"))), 500))
+            per_day = max(per_hour, min(int(str(body.get("maxPerDay"))), 5000))
+            jitter = max(0, min(int(str(body.get("jitterMinutes"))), 30))
+        except (TypeError, ValueError) as exc:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Limits must be numbers.", "invalid_limits") from exc
+        self._save_schedule_settings(
+            account_id, {"maxPerHour": per_hour, "maxPerDay": per_day, "jitterMinutes": jitter}
+        )
+        return self.schedule_settings_payload(account_id, user)
+
+    def set_schedules_paused(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(str(body.get("accountId") or ""))
+        if not self.web_auth.can_access_account(user, account_id):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+        paused = bool(body.get("paused"))
+        self._save_schedule_settings(
+            account_id, {"paused": paused, "pausedAt": _now_iso() if paused else ""}
+        )
+        if not paused:
+            # Repeating jobs pick up from now instead of bursting out every
+            # occurrence that was skipped while paused.
+            now = time.time()
+            with self.schedule_lock:
+                for job in self.schedules:
+                    if (
+                        job.get("accountId") == account_id
+                        and job.get("enabled")
+                        and job.get("mode") == "repeat"
+                        and float(job.get("nextRunAt") or 0) < now
+                    ):
+                        job["nextRunAt"] = _compute_next_epoch(job)
+                self.save_schedules()
+        self.append_bot_log(
+            "schedule.pause_all" if paused else "schedule.resume_all",
+            account_id=account_id,
+            data={"webUserId": str((user or {}).get("id") or "")},
+        )
+        return self.schedule_settings_payload(account_id, user)
+
+    def upcoming_schedules(
+        self, account_id: str, user: dict[str, Any] | None, *, days: int = 7
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(account_id)
+        if not self.web_auth.can_access_account(user, account_id):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+        horizon = time.time() + days * 86_400
+        events: list[dict[str, Any]] = []
+        with self.schedule_lock:
+            jobs = [dict(job) for job in self.schedules if job.get("accountId") == account_id]
+        for job in jobs:
+            if not job.get("enabled"):
+                continue
+            targets = job.get("targets") or [{"mid": job.get("to"), "name": job.get("targetName")}]
+            for at in _simulate_schedule_runs(job, horizon, limit=200):
+                events.append(
+                    {
+                        "at": at,
+                        "jobId": job.get("id"),
+                        "name": job.get("name"),
+                        "contentSource": job.get("contentSource"),
+                        "targets": len(targets),
+                        "targetNames": [str(t.get("name") or t.get("mid") or "") for t in targets],
+                    }
+                )
+        events.sort(key=lambda item: item["at"])
+        settings = self.schedule_settings_for(account_id)
+        return {"ok": True, "events": events[:1000], "paused": bool(settings["paused"])}
+
+    def _notify_schedule_failure(self, account_id: str, job: dict[str, Any], error: str) -> None:
+        subscriptions = self._push_subscriptions()
+        if not subscriptions:
+            return
+        member_ids = {member["id"] for member in self._kpi_members(account_id)}
+        name = str(job.get("name") or "")
+        payload = {
+            "title": "งานส่งตามเวลาไม่สำเร็จ",
+            "body": f"{name}: {_short_text(error, 120)}",
+            "titleEn": "Scheduled send failed",
+            "bodyEn": f"{name}: {_short_text(error, 120)}",
+            "tag": f"linepassport:schedule:{job.get('id')}",
+            "accountId": account_id,
+            "requireInteraction": True,
+        }
+        for subscription in subscriptions:
+            if subscription.get("userId") not in member_ids:
+                continue
+            try:
+                self.push_executor.submit(self._deliver_push, subscription, payload)
+            except RuntimeError:
+                return
 
     def run_due_schedules(self) -> None:
         now = time.time()
         due: list[str] = []
         changed = False
+        reserved: dict[str, int] = {}
         with self.schedule_lock:
             for job in self.schedules:
                 if not job.get("enabled") or job.get("running"):
@@ -23613,11 +24278,36 @@ class WebState:
                         job["enabled"] = False
                         job["status"] = "completed"
                     changed = True
-                if next_run and float(next_run) <= now:
+                if next_run and job.get("jitterFor") != next_run:
+                    # A small random delay so jobs never fire on the exact second.
+                    minutes = int(self.schedule_settings_for(job_account_id)["jitterMinutes"])
+                    job["jitter"] = (
+                        0 if job.get("exactTime") else random.randint(0, max(0, minutes) * 60)
+                    )
+                    job["jitterFor"] = next_run
+                    changed = True
+                if next_run and float(next_run) + float(job.get("jitter") or 0) <= now:
                     schedule_id = str(job["id"])
-                    if schedule_id not in self.schedule_inflight:
-                        self.schedule_inflight.add(schedule_id)
-                        due.append(schedule_id)
+                    if schedule_id in self.schedule_inflight:
+                        continue
+                    settings = self.schedule_settings_for(job_account_id)
+                    if settings["paused"]:
+                        continue
+                    needed = max(1, len(job.get("targets") or []))
+                    left = self._schedule_quota_left(job_account_id) - reserved.get(
+                        job_account_id, 0
+                    )
+                    if left < needed:
+                        # Over the account's hourly/daily limit: wait in the queue.
+                        job["nextRunAt"] = now + SCHEDULE_QUEUE_RETRY_SECONDS
+                        job["jitter"] = 0
+                        job["jitterFor"] = job["nextRunAt"]
+                        job["status"] = "queued"
+                        changed = True
+                        continue
+                    reserved[job_account_id] = reserved.get(job_account_id, 0) + needed
+                    self.schedule_inflight.add(schedule_id)
+                    due.append(schedule_id)
             if changed:
                 self.save_schedules()
         for schedule_id in due:
@@ -23687,23 +24377,46 @@ class WebState:
                 "manual" if manual else "scheduled",
                 data={"manual": manual},
             )
-            with self.api_lock_for(account_id):
-                api = self.get_api(account_id)
-                owner = self.web_auth.user_for_account(account_id)
-                items = _resolve_job_contents(
-                    snapshot,
-                    ai_settings=self.ai_settings(owner, reveal=True),
-                    log=log_bot,
-                )
-                to = _resolve_to(api, str(snapshot.get("to") or ""))
-                message_ids = _send_job_contents(
-                    api,
-                    to,
-                    snapshot,
-                    items=items,
-                    log=log_bot,
-                )
-                self.note_outgoing(account_id, to, "schedule")
+            owner = self.web_auth.user_for_account(account_id)
+            targets = list(snapshot.get("targets") or []) or [
+                {"mid": str(snapshot.get("to") or ""), "name": str(snapshot.get("targetName") or "")}
+            ]
+            # Resolve once (one AI image for everybody); {name} is filled per chat.
+            items = _resolve_job_contents(
+                {**snapshot, "targetName": "{name}"},
+                ai_settings=self.ai_settings(owner, reveal=True),
+                log=log_bot,
+            )
+            message_ids: list[Any] = []
+            failures: list[str] = []
+            for index, target in enumerate(targets):
+                if index and self.scheduler.stop_event.wait(
+                    random.uniform(*SCHEDULE_TARGET_GAP_SECONDS)
+                ):
+                    break
+                target_items = [
+                    {**item, "text": str(item.get("text") or "").replace("{name}", target["name"])}
+                    if item.get("kind") == "text"
+                    else item
+                    for item in items
+                ]
+                try:
+                    with self.api_lock_for(account_id):
+                        api = self.get_api(account_id)
+                        to = _resolve_to(api, target["mid"])
+                        self.note_outgoing(account_id, to, "schedule")
+                        message_ids.extend(
+                            _send_job_contents(api, to, snapshot, items=target_items, log=log_bot)
+                        )
+                    self.record_schedule_sends(account_id, 1)
+                except Exception as exc:
+                    if isinstance(exc, LineAuthError) or self.account_store.requires_reauth(
+                        account_id
+                    ):
+                        raise
+                    failures.append(f"{target['name'] or target['mid']}: {_safe_log_detail(exc, 300)}")
+            if failures and len(failures) == len(targets):
+                raise RuntimeError(failures[0].split(": ", 1)[-1])
             message_id = message_ids[-1] if message_ids else None
             sent_at = _now_iso()
             with self.schedule_lock:
@@ -23714,19 +24427,32 @@ class WebState:
                 job["sentCount"] = int(job.get("sentCount") or 0) + 1
                 job["lastRunAt"] = sent_at
                 job["lastMessageId"] = message_id
-                job["lastError"] = None
-                _append_history(job, {"at": sent_at, "ok": True, "messageIds": message_ids})
+                job.pop("retrying", None)
+                if failures:
+                    # Some chats got it: never resend to those; report the rest.
+                    partial = f"Sent to {len(targets) - len(failures)}/{len(targets)} chats. " + "; ".join(failures)
+                    job["lastError"] = partial
+                    _append_history(
+                        job, {"at": sent_at, "ok": False, "error": partial, "messageIds": message_ids}
+                    )
+                else:
+                    job["lastError"] = None
+                    _append_history(job, {"at": sent_at, "ok": True, "messageIds": message_ids})
                 if not manual:
                     _advance_after_success(job)
                 else:
                     job["status"] = "waiting" if job.get("enabled") else "manual"
+                if failures:
+                    job["status"] = "error"
                 self.save_schedules()
-                log_bot(
-                    "schedule.run.success",
-                    f"{len(message_ids)} message(s)",
-                    data={"manual": manual, "messageIds": message_ids},
-                )
-                return {"ok": True, "schedule": dict(job), "messageIds": message_ids}
+            if failures:
+                self._notify_schedule_failure(account_id, dict(job), str(job.get("lastError") or ""))
+            log_bot(
+                "schedule.run.success",
+                f"{len(message_ids)} message(s)",
+                data={"manual": manual, "messageIds": message_ids},
+            )
+            return {"ok": True, "schedule": dict(job), "messageIds": message_ids}
         except Exception as exc:
             auth_failure = isinstance(exc, LineAuthError) or self.account_store.requires_reauth(
                 str(snapshot.get("accountId") or "")
@@ -23748,17 +24474,34 @@ class WebState:
                 )
             except Exception:
                 traceback.print_exc()
+            retry = False
             with self.schedule_lock:
                 job = self._find_schedule(schedule_id)
                 job["running"] = False
                 job.pop("runningSince", None)
                 job.pop("runToken", None)
                 job["lastError"] = error_message
-                job["status"] = "login required" if auth_failure else "error"
-                _append_history(job, {"at": _now_iso(), "ok": False, "error": error_message})
-                if not manual and not auth_failure:
-                    _advance_after_error(job)
+                retry = not manual and not auth_failure and not job.get("retrying")
+                if retry:
+                    # Network blips are common: try once more in 5 minutes.
+                    job["retrying"] = True
+                    job["status"] = "retrying"
+                    job["nextRunAt"] = time.time() + SCHEDULE_RETRY_DELAY_SECONDS
+                    _append_history(
+                        job, {"at": _now_iso(), "ok": False, "error": error_message, "retry": True}
+                    )
+                else:
+                    job.pop("retrying", None)
+                    job["status"] = "login required" if auth_failure else "error"
+                    _append_history(job, {"at": _now_iso(), "ok": False, "error": error_message})
+                    if not manual and not auth_failure:
+                        _advance_after_error(job)
                 self.save_schedules()
+                failed_job = dict(job)
+            if not retry and not manual:
+                self._notify_schedule_failure(
+                    str(snapshot.get("accountId") or ""), failed_job, error_message
+                )
             if isinstance(exc, WebError):
                 raise
             if auth_failure:
@@ -24468,6 +25211,24 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             account_id = _required_account_id(str(body.get("accountId") or ""))
             self._require_account_access(account_id)
             return self.state.run_schedule_now(str(body.get("id") or ""), account_id)
+        if method == "GET" and path == "/api/schedules/settings":
+            self._require_permission("read")
+            return self.state.schedule_settings_payload(
+                _query_one(query, "accountId", ""), self.current_user
+            )
+        if method == "POST" and path == "/api/schedules/limits":
+            self._require_permission("manage_accounts")
+            return self.state.save_schedule_limits(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/schedules/pause-all":
+            self._require_permission("schedule")
+            return self.state.set_schedules_paused(self._read_json(), self.current_user)
+        if method == "GET" and path == "/api/schedules/upcoming":
+            self._require_permission("read")
+            return self.state.upcoming_schedules(
+                _query_one(query, "accountId", ""),
+                self.current_user,
+                days=_query_int(query, "days", 7, minimum=1, maximum=31),
+            )
         if method == "POST" and path == "/api/schedules/test":
             self._require_permission("send")
             body = self._read_json(max_bytes=MAX_MEDIA_JSON_BODY_BYTES)
@@ -25361,7 +26122,8 @@ def _schedule_from_body(
     ).upper()
     api_body = str(body.get("apiBody") or (existing or {}).get("apiBody") or "")
     ai_prompt = str(body.get("aiPrompt") or (existing or {}).get("aiPrompt") or "")
-    to = str(body.get("to") or (existing or {}).get("to") or "")
+    targets = _schedule_targets(body, existing)
+    to = targets[0]["mid"] if targets else str(body.get("to") or (existing or {}).get("to") or "")
     if not to.strip():
         raise WebError(HTTPStatus.BAD_REQUEST, "target is required.")
     if content_source == "text" and not text.strip() and not pattern_texts:
@@ -25390,6 +26152,17 @@ def _schedule_from_body(
     if api_url and content_source == "api":
         _validate_http_url_shape(api_url)
     encrypt = bool(body.get("encrypt", (existing or {}).get("encrypt", False)))
+    attach_image = bool(body.get("attachImage", (existing or {}).get("attachImage", False)))
+    attach_image = attach_image and content_source == "text" and bool(
+        image_source.strip() or image_data.strip()
+    )
+    if attach_image and image_source.strip():
+        _validate_http_url_shape(image_source)
+    if encrypt and attach_image:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Images cannot be sent with E2EE. Turn off encryption or remove the picture.",
+        )
     if encrypt and content_source in {"image", "ai_image"}:
         # Reject up front: images can't be Letter-Sealed, and for ai_image this
         # avoids paying for a generated image only to discard it at send time.
@@ -25428,9 +26201,18 @@ def _schedule_from_body(
             "name": name,
             "accountId": account_id,
             "to": to.strip(),
-            "targetName": str(
-                body.get("targetName") if "targetName" in body else job.get("targetName") or ""
-            ).strip()[:MAX_NAME_LENGTH],
+            "targets": targets,
+            "targetName": (
+                targets[0]["name"]
+                if targets
+                else str(
+                    body.get("targetName")
+                    if "targetName" in body
+                    else job.get("targetName") or ""
+                ).strip()[:MAX_NAME_LENGTH]
+            ),
+            "attachImage": attach_image,
+            "exactTime": bool(body.get("exactTime", job.get("exactTime", False))),
             "contentSource": content_source,
             "text": text,
             "patternIds": pattern_ids,
@@ -25446,16 +26228,19 @@ def _schedule_from_body(
             "mode": mode,
             "runAt": run_at,
             "windowStart": _valid_hhmm(
-                str(body.get("windowStart") or job.get("windowStart") or "09:00")
+                str(body.get("windowStart") or job.get("windowStart") or DEFAULT_WINDOW_START)
             ),
             "windowEnd": _valid_hhmm(
-                str(body.get("windowEnd") or job.get("windowEnd") or "18:00")
+                str(body.get("windowEnd") or job.get("windowEnd") or DEFAULT_WINDOW_END)
             ),
             "activeFrom": str(body.get("activeFrom") or job.get("activeFrom") or ""),
             "activeUntil": str(body.get("activeUntil") or job.get("activeUntil") or ""),
             "intervalMinutes": interval,
             "weekdays": _schedule_weekdays(
                 body["weekdays"] if "weekdays" in body else job.get("weekdays")
+            ),
+            "monthDays": _schedule_month_days(
+                body["monthDays"] if "monthDays" in body else job.get("monthDays")
             ),
             "maxRuns": max_runs,
             "enabled": bool(body.get("enabled", job.get("enabled", True))),
@@ -25488,6 +26273,45 @@ def _schedule_weekdays(value: Any) -> list[int]:
             raise WebError(HTTPStatus.BAD_REQUEST, "weekdays must be 0-6.")
         days.add(day)
     return [] if len(days) == 7 else sorted(days)
+
+
+def _schedule_month_days(value: Any) -> list[int]:
+    """Days of the month a job runs on (1-31, -1 = last day); empty = not monthly."""
+    if not isinstance(value, list):
+        return []
+    days = set()
+    for item in value:
+        try:
+            day = int(item)
+        except (TypeError, ValueError) as exc:
+            raise WebError(HTTPStatus.BAD_REQUEST, "monthDays must be 1-31 or -1.") from exc
+        if day != -1 and not 1 <= day <= 31:
+            raise WebError(HTTPStatus.BAD_REQUEST, "monthDays must be 1-31 or -1.")
+        days.add(day)
+    return sorted(days)
+
+
+def _schedule_targets(body: dict[str, Any], existing: dict[str, Any] | None) -> list[dict[str, str]]:
+    """Recipients of a job; ``to``/``targetName`` stay as the first one."""
+    raw = body.get("targets") if "targets" in body else (existing or {}).get("targets")
+    targets: list[dict[str, str]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("mid") or "").strip()
+            if not mid or any(target["mid"] == mid for target in targets):
+                continue
+            if len(mid) > 256:
+                raise WebError(HTTPStatus.BAD_REQUEST, "Schedule target is too long.")
+            targets.append({"mid": mid, "name": str(item.get("name") or "").strip()[:MAX_NAME_LENGTH]})
+    if len(targets) > MAX_SCHEDULE_TARGETS:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            f"A scheduled send can go to at most {MAX_SCHEDULE_TARGETS} chats.",
+            "schedule_targets_limit",
+        )
+    return targets
 
 
 def _valid_hhmm(value: str) -> str:
@@ -25531,14 +26355,20 @@ def _compute_next_epoch(job: dict[str, Any], after_epoch: float | None = None) -
 def _next_repeat_epoch(job: dict[str, Any], after: _dt.datetime) -> float | None:
     start_date = _parse_date(str(job.get("activeFrom") or ""))
     until_date = _parse_date(str(job.get("activeUntil") or ""))
-    window_start = _valid_hhmm(str(job.get("windowStart") or "09:00"))
-    window_end = _valid_hhmm(str(job.get("windowEnd") or "18:00"))
+    window_start = _valid_hhmm(str(job.get("windowStart") or DEFAULT_WINDOW_START))
+    window_end = _valid_hhmm(str(job.get("windowEnd") or DEFAULT_WINDOW_END))
     start_hour, start_min = (int(x) for x in window_start.split(":", 1))
     end_hour, end_min = (int(x) for x in window_end.split(":", 1))
-    crosses_midnight = (end_hour, end_min) <= (start_hour, start_min)
+    # The end minute is inclusive, so equal start/end is a one-minute window.
+    crosses_midnight = (end_hour, end_min) < (start_hour, start_min)
     weekdays = set(_schedule_weekdays(job.get("weekdays")))
+    month_days = set(_schedule_month_days(job.get("monthDays")))
 
     def runs_on(value: _dt.date) -> bool:
+        if month_days:
+            last_day = (value.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
+            is_last = (last_day - _dt.timedelta(days=1)).day == value.day
+            return value.day in month_days or (-1 in month_days and is_last)
         return not weekdays or value.weekday() in weekdays
 
     day = after.date()
@@ -25550,7 +26380,7 @@ def _next_repeat_epoch(job: dict[str, Any], after: _dt.datetime) -> float | None
             and runs_on(prev_day)
         ):
             prev_start = _dt.datetime.combine(prev_day, _dt.time(start_hour, start_min))
-            prev_end = _dt.datetime.combine(prev_day, _dt.time(end_hour, end_min))
+            prev_end = _dt.datetime.combine(prev_day, _dt.time(end_hour, end_min, 59))
             prev_end += _dt.timedelta(days=1)
             if prev_start <= after <= prev_end:
                 return after.timestamp()
@@ -25565,8 +26395,8 @@ def _next_repeat_epoch(job: dict[str, Any], after: _dt.datetime) -> float | None
             after = _dt.datetime.combine(day, _dt.time(0, 0))
             continue
         start = _dt.datetime.combine(day, _dt.time(start_hour, start_min))
-        end = _dt.datetime.combine(day, _dt.time(end_hour, end_min))
-        if end <= start:
+        end = _dt.datetime.combine(day, _dt.time(end_hour, end_min, 59))
+        if crosses_midnight:
             end += _dt.timedelta(days=1)
         if after <= start:
             return start.timestamp()
@@ -25600,6 +26430,30 @@ def _advance_after_error(job: dict[str, Any]) -> None:
         job["nextRunAt"] = None
         return
     job["nextRunAt"] = _next_repeat_epoch(job, _repeat_resume_after(job))
+
+
+def _simulate_schedule_runs(job: dict[str, Any], horizon: float, *, limit: int) -> list[float]:
+    """Upcoming run times (epoch seconds) of an enabled job, up to ``horizon``."""
+    runs: list[float] = []
+    next_run = job.get("nextRunAt") or _compute_next_epoch(job)
+    remaining = (
+        int(job.get("maxRuns") or 0) - int(job.get("sentCount") or 0)
+        if int(job.get("maxRuns") or 0)
+        else limit
+    )
+    interval = max(1, int(job.get("intervalMinutes") or 1))
+    while next_run and float(next_run) <= horizon and len(runs) < min(limit, max(0, remaining)):
+        runs.append(float(next_run))
+        if job.get("mode") == "once":
+            break
+        current = _dt.datetime.fromtimestamp(float(next_run))
+        after = (
+            _dt.datetime.combine(current.date() + _dt.timedelta(days=1), _dt.time(0, 0))
+            if interval >= 1440
+            else current + _dt.timedelta(minutes=interval)
+        )
+        next_run = _next_repeat_epoch(job, after)
+    return runs
 
 
 def _repeat_resume_after(job: dict[str, Any]) -> _dt.datetime:
@@ -25740,7 +26594,10 @@ def _resolve_job_contents(
         if not text:
             raise WebError(HTTPStatus.BAD_REQUEST, "Schedule text is required.")
         _bot_log(log, "content.text", _short_text(text, 120), data={"patterns": bool(texts)})
-        return [{"kind": "text", "text": text}]
+        items: list[dict[str, Any]] = [{"kind": "text", "text": text}]
+        if job.get("attachImage"):
+            items.extend(_resolve_job_contents({**job, "contentSource": "image"}, log=log))
+        return items
     if source == "image":
         image_data = job.get("imageData")
         if image_data:

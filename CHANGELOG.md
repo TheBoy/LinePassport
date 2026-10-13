@@ -43,6 +43,15 @@ All notable changes to OkLine are documented here. The format follows
   when many customers write at once, one reminder past the reply target, no alert
   when the AI already answered, and quiet outside your shift. A chip shows how
   fresh the chat list is.
+- **Safer scheduled sends.** Per-account sending limits (default 30 per hour,
+  200 per day; jobs over the limit wait in a queue), a random delay of up to
+  3 minutes (or "send at the exact time"), a clash warning with a suggested free
+  time, "pause all" for holidays, one automatic retry 5 minutes after a failure
+  and a push alert when a job still fails, and a 7-day calendar of upcoming sends.
+  A job can now go to up to 20 chats (sent one by one, 30–90 s apart, with
+  `{ชื่อผู้รับ}` filled per chat), carry a picture after its text, use a saved
+  message, and repeat monthly (a day of the month or the last day). Repeating
+  windows default to 00:00:00–23:59:59 and the end minute is inclusive.
 - **LINE operation stream.** The server follows each signed-in account's LINE
   operation stream (the Chrome client's fetchOps) and refreshes the inbox as soon
   as something happens; `getMessageBoxes` polling drops to a once-a-minute safety
