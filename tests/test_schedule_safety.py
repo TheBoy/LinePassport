@@ -138,6 +138,24 @@ def test_partial_failure_keeps_successes_and_reports_the_rest(ctx, monkeypatch):
     assert len(api.sent) == 1 and notified
 
 
+def test_ticked_patterns_and_typed_versions_share_one_random_pool(ctx, monkeypatch):
+    state, _owner, api = ctx
+    job = _job(
+        state,
+        text="typed",
+        customTexts=["typed"],
+        patternIds=["p1", "p2"],
+        patternTexts=["typed", "saved one", "saved two"],
+    )
+    stored = state._find_schedule(job["id"])
+    assert stored["customTexts"] == ["typed"] and stored["patternIds"] == ["p1", "p2"]
+    monkeypatch.setattr(webapp_module.random, "choice", lambda items: items[-1])
+    state._execute_schedule(job["id"], manual=False)
+    assert api.sent == [("text", _A, "saved two")]
+    html = webapp_module.INDEX_HTML
+    assert "syncWizardPatterns" not in html  # ticking never rewrites the library
+
+
 def test_text_job_can_carry_a_picture(ctx):
     state, _owner, api = ctx
     png = base64.b64encode(b"\x89PNG....").decode()
@@ -239,7 +257,8 @@ def test_scheduler_ui_exposes_the_safety_controls():
         'id="jobsPauseButton"',
         'id="jobsLimitsCard"',
         'id="jobsCalendar"',
-        'id="wizardSavedSelect"',
+        'id="wizardPatternList"',
+        'id="wizardPatternCategory"',
         'id="wizardAttachDetails"',
         'id="wizardMonthDay"',
         'id="wizardClash"',

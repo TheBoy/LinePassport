@@ -5174,7 +5174,6 @@ INDEX_HTML = r"""<!doctype html>
                     <div id="wizardExtraMessages" class="ux-grid"></div>
                     <div class="ux-row">
                       <button id="wizardAddExtra" type="button" data-i18n="wizard.add_extra">+ Add message version 2</button>
-                      <select id="wizardSavedSelect" aria-label="Saved messages" style="width:auto;max-width:100%"></select>
                     </div>
                     <details class="ux-advanced" id="wizardAttachDetails">
                       <summary data-i18n="wizard.attach_picture">Add a picture (optional)</summary>
@@ -5185,6 +5184,17 @@ INDEX_HTML = r"""<!doctype html>
                       </div>
                     </details>
                     <span class="ux-muted" data-i18n="wizard.extra_hint">With 2 or more versions, one is picked at random each time so customers don't see the same text.</span>
+                  </div>
+                  <div class="ux-grid wizard-patterns" style="margin-top:14px" id="wizardPatternBox">
+                    <div class="ux-row space">
+                      <strong data-i18n="wizard.patterns_title">Message patterns</strong>
+                      <div class="ux-row">
+                        <span class="badge" id="wizardPatternCount"></span>
+                        <select id="wizardPatternCategory" aria-label="Category" style="width:auto;max-width:100%"></select>
+                      </div>
+                    </div>
+                    <span class="ux-muted" id="wizardPatternHint" data-i18n="wizard.patterns_hint">Tick saved patterns to use. With 2 or more, one is picked at random each send.</span>
+                    <div class="pattern-list" id="wizardPatternList"></div>
                   </div>
                   <div class="ux-grid" style="margin-top:14px" data-wizard-fields="image" hidden>
                     <div class="ux-row"><input type="file" id="wizardImageFile" accept="image/*" hidden><button id="wizardImageUpload" type="button" data-i18n="scheduler.upload_image">Upload image…</button><span class="ux-muted" id="wizardImageName"></span></div>
@@ -9572,6 +9582,7 @@ INDEX_HTML = r"""<!doctype html>
         populatePatternList();
         renderPatternManageList();
         renderPatternCategoryManageList();
+        if (state.wizard) renderWizardPatterns();
       } catch (err) { /* patterns are optional — ignore load errors */ }
     }
 
@@ -13809,24 +13820,42 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       };
     }
 
+    // Split a job's random pool into the versions typed in the wizard and the
+    // saved patterns that were ticked (still present in the library).
+    function splitJobTexts(job) {
+      const pool = (job.patternTexts || []).filter((x) => String(x).trim());
+      const library = new Map((state.patterns || []).map((p) => [p.id, p]));
+      const picked = (job.patternIds || []).filter((id) => library.has(id));
+      if (Array.isArray(job.customTexts)) return {typed: job.customTexts.slice(), picked};
+      const typed = pool.length ? pool.slice() : [job.text || ""];
+      for (const id of picked) {
+        const at = typed.indexOf(library.get(id).text);
+        if (at >= 0) typed.splice(at, 1);
+      }
+      // Older jobs ticked patterns and left the text box as a fallback only.
+      if (!typed.length && pool.length && job.text && !pool.includes(job.text)) typed.push(job.text);
+      return {typed: typed.filter((x) => String(x).trim()), picked};
+    }
+
     function draftFromJob(job) {
       const draft = newWizardDraft();
       const texts = (job.patternTexts || []).filter((x) => String(x).trim());
+      const split = splitJobTexts(job);
       const targets = jobTargets(job);
       Object.assign(draft, {
         id: job.id,
         targets,
         targetTab: targets.length && targets[0].mid.charAt(0).toLowerCase() !== "u" ? "groups" : "people",
         type: job.contentSource || "text",
-        text: varsToDisplay(job.contentSource === "text" ? (texts[0] || job.text || "") : (job.text || "")),
-        extras: job.contentSource === "text" ? texts.slice(1).map(varsToDisplay) : [],
-        patternIds: (job.patternIds || []).slice(),
+        text: varsToDisplay(job.contentSource === "text" ? (split.typed[0] || "") : (job.text || "")),
+        extras: job.contentSource === "text" ? split.typed.slice(1).map(varsToDisplay) : [],
+        patternIds: split.picked,
         imageUrl: job.contentSource === "image" ? job.imageSource || "" : "",
         imageName: job.contentSource === "image" ? job.imageName || "" : "",
         attachUrl: job.attachImage ? job.imageSource || "" : "",
         attachName: job.attachImage ? job.imageName || job.imageSource || "" : "",
         attachKept: Boolean(job.attachImage),
-        aiPrompt: job.aiPrompt || (job.contentSource === "ai_image" ? texts[0] || "" : ""),
+        aiPrompt: job.aiPrompt || (job.contentSource === "ai_image" && !split.picked.length ? texts[0] || "" : ""),
         apiMethod: job.apiMethod || "GET",
         apiUrl: job.apiUrl || "",
         apiBody: job.apiBody || "",
@@ -13861,7 +13890,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       return draft;
     }
 
-    function openScheduleWizard(job, preset) {
+    async function openScheduleWizard(job, preset) {
+      if (!(state.patterns || []).length) await loadPatterns();
       state.wizard = job ? draftFromJob(job) : newWizardDraft();
       if (preset && preset.to) {
         state.wizard.targets = [{mid: preset.to, name: preset.name || preset.to}];
@@ -13872,7 +13902,6 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       setBotPage("wizard");
       fillWizardInputs();
       setWizardStep(state.wizard.targets.length && !job ? 2 : 1);
-      if (!state.patterns || !state.patterns.length) loadPatterns();
     }
 
     function fillWizardInputs() {
@@ -13904,7 +13933,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       setWizardTargetTab(d.targetTab);
       renderWizardVars();
       renderWizardExtras();
-      renderSavedMessagePicker();
+      renderWizardPatterns();
       buildDayPicker($("wizardDays"), d.days, (days) => { state.wizard.days = days; updateWizardSummary(); });
       syncWizardType();
       syncWizardFreq();
@@ -13930,9 +13959,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const d = state.wizard;
       if (step >= 1 && !d.targets.length) return "wizard.err_target";
       if (step >= 2) {
-        if (d.type === "text" && !d.text.trim() && !d.extras.some((x) => x.trim())) return "wizard.err_text";
+        if (d.type === "text" && !wizardTextPool().length) return "wizard.err_text";
         if (d.type === "image" && !d.imageData && !d.imageUrl.trim()) return "wizard.err_image";
-        if (d.type === "ai_image" && !d.aiPrompt.trim()) return "wizard.err_ai";
+        if (d.type === "ai_image" && !d.aiPrompt.trim() && !wizardPickedPatterns().length) return "wizard.err_ai";
         if (d.type === "api" && !d.apiUrl.trim()) return "wizard.err_api";
       }
       if (step >= 3) {
@@ -14013,34 +14042,69 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       }
     }
 
-    function renderSavedMessagePicker() {
-      const select = $("wizardSavedSelect");
-      select.replaceChildren();
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = (state.patterns || []).length ? t("wizard.saved_pick") : t("wizard.saved_none");
-      select.appendChild(placeholder);
-      for (const pattern of state.patterns || []) {
-        const option = document.createElement("option");
-        option.value = pattern.id;
-        option.textContent = pattern.name || String(pattern.text || "").slice(0, 40);
-        select.appendChild(option);
+    function wizardPickedPatterns() {
+      const d = state.wizard;
+      const library = new Map((state.patterns || []).map((p) => [p.id, p]));
+      return (d.patternIds || []).filter((id) => library.has(id)).map((id) => library.get(id));
+    }
+
+    // Typed versions first, then the ticked patterns; one is picked per send.
+    function wizardTextPool() {
+      const d = state.wizard;
+      const typed = d.type === "text" ? [d.text, ...d.extras].map((x) => varsToTokens(x)) : [];
+      return [...typed, ...wizardPickedPatterns().map((p) => p.text)].filter((x) => String(x).trim());
+    }
+
+    function renderWizardPatterns() {
+      const d = state.wizard;
+      if (!d) return;
+      const select = $("wizardPatternCategory");
+      fillPatternCategorySelect(select, true);
+      select.value = d.patternCategory || "all";
+      if (!select.value) select.value = "all";
+      const box = $("wizardPatternList");
+      box.replaceChildren();
+      const patterns = state.patterns || [];
+      const picked = new Set(d.patternIds || []);
+      $("wizardPatternCount").textContent = picked.size ? t("wizard.patterns_picked", {n: picked.size}) : "";
+      $("wizardPatternCount").hidden = !picked.size;
+      if (!patterns.length) {
+        box.appendChild(textSpan(t("scheduler.no_patterns"), "muted"));
+        return;
+      }
+      let lastCategory = null;
+      for (const p of patterns) {
+        const categoryId = p.categoryId || "general";
+        if (select.value !== "all" && categoryId !== select.value) continue;
+        if (categoryId !== lastCategory) {
+          const heading = document.createElement("span");
+          heading.className = "pattern-category-heading";
+          heading.textContent = patternCategoryName(categoryId);
+          box.appendChild(heading);
+          lastCategory = categoryId;
+        }
+        const row = document.createElement("label");
+        row.className = "pattern-item";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = picked.has(p.id);
+        cb.addEventListener("change", () => toggleWizardPattern(p.id, cb.checked));
+        const name = document.createElement("span");
+        name.className = "pattern-name";
+        name.textContent = p.name;
+        name.title = varsToDisplay(p.text || "");
+        row.append(cb, name);
+        box.appendChild(row);
       }
     }
 
-    function useSavedMessage() {
-      const pattern = (state.patterns || []).find((item) => item.id === $("wizardSavedSelect").value);
-      if (!pattern) return;
+    function toggleWizardPattern(id, on) {
       const d = state.wizard;
-      const text = varsToDisplay(pattern.text || "");
-      if (!d.text.trim()) {
-        d.text = text;
-        $("wizardText").value = text;
-      } else {
-        d.extras.push(text);
-        renderWizardExtras();
-      }
-      $("wizardSavedSelect").value = "";
+      const ids = (d.patternIds || []).filter((x) => x !== id);
+      if (on) ids.push(id);
+      d.patternIds = ids;
+      $("wizardPatternCount").textContent = t("wizard.patterns_picked", {n: ids.length});
+      $("wizardPatternCount").hidden = !ids.length;
       updateWizardSummary();
     }
 
@@ -14079,6 +14143,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const d = state.wizard;
       document.querySelectorAll("[data-wizard-type]").forEach((card) => card.setAttribute("aria-pressed", String(card.dataset.wizardType === d.type)));
       document.querySelectorAll("[data-wizard-fields]").forEach((box) => { box.hidden = box.dataset.wizardFields !== d.type; });
+      $("wizardPatternBox").hidden = d.type !== "text" && d.type !== "ai_image";
       const imageType = d.type === "image" || d.type === "ai_image" || wizardHasAttachment();
       $("wizardEncrypt").disabled = imageType;
       if (imageType) { d.encrypt = false; $("wizardEncrypt").checked = false; }
@@ -14191,13 +14256,14 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         : "-";
       const what = $("wizardSumWhat");
       const firstName = d.targets[0] ? d.targets[0].name : "";
-      if (d.type === "text") what.textContent = previewWizardText(d.text || "", firstName) || "-";
+      const pool = wizardTextPool();
+      if (d.type === "text") what.textContent = previewWizardText(varsToDisplay(pool[0] || ""), firstName) || "-";
       else if (d.type === "image") what.textContent = d.imageName || d.imageUrl || t("wizard.type_image");
-      else if (d.type === "ai_image") what.textContent = `${t("wizard.type_ai_image")}: ${d.aiPrompt || "-"}`;
+      else if (d.type === "ai_image") what.textContent = `${t("wizard.type_ai_image")}: ${d.aiPrompt || (wizardPickedPatterns()[0] || {}).name || "-"}`;
       else what.textContent = `${t("wizard.type_api")}: ${d.apiUrl || "-"}`;
-      if (d.type === "text" && d.extras.some((x) => x.trim())) {
-        what.textContent += `\n\n${t("wizard.random_versions", {n: 1 + d.extras.filter((x) => x.trim()).length})}`;
-      }
+      const choices = d.type === "text" ? pool.length
+        : d.type === "ai_image" ? wizardPickedPatterns().length + (d.aiPrompt.trim() ? 1 : 0) : 0;
+      if (choices > 1) what.textContent += `\n\n${t("wizard.random_versions", {n: choices})}`;
       if (wizardHasAttachment()) what.textContent += `\n+ ${t("wizard.with_picture")}: ${d.attachName || d.attachUrl}`;
       $("wizardSumWhen").textContent = wizardWhenText() + (d.exactTime ? "" : ` (${t("wizard.jitter_note")})`);
       if (!d.nameTouched) {
@@ -14209,7 +14275,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
 
     function wizardPayload(accountId) {
       const d = state.wizard;
-      const texts = [d.text, ...d.extras].map((x) => varsToTokens(x)).filter((x) => x.trim());
+      const texts = wizardTextPool();
+      const typed = [d.text, ...d.extras].map((x) => varsToTokens(x)).filter((x) => x.trim());
+      const picked = wizardPickedPatterns();
+      const prompts = [d.aiPrompt, ...picked.map((p) => p.text)].filter((x) => String(x).trim());
       const repeat = d.freq !== "once";
       const attach = wizardHasAttachment();
       const firstTarget = d.targets[0] || {mid: "", name: ""};
@@ -14221,8 +14290,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         targets: d.targets.map((target) => ({mid: target.mid, name: target.name})),
         contentSource: d.type,
         text: d.type === "text" ? (texts[0] || "") : "",
-        patternTexts: d.type === "text" && texts.length > 1 ? texts : [],
-        patternIds: d.type === "text" && texts.length > 1 ? d.patternIds : [],
+        patternTexts: d.type === "text" && texts.length > 1 ? texts
+          : d.type === "ai_image" && picked.length ? prompts : [],
+        patternIds: d.type === "text" || d.type === "ai_image" ? picked.map((p) => p.id) : [],
+        customTexts: d.type === "text" ? typed : [],
         imageSource: d.type === "image" ? d.imageUrl.trim() : (attach ? d.attachUrl.trim() : ""),
         imageData: d.type === "image" ? d.imageData : (attach ? d.attachData : ""),
         imageName: d.type === "image" ? d.imageName : (attach ? d.attachName : ""),
@@ -14247,30 +14318,6 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       };
     }
 
-    // Extra message versions are kept as reusable patterns in "General".
-    async function syncWizardPatterns(payload) {
-      const d = state.wizard;
-      if (payload.contentSource !== "text" || payload.patternTexts.length < 2) return payload;
-      const ids = [];
-      for (let index = 0; index < payload.patternTexts.length; index += 1) {
-        const text = payload.patternTexts[index];
-        const name = `${payload.name.slice(0, 90)} · ${t("wizard.version", {n: index + 1})}`;
-        const existing = d.patternIds[index];
-        try {
-          if (existing && (state.patterns || []).some((p) => p.id === existing)) {
-            await post("/api/patterns/update", {id: existing, name, text, accountId: payload.accountId});
-            ids.push(existing);
-          } else {
-            const created = await post("/api/patterns/create", {name, text, accountId: payload.accountId});
-            const pattern = created.pattern || (created.patterns || []).find((p) => p.name === name);
-            if (pattern && pattern.id) ids.push(pattern.id);
-          }
-        } catch (_) { /* the job still works from patternTexts */ }
-      }
-      payload.patternIds = ids;
-      return payload;
-    }
-
     async function saveWizard() {
       const accountId = requireAccount();
       if (!accountId) return;
@@ -14282,7 +14329,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       button.disabled = true;
       try {
         await loadPatterns();
-        const payload = await syncWizardPatterns(wizardPayload(accountId));
+        const payload = wizardPayload(accountId);
         if (state.wizard.id) {
           await post("/api/schedules/update", {...payload, id: state.wizard.id});
         } else {
@@ -14647,8 +14694,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "wizard.clear_targets": {th: "ล้างที่เลือก", en: "Clear"},
       "wizard.spacing_hint": {th: "ระบบจะส่งทีละห้อง เว้นห่างห้องละ 30–90 วินาที", en: "Chats are sent one by one, 30–90 seconds apart."},
       "wizard.err_too_many": {th: "เลือกได้สูงสุด {n} ห้องต่องาน", en: "At most {n} chats per job"},
-      "wizard.saved_pick": {th: "เลือกจากข้อความที่บันทึกไว้…", en: "Use a saved message…"},
-      "wizard.saved_none": {th: "ยังไม่มีข้อความที่บันทึกไว้", en: "No saved messages yet"},
+      "wizard.patterns_title": {th: "ข้อความสำเร็จรูป", en: "Message patterns"},
+      "wizard.patterns_hint": {th: "ติ๊กเพื่อใช้ ถ้ามีรวมกัน 2 ข้อความขึ้นไป ระบบจะสุ่มส่งทีละแบบทุกครั้ง", en: "Tick saved patterns to use. With 2 or more in total, one is picked at random each send."},
+      "wizard.patterns_picked": {th: "เลือก {n}", en: "{n} ticked"},
       "wizard.attach_picture": {th: "แนบรูปด้วย (ไม่บังคับ)", en: "Add a picture (optional)"},
       "wizard.attach_hint": {th: "ระบบจะส่งข้อความก่อน แล้วตามด้วยรูป", en: "The text is sent first, then the picture."},
       "wizard.with_picture": {th: "พร้อมรูป", en: "with picture"},
@@ -14952,7 +15000,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     $("wizardExactTime").addEventListener("change", () => { state.wizard.exactTime = $("wizardExactTime").checked; updateWizardSummary(); });
     $("wizardMonthDay").addEventListener("change", () => { state.wizard.monthDay = $("wizardMonthDay").value; updateWizardSummary(); });
     $("wizardTargetClear").addEventListener("click", () => { state.wizard.targets = []; renderWizardTargets(); updateWizardSummary(); });
-    $("wizardSavedSelect").addEventListener("change", useSavedMessage);
+    $("wizardPatternCategory").addEventListener("change", () => {
+      state.wizard.patternCategory = $("wizardPatternCategory").value;
+      renderWizardPatterns();
+    });
     $("wizardAttachUpload").addEventListener("click", () => $("wizardAttachFile").click());
     $("wizardAttachFile").addEventListener("change", (event) => handleWizardAttachment(event.target.files[0]).catch(toastError));
     $("wizardAttachRemove").addEventListener("click", clearWizardAttachment);
@@ -26111,9 +26162,15 @@ def _schedule_from_body(
     pattern_texts = (
         [str(x) for x in raw_ptexts if str(x).strip()] if isinstance(raw_ptexts, list) else []
     )
+    # The wizard's own typed versions, kept apart from saved patterns it ticked.
+    raw_custom = body.get("customTexts", (existing or {}).get("customTexts", []))
+    custom_texts = (
+        [str(x) for x in raw_custom if str(x).strip()] if isinstance(raw_custom, list) else []
+    )
     if (
         len(pattern_ids) > MAX_PATTERN_REFERENCES
         or len(pattern_texts) > MAX_PATTERN_REFERENCES
+        or len(custom_texts) > MAX_PATTERN_REFERENCES
     ):
         raise WebError(HTTPStatus.BAD_REQUEST, "Too many message patterns were selected.")
     api_url = str(body.get("apiUrl") or (existing or {}).get("apiUrl") or "")
@@ -26141,7 +26198,7 @@ def _schedule_from_body(
         raise WebError(HTTPStatus.BAD_REQUEST, "Schedule target is too long.")
     if len(text) > MAX_TEXT_LENGTH or len(ai_prompt) > MAX_TEXT_LENGTH:
         raise WebError(HTTPStatus.BAD_REQUEST, "Schedule text or AI prompt is too long.")
-    if any(len(value) > MAX_TEXT_LENGTH for value in pattern_texts):
+    if any(len(value) > MAX_TEXT_LENGTH for value in pattern_texts + custom_texts):
         raise WebError(HTTPStatus.BAD_REQUEST, "Pattern text is too long.")
     if len(api_body) > MAX_API_BODY_LENGTH:
         raise WebError(HTTPStatus.BAD_REQUEST, "API request body is too long.")
@@ -26217,6 +26274,7 @@ def _schedule_from_body(
             "text": text,
             "patternIds": pattern_ids,
             "patternTexts": pattern_texts,
+            "customTexts": custom_texts,
             "imageSource": image_source.strip(),
             "imageData": image_data.strip(),
             "imageName": image_name.strip(),
