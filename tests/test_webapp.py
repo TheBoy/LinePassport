@@ -565,8 +565,7 @@ def test_web_ui_has_pattern_edit_and_delete_actions():
     assert '"/api/patterns/update"' in INDEX_HTML
     assert "function editPattern(pattern)" in INDEX_HTML
     assert 'actions.className = "item-actions pattern-item-actions";' in INDEX_HTML
-    assert "actions.append(edit, del);" in INDEX_HTML
-    assert "#patternManageList .pattern-item-actions {" in INDEX_HTML
+    assert "actions.append(use, edit, del);" in INDEX_HTML
     assert '"botlog.action.pattern.update"' in INDEX_HTML
 
 

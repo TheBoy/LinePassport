@@ -880,3 +880,16 @@ def test_narrow_screens_show_one_chat_pane_at_a_time():
 def test_chat_background_is_white_in_every_color_scheme():
     assert "--line-msg-bg: #ffffff;" in INDEX_HTML
     assert "#202b36" not in INDEX_HTML
+
+
+def test_scheduled_sends_page_has_jobs_and_patterns_tabs():
+    html = webapp_module.INDEX_HTML
+    assert 'id="schedHub"' in html
+    assert 'data-hub-tab="schedules"' in html and 'data-hub-tab="patterns"' in html
+    assert 'id="hubJobCount"' in html and 'id="hubPatternCount"' in html
+    # Each tab has its own main action in the shared header.
+    assert 'data-hub-action="schedules"' in html and 'data-hub-action="patterns"' in html
+    assert 'id="patternCategoryChips"' in html and 'id="patternSearch"' in html
+    assert 'id="openPatternsButton"' not in html and 'id="closePatternsButton"' not in html
+    assert "function useStartJobWithPattern" in html
+    assert '"patterns.used_in"' in html

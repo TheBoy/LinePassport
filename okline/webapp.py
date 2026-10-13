@@ -3206,7 +3206,6 @@ INDEX_HTML = r"""<!doctype html>
       /* These destinations already exist in the Bot tab row immediately
          above. Avoid showing the same navigation a second time. */
       .scheduler-list-actions #openBotLogsButton,
-      .scheduler-list-actions #openPatternsButton,
       .scheduler-list-actions #scheduleFormToggle {
         display: none;
       }
@@ -3221,11 +3220,6 @@ INDEX_HTML = r"""<!doctype html>
         gap: 8px;
       }
 
-      #patternManageList .pattern-item-actions {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px;
-      }
 
       /* The old 46vh cap clipped the contact rows after the profile, tabs and
          search consumed the available height. Let the pane size naturally and
@@ -3772,6 +3766,65 @@ INDEX_HTML = r"""<!doctype html>
     .wizard-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
     .wizard-summary { position: sticky; top: 0; display: grid; gap: 10px; color: var(--ink); }
     .wizard-summary label { color: var(--muted); }
+    /* Scheduled sends page: one header, two tabs (jobs | message patterns). */
+    .sched-hub { display: grid; gap: 6px; margin-bottom: 14px; }
+    .sched-hub-tabs { border-bottom: 1px solid var(--line); gap: 14px; }
+    .sched-hub-tabs .subtab { display: inline-flex; align-items: center; gap: 6px; padding: 0 2px; }
+    .sched-hub-tabs .subtab[aria-selected="true"] .badge { background: var(--accent-soft); color: #087443; }
+    .pattern-filter-panel { border: 0; box-shadow: none; background: transparent; margin-bottom: 12px; }
+    .pattern-filter-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .pattern-chips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+    .pattern-chip {
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      background: var(--surface);
+    }
+    .pattern-chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: #06251a; }
+    .pattern-chip .count { color: var(--muted); font-weight: 500; margin-left: 4px; }
+    .pattern-filter-tools { flex-wrap: nowrap; }
+    .pattern-filter-tools input[type="search"] { width: 220px; min-height: 34px; }
+    .pattern-settings-button { width: auto; height: auto; min-height: 34px; padding: 0 12px; white-space: nowrap; font-size: 13px; line-height: 1.2; }
+    .pattern-form-card { margin-bottom: 14px; }
+    .pattern-form-grid { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 12px; margin-top: 8px; }
+    .pattern-form-grid label { display: grid; gap: 6px; }
+    .pattern-form-text { grid-column: 1 / -1; }
+    .pattern-form-actions { justify-content: flex-end; margin-top: 12px; }
+    .pattern-list-head { margin-bottom: 8px; }
+    .pattern-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+    .pattern-card { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; padding: 14px; }
+    .pattern-card + .pattern-card { margin-top: 0; }
+    .pattern-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .pattern-card-head strong { min-width: 0; overflow-wrap: anywhere; }
+    .pattern-card .msg-preview {
+      max-height: calc(1.5em * 4 + 20px);
+      line-height: 1.5;
+      overflow: hidden;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 13px;
+    }
+    .pattern-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .pattern-card-foot .item-actions { display: flex; gap: 6px; }
+    .pattern-card-foot button { min-height: 30px; font-size: 13px; padding: 0 10px; }
+    .pattern-empty { text-align: center; padding: 32px 16px; display: grid; gap: 8px; justify-items: center; }
+    @media (max-width: 640px) {
+      .pattern-filter-tools { width: 100%; }
+      .pattern-filter-tools input[type="search"] { flex: 1 1 auto; width: auto; }
+      .pattern-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; width: 100%; }
+      .pattern-chip { flex: 0 0 auto; }
+      .pattern-form-grid { grid-template-columns: 1fr; }
+      .pattern-cards { grid-template-columns: 1fr; }
+      .sched-hub-top > .ux-row { width: 100%; flex-wrap: nowrap; }
+      .sched-hub-top > .ux-row > .primary { flex: 1 1 auto; }
+      .sched-hub-top > .ux-row > .ux-help { flex: 0 0 auto; width: 36px; }
+      #botPatterns .pattern-chip { width: auto; }
+      #botPatterns .pattern-settings-button { width: auto; flex: 0 0 auto; }
+      #botPatterns .pattern-card-foot .item-actions { display: flex; flex-wrap: wrap; width: auto; }
+      #botPatterns .pattern-card-foot button { width: auto; }
+    }
     /* Scheduled sends is one list page; old sub-navigation stays reachable via links. */
     #botShell > .bot-page-nav { display: none; }
     .scheduler-list-head > h2,
@@ -5081,17 +5134,24 @@ INDEX_HTML = r"""<!doctype html>
             <button type="button" id="botNavAiSettings" data-bot-page-target="ai-settings" role="tab" aria-selected="false" data-requires-permission="manage_accounts" data-i18n="bot.nav_ai_settings">AI Settings</button>
             <button type="button" id="botNavGuide" data-bot-page-target="guide" role="tab" aria-selected="false" data-i18n="bot.nav_guide">Usage guide</button>
           </div>
+          <header class="sched-hub" id="schedHub">
+            <div class="ux-row space sched-hub-top">
+              <div>
+                <h2 style="margin:0" data-i18n="jobs.title">Scheduled sends</h2>
+                <span class="ux-muted" data-i18n="hub.subtitle">Messages that go out by themselves, and the texts you reuse in them.</span>
+              </div>
+              <div class="ux-row">
+                <button id="jobsNewButton" class="primary" type="button" data-hub-action="schedules" data-requires-account data-requires-permission="schedule" data-i18n="jobs.new">+ New scheduled send</button>
+                <button id="patternFormToggle" class="primary hidden" type="button" data-hub-action="patterns" aria-expanded="false" aria-controls="patternFormSection" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.add_pattern_new">+ Add pattern</button>
+                <button class="ux-help" id="jobsHelpButton" type="button" data-i18n-title="common.help" title="Help">?</button>
+              </div>
+            </div>
+            <nav class="subtabs sched-hub-tabs" role="tablist" aria-label="Scheduled sends">
+              <button type="button" class="subtab" role="tab" id="hubTabSchedules" data-hub-tab="schedules" aria-selected="true"><span data-i18n="hub.tab_jobs">Scheduled sends</span> <span class="badge" id="hubJobCount">0</span></button>
+              <button type="button" class="subtab" role="tab" id="hubTabPatterns" data-hub-tab="patterns" aria-selected="false"><span data-i18n="hub.tab_patterns">Message patterns</span> <span class="badge" id="hubPatternCount">0</span></button>
+            </nav>
+          </header>
           <div id="botScheduler" class="bot-page" data-bot-page="schedules">
-          <div class="ux-row space">
-            <div>
-              <h2 style="margin:0" data-i18n="jobs.title">Scheduled sends</h2>
-              <span class="ux-muted" data-i18n="jobs.subtitle">Messages that go out by themselves at the time you choose.</span>
-            </div>
-            <div class="ux-row">
-              <button id="jobsNewButton" class="primary" type="button" data-requires-account data-requires-permission="schedule" data-i18n="jobs.new">+ New scheduled send</button>
-              <button class="ux-help" id="jobsHelpButton" type="button" data-i18n-title="common.help" title="Help">?</button>
-            </div>
-          </div>
           <div class="ux-row space jobs-toolbar">
             <span class="badge" id="jobsUsage" data-i18n-title="jobs.usage_title" title="Sent in the last hour / day"></span>
             <div class="ux-row">
@@ -5123,7 +5183,6 @@ INDEX_HTML = r"""<!doctype html>
                 <span class="pill" id="scheduleCount">0</span>
                 <button id="openBotLogsButton" type="button" data-requires-permission="read" data-i18n="bot.nav_logs">Logs</button>
                 <button id="clearStuckSchedulesButton" type="button" class="danger hidden" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.clear_stuck">Clear stuck jobs</button>
-                <button id="openPatternsButton" type="button" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.patterns_menu">Message patterns</button>
                 <button id="scheduleFormToggle" class="primary" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.new">+ New scheduled message</button>
               </div>
             </div>
@@ -5440,78 +5499,63 @@ INDEX_HTML = r"""<!doctype html>
           </section>
           </div>
           <div id="botPatterns" class="bot-page hidden" data-bot-page="patterns">
-          <section class="section pattern-page-header">
-            <div class="section-head">
-              <div class="row compact">
-                <button id="closePatternsButton" type="button" data-i18n="scheduler.back_schedules">← Back</button>
-                <h2 data-i18n="scheduler.patterns_title">Message patterns</h2>
-              </div>
-              <button id="patternFormToggle" class="primary" aria-expanded="false" aria-controls="patternFormSection" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.add_pattern_new">+ Add pattern</button>
-            </div>
-          </section>
-          <section class="section pattern-filter-panel">
-            <div class="section-body pattern-filter-row">
-                <label>
-                  <span data-i18n="patterns.category_filter">Category</span>
-                  <select id="patternCategoryFilter"></select>
-                </label>
-                <button id="openPatternCategoriesButton" class="pattern-settings-button" type="button" data-requires-account data-requires-permission="schedule" data-i18n-title="patterns.settings" title="Category settings" aria-label="Category settings"><span aria-hidden="true">&#9881;</span></button>
-            </div>
-          </section>
-            <div class="pattern-main-column">
-              <section class="section hidden" id="patternFormSection">
-                <div class="section-head">
-                  <h3 id="patternFormTitle" data-i18n="patterns.create_title">Create pattern</h3>
-                  <button id="cancelPatternFormButton" type="button" data-i18n="common.cancel">Cancel</button>
+            <div class="section pattern-filter-panel">
+              <div class="pattern-filter-row">
+                <div class="pattern-chips" id="patternCategoryChips" role="group" aria-label="Category"></div>
+                <div class="ux-row pattern-filter-tools">
+                  <input id="patternSearch" type="search" data-i18n-ph="patterns.search_ph" placeholder="Search patterns">
+                  <select id="patternCategoryFilter" class="hidden" aria-hidden="true" tabindex="-1"></select>
+                  <button id="openPatternCategoriesButton" class="pattern-settings-button" type="button" data-requires-account data-requires-permission="schedule" data-i18n-title="patterns.settings" title="Category settings" aria-label="Category settings"><span aria-hidden="true">&#9881;</span> <span data-i18n="patterns.categories_title">Categories</span></button>
                 </div>
-                <div class="section-body">
-                  <div class="form-grid" id="patternForm">
-                    <label>
-                      <span data-i18n="patterns.category">Category</span>
-                      <select id="newPatternCategory" data-requires-account></select>
-                    </label>
-                    <label>
-                      <span data-i18n="scheduler.lbl_pattern_name">Pattern name</span>
-                      <input id="newPatternName" data-requires-account data-i18n-ph="scheduler.pattern_name_ph" placeholder="e.g. Promo A">
-                    </label>
-                    <label>
-                      <span data-i18n="scheduler.lbl_pattern_text">Message text</span>
-                      <textarea id="newPatternText" rows="4" data-requires-account data-i18n-ph="scheduler.message_ph" placeholder="Message to send"></textarea>
-                    </label>
-                    <div class="ph-help" id="patternTextHelp">
-                      <span class="muted" data-i18n="scheduler.ph_hint">Insert (random on every send):</span>
-                      <div class="ph-chips">
-                        <button type="button" class="ph-chip" data-ph="{1D}">{1D}</button>
-                        <button type="button" class="ph-chip" data-ph="{2D}">{2D}</button>
-                        <button type="button" class="ph-chip" data-ph="{3D}">{3D}</button>
-                        <button type="button" class="ph-chip" data-ph="{date}">{date}</button>
-                        <button type="button" class="ph-chip" data-ph="{time}">{time}</button>
-                        <button type="button" class="ph-chip" data-ph="{rand:1-100}">{rand:1-100}</button>
-                      </div>
-                    </div>
-                    <div class="row pattern-form-actions">
-                      <button id="createPatternButton" class="primary" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.add_pattern">Add pattern</button>
-                    </div>
+              </div>
+            </div>
+            <section class="ux-card pattern-form-card hidden" id="patternFormSection">
+              <div class="ux-row space">
+                <h3 id="patternFormTitle" data-i18n="patterns.create_title">Create pattern</h3>
+              </div>
+              <div class="pattern-form-grid" id="patternForm">
+                <label>
+                  <span data-i18n="scheduler.lbl_pattern_name">Pattern name</span>
+                  <input id="newPatternName" maxlength="120" data-requires-account data-i18n-ph="scheduler.pattern_name_ph" placeholder="e.g. Promo A">
+                </label>
+                <label>
+                  <span data-i18n="patterns.category">Category</span>
+                  <select id="newPatternCategory" data-requires-account></select>
+                </label>
+                <label class="pattern-form-text">
+                  <span data-i18n="scheduler.lbl_pattern_text">Message text</span>
+                  <textarea id="newPatternText" rows="5" data-requires-account data-i18n-ph="scheduler.message_ph" placeholder="Message to send"></textarea>
+                </label>
+                <div class="ph-help pattern-form-text" id="patternTextHelp">
+                  <span class="muted" data-i18n="scheduler.ph_hint">Insert (random on every send):</span>
+                  <div class="ph-chips">
+                    <button type="button" class="ph-chip" data-ph="{name}">{name}</button>
+                    <button type="button" class="ph-chip" data-ph="{date}">{date}</button>
+                    <button type="button" class="ph-chip" data-ph="{time}">{time}</button>
+                    <button type="button" class="ph-chip" data-ph="{1D}">{1D}</button>
+                    <button type="button" class="ph-chip" data-ph="{2D}">{2D}</button>
+                    <button type="button" class="ph-chip" data-ph="{3D}">{3D}</button>
+                    <button type="button" class="ph-chip" data-ph="{rand:1-100}">{rand:1-100}</button>
                   </div>
                 </div>
-              </section>
-              <section class="section pattern-list-panel">
-                <div class="section-head">
-                  <h3 data-i18n="patterns.list_title">Patterns</h3>
-                  <span class="pill" id="patternManageCount">0</span>
-                </div>
-                <div class="section-body">
-                  <div class="list" id="patternManageList"></div>
-                </div>
-              </section>
+              </div>
+              <div class="ux-row pattern-form-actions">
+                <button id="cancelPatternFormButton" type="button" data-i18n="common.cancel">Cancel</button>
+                <button id="createPatternButton" class="primary" data-requires-account data-requires-permission="schedule" data-i18n="scheduler.add_pattern">Add pattern</button>
+              </div>
+            </section>
+            <div class="ux-row space pattern-list-head">
+              <span class="ux-muted" id="patternListSummary"></span>
+              <span class="pill hidden" id="patternManageCount">0</span>
             </div>
+            <div class="pattern-cards" id="patternManageList"></div>
           </div>
           <div id="botPatternCategories" class="bot-page hidden" data-bot-page="pattern-categories">
             <section class="section pattern-page-header">
               <div class="section-head">
                 <div>
                   <div class="row compact">
-                    <button id="closePatternCategoriesButton" type="button" data-i18n="scheduler.back_schedules">← Back</button>
+                    <button id="closePatternCategoriesButton" type="button" data-i18n="patterns.back">← Message patterns</button>
                     <h2 data-i18n="patterns.manage_title">Manage categories</h2>
                   </div>
                   <span class="muted" data-i18n="patterns.manage_hint">Add, edit, or delete pattern categories</span>
@@ -7029,10 +7073,28 @@ INDEX_HTML = r"""<!doctype html>
         btn.classList.toggle("active", on);
         btn.setAttribute("aria-selected", on ? "true" : "false");
       });
+      syncSchedHub(page);
       if (page === "patterns") loadPatterns();
       if (page === "pattern-categories") loadPatterns();
       if (page === "schedules") loadSchedules().catch(toastError);
       if (page === "ai-settings") loadAiSettings();
+    }
+
+    // The header and tabs show on the jobs list and the patterns pages only.
+    function syncSchedHub(page) {
+      const tab = page === "pattern-categories" ? "patterns" : page;
+      $("schedHub").hidden = !["schedules", "patterns"].includes(tab);
+      document.querySelectorAll("[data-hub-tab]").forEach((btn) => {
+        btn.setAttribute("aria-selected", String(btn.dataset.hubTab === tab));
+      });
+      document.querySelectorAll("[data-hub-action]").forEach((btn) => {
+        btn.classList.toggle("hidden", btn.dataset.hubAction !== tab || page === "pattern-categories");
+      });
+    }
+
+    function updateHubCounts() {
+      $("hubJobCount").textContent = String((state.schedules || []).length);
+      $("hubPatternCount").textContent = String((state.patterns || []).length);
     }
 
     function setLineGuideView(showGuide) {
@@ -9720,43 +9782,119 @@ INDEX_HTML = r"""<!doctype html>
       $("patternFormSection").scrollIntoView({block: "start", behavior: "smooth"});
     }
 
+    function patternUseCount(id) {
+      return (state.schedules || []).filter((job) => (job.patternIds || []).includes(id)).length;
+    }
+
+    function renderPatternCategoryChips() {
+      const root = $("patternCategoryChips");
+      if (!root) return;
+      root.replaceChildren();
+      const selected = state.patternCategoryFilter || "all";
+      const all = state.patterns || [];
+      const chips = [{id: "all", label: t("patterns.all"), count: all.length}];
+      for (const category of state.patternCategories || []) {
+        chips.push({
+          id: category.id,
+          label: patternCategoryLabel(category),
+          count: all.filter((p) => (p.categoryId || "general") === category.id).length
+        });
+      }
+      for (const chip of chips) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "pattern-chip";
+        btn.setAttribute("aria-pressed", String(chip.id === selected));
+        btn.append(document.createTextNode(chip.label), textSpan(String(chip.count), "count"));
+        btn.addEventListener("click", () => {
+          state.patternCategoryFilter = chip.id;
+          populatePatternCategoryControls();
+          renderPatternManageList();
+        });
+        root.appendChild(btn);
+      }
+    }
+
+    function useStartJobWithPattern(pattern) {
+      openScheduleWizard().then(() => {
+        state.wizard.patternIds = [pattern.id];
+        renderWizardPatterns();
+        updateWizardSummary();
+      }).catch(toastError);
+    }
+
     function renderPatternManageList() {
       const box = $("patternManageList");
       if (!box) return;
       box.replaceChildren();
+      updateHubCounts();
+      renderPatternCategoryChips();
       const selectedCategory = state.patternCategoryFilter || "all";
-      const patterns = (state.patterns || []).filter((pattern) =>
-        selectedCategory === "all" || (pattern.categoryId || "general") === selectedCategory
+      const query = ($("patternSearch").value || "").trim().toLowerCase();
+      const all = state.patterns || [];
+      const patterns = all.filter((pattern) =>
+        (selectedCategory === "all" || (pattern.categoryId || "general") === selectedCategory)
+        && (!query || `${pattern.name} ${pattern.text}`.toLowerCase().includes(query))
       );
       $("patternManageCount").textContent = String(patterns.length);
+      $("patternListSummary").textContent = all.length ? t("patterns.showing", {n: patterns.length, total: all.length}) : "";
       if (!patterns.length) {
-        box.appendChild(textSpan(t("scheduler.no_patterns_manage"), "muted"));
+        const empty = document.createElement("div");
+        empty.className = "ux-card pattern-empty";
+        empty.appendChild(textSpan(t(all.length ? "patterns.no_match" : "patterns.empty_title"), "ux-muted"));
+        if (!all.length && hasPermission("schedule")) {
+          const add = document.createElement("button");
+          add.type = "button";
+          add.className = "primary";
+          add.textContent = t("scheduler.add_pattern_new");
+          add.addEventListener("click", togglePatternForm);
+          empty.appendChild(add);
+        }
+        box.appendChild(empty);
         return;
       }
+      const canEdit = hasPermission("schedule");
       for (const p of patterns) {
-        const item = document.createElement("div");
-        item.className = "item";
+        const item = document.createElement("article");
+        item.className = "ux-card pattern-card";
+        const head = document.createElement("div");
+        head.className = "pattern-card-head";
         const name = document.createElement("strong");
         name.textContent = p.name;
-        const preview = document.createElement("span");
-        preview.className = "muted";
-        preview.textContent = p.text;
         const category = document.createElement("span");
-        category.className = "pattern-category-badge";
+        category.className = "badge";
         category.textContent = patternCategoryName(p.categoryId || "general");
+        head.append(name, category);
+        const preview = document.createElement("div");
+        preview.className = "msg-preview";
+        preview.textContent = varsToDisplay(p.text || "");
+        const foot = document.createElement("div");
+        foot.className = "pattern-card-foot";
+        const uses = patternUseCount(p.id);
+        const usage = document.createElement("span");
+        usage.className = uses ? "badge ok" : "badge";
+        usage.textContent = uses ? t("patterns.used_in", {n: uses}) : t("patterns.unused");
         const actions = document.createElement("div");
         actions.className = "item-actions pattern-item-actions";
+        const use = document.createElement("button");
+        use.type = "button";
+        use.textContent = t("patterns.use_in_job");
+        use.disabled = !canEdit;
+        use.addEventListener("click", () => useStartJobWithPattern(p));
         const edit = document.createElement("button");
+        edit.type = "button";
         edit.textContent = t("common.edit");
-        edit.disabled = !hasPermission("schedule");
+        edit.disabled = !canEdit;
         edit.addEventListener("click", () => editPattern(p));
         const del = document.createElement("button");
+        del.type = "button";
         del.className = "danger";
         del.textContent = t("scheduler.delete");
-        del.disabled = !hasPermission("schedule");
+        del.disabled = !canEdit;
         del.addEventListener("click", () => deletePattern(p.id).catch(toastError));
-        actions.append(edit, del);
-        item.append(name, category, preview, actions);
+        actions.append(use, edit, del);
+        foot.append(usage, actions);
+        item.append(head, preview, foot);
         box.appendChild(item);
       }
     }
@@ -9862,7 +10000,10 @@ INDEX_HTML = r"""<!doctype html>
     function setPatternFormOpen(open) {
       $("patternFormSection").classList.toggle("hidden", !open);
       $("patternFormToggle").setAttribute("aria-expanded", String(open));
-      if (open) $("newPatternName").focus({preventScroll: true});
+      if (open) {
+        $("patternFormSection").scrollIntoView({block: "nearest"});
+        $("newPatternName").focus({preventScroll: true});
+      }
     }
 
     function togglePatternForm() {
@@ -9897,7 +10038,8 @@ INDEX_HTML = r"""<!doctype html>
 
     async function deletePattern(id) {
       if (!id) return;
-      if (!confirm(t("confirm.delete_pattern"))) return;
+      const uses = patternUseCount(id);
+      if (!confirm(uses ? t("patterns.delete_used_confirm", {n: uses}) : t("confirm.delete_pattern"))) return;
       await post("/api/patterns/delete", {id, accountId: selectedAccountId()});
       if (state.editingPatternId === id) cancelPatternForm();
       state.selectedPatternIds = (state.selectedPatternIds || []).filter((x) => x !== id);
@@ -11944,8 +12086,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     $("scheduleText").addEventListener("input", updateTextPreview);
     $("patternFormToggle").addEventListener("click", togglePatternForm);
     $("cancelPatternFormButton").addEventListener("click", cancelPatternForm);
-    $("openPatternsButton").addEventListener("click", openPatternsPage);
-    $("closePatternsButton").addEventListener("click", closePatternsPage);
+    document.querySelectorAll("[data-hub-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => setBotPage(btn.dataset.hubTab));
+    });
+    $("patternSearch").addEventListener("input", renderPatternManageList);
     $("openPatternCategoriesButton").addEventListener("click", openPatternCategoriesPage);
     $("closePatternCategoriesButton").addEventListener("click", closePatternCategoriesPage);
     $("createPatternButton").addEventListener("click", () => createPattern().catch(toastError));
@@ -13652,6 +13796,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
 
     function renderSchedules() {
       $("scheduleCount").textContent = t("scheduler.jobs", {n: state.schedules.length});
+      updateHubCounts();
       updateClearStuckButton();
       const list = $("schedulesList");
       if (!list) return;
@@ -14644,6 +14789,18 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "kb.full_text": {th: "ข้อมูลร้านทั้งหมดแบบข้อความ (หัวข้อขึ้นต้นด้วย ##)", en: "All shop info as text (topics start with ##)"},
       "kb.not_synced": {th: "ยังไม่ได้ดึงข้อมูล", en: "Not synced yet"},
       "jobs.title": {th: "ส่งตามเวลา", en: "Scheduled sends"},
+      "hub.subtitle": {th: "ตั้งข้อความให้ระบบส่งเองตามเวลา และเก็บข้อความที่ใช้บ่อยไว้ใช้ซ้ำ", en: "Messages that go out by themselves, and the texts you reuse in them."},
+      "hub.tab_jobs": {th: "งานส่งตามเวลา", en: "Scheduled sends"},
+      "hub.tab_patterns": {th: "ข้อความสำเร็จรูป", en: "Message patterns"},
+      "patterns.search_ph": {th: "ค้นหาชื่อหรือข้อความ", en: "Search name or text"},
+      "patterns.showing": {th: "แสดง {n} จาก {total} ข้อความ", en: "Showing {n} of {total}"},
+      "patterns.no_match": {th: "ไม่พบข้อความที่ตรงกับตัวกรอง", en: "No patterns match this filter"},
+      "patterns.empty_title": {th: "ยังไม่มีข้อความสำเร็จรูป เก็บข้อความที่ใช้บ่อยไว้ที่นี่ แล้วติ๊กใช้ตอนสร้างงานได้เลย", en: "No patterns yet. Keep texts you send often here and tick them when creating a job."},
+      "patterns.used_in": {th: "ใช้ใน {n} งาน", en: "Used in {n} jobs"},
+      "patterns.unused": {th: "ยังไม่ได้ใช้", en: "Not used yet"},
+      "patterns.use_in_job": {th: "ใช้สร้างงาน", en: "Use in a job"},
+      "patterns.back": {th: "← ข้อความสำเร็จรูป", en: "← Message patterns"},
+      "patterns.delete_used_confirm": {th: "ข้อความนี้ใช้อยู่ใน {n} งาน งานเหล่านั้นจะยังส่งข้อความเดิมได้ ลบเลยไหม?", en: "This pattern is used in {n} jobs. They keep sending their saved copy. Delete it?"},
       "jobs.subtitle": {th: "ข้อความที่ระบบส่งให้เองตามเวลาที่ตั้งไว้", en: "Messages that go out by themselves at the time you choose."},
       "jobs.new": {th: "+ สร้างงานส่งตามเวลา", en: "+ New scheduled send"},
       "jobs.when_once": {th: "ครั้งเดียว {at}", en: "Once on {at}"},

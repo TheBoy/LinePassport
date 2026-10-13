@@ -7,6 +7,10 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Scheduled sends page with two tabs**, *Scheduled sends* and *Message
+  patterns*, under one header whose main button follows the tab. Patterns show
+  as cards with category chips, search, a "used in N jobs" badge and a
+  *Use in a job* button that opens the wizard with that pattern ticked.
 - **Redesigned LinePassport web UI.** Left sidebar (Chat · Auto reply ·
   Scheduled sends · Staff KPI · Settings, plus a small developer group for API,
   Tools and Activity log), an account card with one connection dot, a phone
