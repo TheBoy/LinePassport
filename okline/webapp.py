@@ -3766,6 +3766,46 @@ INDEX_HTML = r"""<!doctype html>
     .wizard-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
     .wizard-summary { position: sticky; top: 0; display: grid; gap: 10px; color: var(--ink); }
     .wizard-summary label { color: var(--muted); }
+    /* Disconnected LINE account: red button, banner and the reason on the QR page. */
+    .account-reconnect {
+      width: 100%;
+      margin-top: 8px;
+      min-height: 36px;
+      border-color: #FECDCA;
+      background: var(--danger-bg);
+      color: var(--danger);
+      font-weight: 700;
+    }
+    .reconnect-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 0 0 12px;
+      padding: 12px;
+      border: 1px solid #FECDCA;
+      border-radius: var(--radius);
+      background: var(--danger-bg);
+      color: var(--danger);
+    }
+    .reconnect-banner > div { display: grid; gap: 2px; flex: 1 1 180px; font-size: 13px; }
+    .reconnect-banner.hidden, .account-reconnect.hidden { display: none; }
+    .reconnect-notice {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 14px 16px;
+      border: 1px solid #FDE68A;
+      border-radius: var(--radius);
+      background: #FFFBEB;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .reconnect-notice.hidden { display: none; }
+    .reconnect-notice h3 { margin: 4px 0 0; font-size: 15px; }
+    .reconnect-notice p, .reconnect-notice ul, .reconnect-notice ol { margin: 0; }
+    .reconnect-notice ul, .reconnect-notice ol { padding-left: 20px; display: grid; gap: 4px; }
+    .reconnect-notice .reconnect-kept { color: #067647; font-weight: 600; }
     /* Settings page: menu on the left, the chosen section on the right. */
     .tab-panel[data-tab-panel="settings"].active { overflow: auto; padding: 16px; }
     .settings-page { display: grid; gap: 16px; width: min(1080px, 100%); }
@@ -4242,6 +4282,7 @@ INDEX_HTML = r"""<!doctype html>
           </div>
         </div>
         <div class="section-body login-body">
+          <div class="reconnect-notice hidden" id="reconnectNotice"></div>
           <ol class="login-steps" id="loginSteps">
             <li data-step="1"><span data-i18n="login.step_1">Step 1</span><strong data-i18n="login.step1">Start</strong></li>
             <li data-step="2"><span data-i18n="login.step_2">Step 2</span><strong data-i18n="login.step2">Scan QR</strong></li>
@@ -4350,6 +4391,7 @@ INDEX_HTML = r"""<!doctype html>
               </span>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
             </button>
+            <button class="account-reconnect hidden" id="accountReconnectButton" type="button" data-i18n="reconnect.button">Reconnect (scan QR)</button>
             <div class="account-popover hidden" id="accountPopover" role="listbox" aria-label="LINE"></div>
           </div>
           <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span data-i18n="tabs.line">Chat</span><span class="nav-badge hidden" id="navChatBadge"></span></button>
@@ -4366,6 +4408,13 @@ INDEX_HTML = r"""<!doctype html>
         <div class="tab-panels">
           <div class="tab-panel active" data-tab-panel="line" id="tabPanelLine" role="tabpanel" aria-labelledby="tabLine">
         <aside class="line-list" id="lineListPanel">
+          <div class="reconnect-banner hidden" id="reconnectBanner" role="alert">
+            <div>
+              <strong data-i18n="reconnect.banner_title">This LINE account is disconnected</strong>
+              <span id="reconnectBannerBody" data-i18n="reconnect.banner_body">Messages can't be read or sent until you scan a new QR.</span>
+            </div>
+            <button class="primary" id="reconnectBannerButton" type="button" data-i18n="reconnect.button">Reconnect (scan QR)</button>
+          </div>
           <div class="line-me">
             <div class="avatar avatar-lg" id="profileAvatar" aria-hidden="true"></div>
             <button class="line-me-info" id="profileDetailsToggle" type="button" aria-expanded="false" aria-controls="profileDetailsPanel" data-i18n-title="profile.show_details" title="Show account details">
@@ -7663,7 +7712,7 @@ INDEX_HTML = r"""<!doctype html>
         reconnect.className = "primary";
         reconnect.textContent = t("accounts.reconnect");
         reconnect.disabled = !hasPermission("manage_accounts");
-        reconnect.addEventListener("click", () => openAddAccount(true, account));
+        reconnect.addEventListener("click", () => openReconnect(account));
         const edit = document.createElement("button");
         edit.textContent = t("common.edit");
         edit.disabled = !hasPermission("manage_accounts");
@@ -8102,7 +8151,7 @@ INDEX_HTML = r"""<!doctype html>
         setAccountControls(Boolean(data.status.authenticated));
         toast(t("toast.using", {name: accountLabel(accountId) || accountId}));
         if (!data.status.authenticated) {
-          toast(t("toast.no_session_hint"), true);
+          if (!autoReconnect(accountId, data.status)) toast(t("toast.no_session_hint"), true);
           return;
         }
         await Promise.allSettled([loadConversationLists(), loadSchedules(), loadBotLogs()]);
@@ -8140,6 +8189,7 @@ INDEX_HTML = r"""<!doctype html>
         }
         setView("workspace");
         setAccountControls(Boolean(status.authenticated));
+        if (autoReconnect(accountId, status)) return;
         if (!status.authenticated) return;
         if (loadData) {
             await Promise.allSettled([loadConversationLists(), loadSchedules(), loadBotLogs()]);
@@ -9301,7 +9351,8 @@ INDEX_HTML = r"""<!doctype html>
           : step === 3
             ? $("loginPinReview")
             : $("loginDoneText");
-      if (focusTarget && focusTarget.focus) focusTarget.focus();
+      // On a reconnect the reason sits above the QR; keep it in view.
+      if (focusTarget && focusTarget.focus) focusTarget.focus({preventScroll: Boolean(state.reconnectAccountId)});
     }
 
     function resetLoginUi() {
@@ -9344,6 +9395,7 @@ INDEX_HTML = r"""<!doctype html>
       $("loginPanelTitle").textContent = t(loginTitleKey);
       $("loginPanelSubtitle").dataset.i18n = loginSubtitleKey;
       $("loginPanelSubtitle").textContent = t(loginSubtitleKey);
+      renderReconnectNotice(state.reconnectAccountId ? reconnectAccount : null);
       $("beginAddAccountButton").disabled = false;
       // Item F: no accounts yet -> nowhere to go "Back" to; hide the button.
       $("cancelLoginButton").classList.toggle("hidden", state.accounts.length === 0);
@@ -11927,6 +11979,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     $("addAccountButton").addEventListener("click", () => openAddAccount());
     $("loginProxyEnabled").addEventListener("change", syncLoginProxyInput);
     $("beginAddAccountButton").addEventListener("click", () => startLogin().catch(toastError));
+    $("accountReconnectButton").addEventListener("click", () => openReconnect());
+    $("reconnectBannerButton").addEventListener("click", () => openReconnect());
     $("cancelLoginButton").addEventListener("click", () => cancelLogin().catch(toastError));
     $("qrCopyButton").addEventListener("click", () => copyQrLink());
     $("loadAllButton").addEventListener("click", () => setContactsSubtab("all"));
@@ -12195,7 +12249,90 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         dot.className = "status-dot" + (kind ? " " + kind : "");
       }
       $("accountCardStatus").textContent = label;
+      const lost = Boolean(accountId && accountIsDisconnected(accountId));
+      const canFix = hasPermission("manage_accounts");
+      $("accountReconnectButton").classList.toggle("hidden", !lost || !canFix);
+      $("reconnectBanner").classList.toggle("hidden", !lost);
+      $("reconnectBannerButton").classList.toggle("hidden", !canFix);
+      $("reconnectBannerBody").textContent = t(canFix ? "reconnect.banner_body" : "reconnect.ask_owner");
       renderAccountPopover();
+    }
+
+    function accountIsDisconnected(accountId) {
+      const status = state.lastStatus || {};
+      const account = (state.accounts || []).find((item) => item.id === accountId);
+      if (status.activeAccountId === accountId && status.loginRequired) return true;
+      return Boolean(account && (account.sessionState === "reauth_required" || account.tokenFileExists === false));
+    }
+
+    // Reconnect goes straight to the QR (the old session's proxy is reused by the server).
+    function openReconnect(account) {
+      const accountId = account ? account.id : (state.activeAccountId || selectedAccountId());
+      const target = account || (state.accounts || []).find((item) => item.id === accountId);
+      if (!target) return;
+      if (!hasPermission("manage_accounts")) {
+        toast(t("reconnect.ask_owner"), true);
+        return;
+      }
+      openAddAccount(true, target);
+      startLogin().catch(toastError);
+      // Start at the top so the reason is read before the QR.
+      requestAnimationFrame(() => window.scrollTo(0, 0));
+    }
+
+    // First time an account is opened while disconnected: go to the QR and say why.
+    // Returns true when it navigated away.
+    function autoReconnect(accountId, status) {
+      if (!accountId || !status || !status.loginRequired) return false;
+      state.autoReconnected = state.autoReconnected || {};
+      if (state.autoReconnected[accountId]) return false;
+      state.autoReconnected[accountId] = true;
+      if (!hasPermission("manage_accounts")) {
+        toast(t("reconnect.ask_owner"), true);
+        return false;
+      }
+      openReconnect();
+      return true;
+    }
+
+    function renderReconnectNotice(account) {
+      const box = $("reconnectNotice");
+      box.replaceChildren();
+      box.classList.toggle("hidden", !account);
+      if (!account) return;
+      const name = account.label || account.id;
+      const status = state.lastStatus || {};
+      const detail = account.sessionError || (status.activeAccountId === account.id ? status.sessionError : "") || "";
+      const noSession = account.tokenFileExists === false && !detail;
+      const heading = (key) => {
+        const h = document.createElement("h3");
+        h.textContent = t(key);
+        return h;
+      };
+      const list = (tag, keys) => {
+        const el = document.createElement(tag);
+        for (const key of keys) {
+          const li = document.createElement("li");
+          li.textContent = t(key);
+          el.appendChild(li);
+        }
+        return el;
+      };
+      const at = account.sessionErrorAt ? Date.parse(account.sessionErrorAt) : NaN;
+      const why = document.createElement("p");
+      why.textContent = noSession
+        ? t("reconnect.why_no_session", {name})
+        : (Number.isFinite(at) ? t("reconnect.why", {name, when: fmtEpoch(at / 1000)}) : t("reconnect.why_unknown_time", {name}));
+      box.append(heading("reconnect.why_title"), why);
+      if (!noSession) {
+        box.append(textSpan(t("reconnect.reasons_title"), "strong"), list("ul", ["reconnect.reason_1", "reconnect.reason_2", "reconnect.reason_3"]));
+      }
+      if (detail) box.appendChild(textSpan(t("reconnect.detail", {detail}), "ux-muted"));
+      box.append(heading("reconnect.todo_title"), list("ol", ["reconnect.todo_1", "reconnect.todo_2", "reconnect.todo_3"]));
+      const kept = document.createElement("p");
+      kept.className = "reconnect-kept";
+      kept.textContent = t("reconnect.kept");
+      box.appendChild(kept);
     }
 
     function renderAccountPopover() {
@@ -13774,7 +13911,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
           fix.textContent = t("jobs.reconnect");
           fix.addEventListener("click", () => {
             const account = state.accounts.find((a) => a.id === job.accountId);
-            openAddAccount(true, account || null);
+            openReconnect(account || null);
           });
         } else {
           fix.textContent = t("jobs.retry");
@@ -14928,6 +15065,24 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "help.settings.a1": {th: "บทบาทของคุณอาจไม่มีสิทธิ์ ให้เจ้าของร้านหรือผู้ดูแลปรับให้", en: "Your role may not allow it. Ask the owner or an admin."},
       "help.settings.q2": {th: "สแกน QR แล้วไม่ผ่าน", en: "Scanning the QR fails"},
       "help.settings.a2": {th: "รอให้ QR ขึ้นใหม่แล้วสแกนอีกครั้ง ถ้ามีการขอ PIN ให้กรอกบนมือถือภายในเวลาที่กำหนด", en: "Wait for a fresh QR and scan again. If a PIN is requested, enter it on the phone in time."},
+      "reconnect.button": {th: "เชื่อมต่อใหม่ (สแกน QR)", en: "Reconnect (scan QR)"},
+      "reconnect.banner_title": {th: "บัญชี LINE นี้หลุดการเชื่อมต่อ", en: "This LINE account is disconnected"},
+      "reconnect.banner_body": {th: "อ่านและส่งข้อความไม่ได้ จนกว่าจะสแกน QR เพื่อเชื่อมต่อใหม่", en: "Messages can't be read or sent until you scan a new QR."},
+      "reconnect.ask_owner": {th: "บัญชี LINE นี้หลุดการเชื่อมต่อ แจ้งเจ้าของร้านให้กด “เชื่อมต่อใหม่” แล้วสแกน QR", en: "This LINE account is disconnected. Ask the owner to press Reconnect and scan the QR."},
+      "reconnect.why_title": {th: "ทำไมต้องเชื่อมต่อใหม่", en: "Why reconnect?"},
+      "reconnect.why": {th: "LINE ออกจากระบบบัญชี “{name}” บน LinePassport เมื่อ {when} ตอนนี้จึงอ่านและส่งข้อความไม่ได้", en: "LINE signed “{name}” out of LinePassport at {when}, so messages can't be read or sent."},
+      "reconnect.why_unknown_time": {th: "LINE ออกจากระบบบัญชี “{name}” บน LinePassport ตอนนี้จึงอ่านและส่งข้อความไม่ได้", en: "LINE signed “{name}” out of LinePassport, so messages can't be read or sent."},
+      "reconnect.why_no_session": {th: "ไม่พบข้อมูลการเข้าสู่ระบบของบัญชี “{name}” บนเซิร์ฟเวอร์นี้ เช่น ไฟล์เซสชันถูกลบหรือย้ายเซิร์ฟเวอร์", en: "No saved login was found for “{name}” on this server, e.g. the session file was removed or the server moved."},
+      "reconnect.reasons_title": {th: "สาเหตุที่พบบ่อย", en: "Common causes"},
+      "reconnect.reason_1": {th: "เข้าสู่ระบบบัญชีเดียวกันใน LINE บนคอมพิวเตอร์ เบราว์เซอร์ หรือโปรแกรมอื่น ทำให้ LINE ตัดเซสชันเดิม", en: "The same account signed in to LINE on a computer, browser or another app, so LINE ended this session."},
+      "reconnect.reason_2": {th: "มีการกดออกจากระบบอุปกรณ์นี้จากแอป LINE บนมือถือ", en: "This device was signed out from the LINE app on the phone."},
+      "reconnect.reason_3": {th: "เปลี่ยนรหัสผ่าน LINE หรือเซสชันหมดอายุ", en: "The LINE password changed or the session expired."},
+      "reconnect.detail": {th: "รายละเอียดจาก LINE: {detail}", en: "Details from LINE: {detail}"},
+      "reconnect.todo_title": {th: "ต้องทำอะไร", en: "What to do"},
+      "reconnect.todo_1": {th: "เปิดแอป LINE บนมือถือที่ใช้บัญชีนี้", en: "Open the LINE app on the phone that uses this account."},
+      "reconnect.todo_2": {th: "สแกน QR ด้านล่าง ต้องเป็นบัญชีเดิมเท่านั้น", en: "Scan the QR below — it must be the same account."},
+      "reconnect.todo_3": {th: "ถ้ามีรหัส PIN ขึ้นบนหน้านี้ ให้กรอกในมือถือภายในเวลาที่กำหนด", en: "If a PIN appears here, enter it on the phone before it expires."},
+      "reconnect.kept": {th: "งานส่งตามเวลา ข้อความสำเร็จรูป API และการตั้งค่าทั้งหมดยังอยู่ครบ ไม่ต้องตั้งใหม่", en: "Scheduled sends, patterns, APIs and settings are all kept — nothing to set up again."},
       "jobs.title": {th: "ส่งตามเวลา", en: "Scheduled sends"},
       "hub.hint_jobs": {th: "งานที่ระบบจะส่งข้อความให้เองตามเวลาที่ตั้งไว้ เปิด/ปิดได้ที่สวิตช์ของแต่ละงาน", en: "Jobs the system sends by itself at the times you set. Turn each one on or off with its switch."},
       "hub.hint_patterns": {th: "ข้อความที่บันทึกไว้ใช้ซ้ำ ติ๊กเลือกได้ตอนสร้างงาน ถ้าเลือกหลายข้อความระบบจะสุ่มส่ง", en: "Saved texts to reuse. Tick them when creating a job; with several, one is picked at random."},

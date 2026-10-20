@@ -928,3 +928,22 @@ def test_settings_is_a_scrolling_workspace_page():
     assert '.tab-panel[data-tab-panel="settings"].active { overflow: auto;' in html
     # The settings page lives inside the workspace, after the sidebar.
     assert html.index('id="workspace"') < html.index('id="tabPanelSettings"')
+
+
+def test_disconnected_account_jumps_to_the_qr_with_a_reason():
+    html = webapp_module.INDEX_HTML
+    # One click from the sidebar or the chat-list banner.
+    assert 'id="accountReconnectButton"' in html and 'id="reconnectBannerButton"' in html
+    assert '$("accountReconnectButton").addEventListener("click", () => openReconnect());' in html
+    # Reconnect skips the Start step and shows the QR right away.
+    start = html.index("function openReconnect(account)")
+    body = html[start : html.index("function renderReconnectNotice", start)]
+    assert "openAddAccount(true, target);" in body and "startLogin()" in body
+    # The QR page explains why and what to do.
+    assert 'id="reconnectNotice"' in html
+    for key in ("reconnect.why_title", "reconnect.reason_1", "reconnect.todo_2", "reconnect.kept"):
+        assert f'"{key}": {{th: ' in html
+    # First visit to a disconnected account opens it once by itself.
+    assert "state.autoReconnected[accountId] = true;" in html
+    assert "if (!autoReconnect(accountId, data.status))" in html
+    assert "if (autoReconnect(accountId, status)) return;" in html

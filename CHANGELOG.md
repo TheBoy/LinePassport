@@ -7,6 +7,11 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Disconnected LINE accounts go straight to the QR.** A red "Reconnect
+  (scan QR)" button under the account card and a banner above the chat list
+  open the QR in one click; the first time a disconnected account is opened
+  it goes there by itself. The page explains when LINE signed it out, common
+  causes, what to do, and that jobs and settings are kept.
 - **Settings is a normal page.** It opens inside the workspace with the
   sidebar still visible, scrolls like every other page, and lists its
   sections in a menu on the left (a scrollable row on phones).

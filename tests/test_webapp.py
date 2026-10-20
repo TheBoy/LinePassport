@@ -3245,7 +3245,7 @@ def test_web_ui_exposes_reconnect_states_for_accounts_workers_and_schedules():
     assert '"assistant.auto_reply_login_required"' in INDEX_HTML
     assert '"scheduler.login_required"' in INDEX_HTML
     assert 'account.sessionState === "reauth_required"' in INDEX_HTML
-    assert 'openAddAccount(true, account)' in INDEX_HTML
+    assert 'reconnect.addEventListener("click", () => openReconnect(account));' in INDEX_HTML
     assert '"login.reconnect_title"' in INDEX_HTML
     assert '"toast.account_reconnected"' in INDEX_HTML
 
