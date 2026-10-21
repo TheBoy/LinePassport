@@ -7,6 +7,11 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **LINE sessions stay connected.** Access tokens last about 7 days; a
+  background keeper now renews them when fewer than two days remain, and
+  retries hourly (with the one-year refresh token) for accounts that dropped
+  only because the token expired (code 119), so no QR scan is needed.
+
 - **Disconnected LINE accounts go straight to the QR.** A red "Reconnect
   (scan QR)" button under the account card and a banner above the chat list
   open the QR in one click; the first time a disconnected account is opened
@@ -82,6 +87,13 @@ All notable changes to OkLine are documented here. The format follows
   2 minutes, a digest for many chats, one reminder past the reply target, a
   30-second wait when the AI may answer, and nothing outside the person's shift.
   Only known browser push services are accepted as endpoints.
+
+### Fixed
+- **Token refresh never succeeded.** The refresh call sent no access header
+  but signed X-Hmac with the stale access token, so the signature could not
+  verify. It now signs with no token, and if rejected retries with the stale
+  token in X-Line-Access and a matching signature.
+- The reconnect page title names the account ("Reconnect LINE account: <name>").
 
 ## [2.8.0] - 2026-07-08
 

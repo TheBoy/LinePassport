@@ -449,3 +449,42 @@ def test_poll_propagates_non_retryable_errors_immediately():
         flows._poll(boom, max_count=5)
     assert ei.value.status == 403
     assert calls["n"] == 1  # raised on first attempt, no retry
+
+
+def test_refresh_signs_with_no_token_when_no_access_header_is_sent():
+    """The refresh call sends no X-Line-Access, so X-Hmac must not use the stale token."""
+    from conftest import FakeBridge
+
+    bridge = FakeBridge()
+    responder = route({"tokenRefresh": {"accessToken": "NEW"}})
+    api = build_api(responder, access_token="STALE", bridge=bridge, enable_hmac=True)
+    api.transport.tokens.refresh_token = "RT"
+
+    assert api.auth.refresh_access_token() == "NEW"
+
+    sent = api.transport.session.last
+    assert "X-Line-Access" not in sent["headers"]
+    assert bridge.signed[-1][0] == ""
+
+
+def test_refresh_retries_with_the_stale_token_in_the_header_when_rejected():
+    """If the unsigned-token variant is rejected, retry with X-Line-Access + matching X-Hmac."""
+    from conftest import FakeBridge
+
+    bridge = FakeBridge()
+    calls = []
+
+    def responder(method, url, kw):
+        calls.append(kw.get("headers", {}))
+        if "X-Line-Access" not in kw.get("headers", {}):
+            return FakeResp(400, {"code": 10005, "message": "REQUEST_INVALID_HMAC"})
+        return FakeResp(200, {"message": "OK", "data": {"accessToken": "NEW", "refreshToken": "RT2"}})
+
+    api = build_api(responder, access_token="STALE", bridge=bridge, enable_hmac=True)
+    api.transport.tokens.refresh_token = "RT"
+
+    assert api.auth.refresh_access_token() == "NEW"
+    assert api.transport.tokens.refresh_token == "RT2"
+    assert len(calls) == 2
+    assert calls[1]["X-Line-Access"] == "STALE"
+    assert bridge.signed[-1][0] == "STALE"

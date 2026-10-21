@@ -6382,7 +6382,7 @@ INDEX_HTML = r"""<!doctype html>
       "secure.action": {th: "ตั้งรหัสผ่าน", en: "Set a password"},
       "login.add_title": {th: "เพิ่มบัญชี LINE", en: "Add LINE Account"},
       "login.subtitle": {th: "ทำตาม 4 ขั้นตอนเพื่อเพิ่มเซสชัน LINE — LinePassport จะใช้ชื่อที่แสดงจากบัญชี LINE ของคุณ", en: "Follow the 4 steps to add another LINE session. LinePassport will use the display name from your LINE account."},
-      "login.reconnect_title": {th: "เชื่อมต่อบัญชี LINE ใหม่", en: "Reconnect LINE Account"},
+      "login.reconnect_title": {th: "เชื่อมต่อบัญชี LINE: {name} อีกครั้ง", en: "Reconnect LINE account: {name}"},
       "login.reconnect_subtitle": {th: "สแกน QR ของบัญชีเดิมเพื่อเปลี่ยนเฉพาะเซสชัน โดยเก็บตารางส่ง API และการตั้งค่าเดิมไว้", en: "Scan the same LINE account to replace only its session while keeping schedules, APIs, and settings."},
       "login.back": {th: "ย้อนกลับ", en: "Back"},
       "login.step_1": {th: "ขั้นตอน 1", en: "Step 1"},
@@ -6733,7 +6733,7 @@ INDEX_HTML = r"""<!doctype html>
       "errors.network": {th: "ติดต่อเซิร์ฟเวอร์ไม่ได้", en: "Cannot reach the server."},
       "toast.using": {th: "กำลังใช้ {name}", en: "Using {name}"},
       "toast.account_added": {th: "เพิ่มบัญชี LINE แล้ว", en: "LINE account added"},
-      "toast.account_reconnected": {th: "เชื่อมต่อบัญชี LINE ใหม่แล้ว", en: "LINE account reconnected"},
+      "toast.account_reconnected": {th: "เชื่อมต่อบัญชี LINE อีกครั้งแล้ว", en: "LINE account reconnected"},
       "toast.sent": {th: "ส่งข้อความแล้ว", en: "Message sent"},
       "toast.sending_media": {th: "กำลังส่งไฟล์…", en: "Sending…"},
       "toast.password_updated": {th: "อัปเดตรหัสผ่านแล้ว", en: "Password updated"},
@@ -6841,6 +6841,8 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.sender": {th: "ผู้ส่ง", en: "Sender"},
       "botlog.model": {th: "โมเดล", en: "Model"},
       "botlog.action.line.session.reauth_required": {th: "เซสชัน LINE ถูกยกเลิก", en: "LINE session requires reconnect"},
+      "botlog.action.line.session.refreshed": {th: "ต่ออายุการเชื่อมต่อ LINE แล้ว", en: "LINE session renewed"},
+      "botlog.action.line.session.refresh_failed": {th: "ต่ออายุการเชื่อมต่อ LINE ไม่สำเร็จ", en: "LINE session renewal failed"},
       "toast.bot_logs_cleared": {th: "ล้าง บันทึกการทำงาน ทั้งหมดแล้ว", en: "Activity logs cleared"}
     };
 
@@ -9391,8 +9393,14 @@ INDEX_HTML = r"""<!doctype html>
       const loginSubtitleKey = state.reconnectAccountId
         ? "login.reconnect_subtitle"
         : "login.subtitle";
-      $("loginPanelTitle").dataset.i18n = loginTitleKey;
-      $("loginPanelTitle").textContent = t(loginTitleKey);
+      if (state.reconnectAccountId) {
+        // The title carries the account name, so it is set here rather than by data-i18n.
+        delete $("loginPanelTitle").dataset.i18n;
+        $("loginPanelTitle").textContent = t(loginTitleKey, {name: reconnectAccount.label || reconnectAccount.id});
+      } else {
+        $("loginPanelTitle").dataset.i18n = loginTitleKey;
+        $("loginPanelTitle").textContent = t(loginTitleKey);
+      }
       $("loginPanelSubtitle").dataset.i18n = loginSubtitleKey;
       $("loginPanelSubtitle").textContent = t(loginSubtitleKey);
       renderReconnectNotice(state.reconnectAccountId ? reconnectAccount : null);
@@ -16784,6 +16792,11 @@ INBOX_IDLE_REFRESH_SECONDS = 30.0
 # LINE's operation stream (the Chrome client's fetchOps over SSE) pushes a
 # notice for every new message; while it is healthy getMessageBoxes polling only
 # runs as a once-a-minute safety net.
+# LINE access tokens expire ~7 days after issue; refresh tokens last a year.
+SESSION_REFRESH_BEFORE_SECONDS = 2 * 24 * 3600.0
+SESSION_REFRESH_RETRY_SECONDS = 3600.0
+SESSION_KEEPER_INTERVAL_SECONDS = 1800.0
+SESSION_KEEPER_FIRST_RUN_SECONDS = 20.0
 OPS_HEALTHY_SECONDS = 120.0
 OPS_FALLBACK_REFRESH_SECONDS = 60.0
 OPS_FAILURE_LIMIT = 3
@@ -18793,6 +18806,32 @@ class AccountStore:
             return updated, found
 
 
+class SessionKeeper:
+    """Refreshes LINE access tokens before they expire (they last ~7 days)."""
+
+    def __init__(self, state: WebState) -> None:
+        self.state = state
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(
+            target=self._run, name="linepassport-session-keeper", daemon=True
+        )
+        self.thread.start()
+
+    def close(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        # Shortly after start-up (a deploy restarts the app), then periodically.
+        delay = SESSION_KEEPER_FIRST_RUN_SECONDS
+        while not self.stop_event.wait(delay):
+            delay = SESSION_KEEPER_INTERVAL_SECONDS
+            try:
+                self.state.keep_sessions_fresh()
+            except Exception:
+                traceback.print_exc()
+
+
 class ScheduleEngine:
     def __init__(self, state: WebState) -> None:
         self.state = state
@@ -18951,6 +18990,8 @@ class WebState:
         )
         self.scheduler = ScheduleEngine(self)
         self.ai_auto_reply_engine = AiAutoReplyEngine(self)
+        self.session_refresh_attempts: dict[str, float] = {}
+        self.session_keeper = SessionKeeper(self)
 
     def _consume_api_rate_limit(
         self,
@@ -19245,6 +19286,7 @@ class WebState:
             self.store.set("schedules", {"schedules": schedules})
 
     def close(self) -> None:
+        self.session_keeper.close()
         self.ai_auto_reply_engine.close()
         for watcher in list(self.ops_watchers.values()):
             watcher.stop()
@@ -19478,6 +19520,66 @@ class WebState:
         encrypted = b"fernet:" + self.secret_cipher.encrypt(payload)
         _write_private_bytes(token_file, encrypted)
         api._session_path = None
+
+    def keep_sessions_fresh(self, now: float | None = None) -> list[str]:
+        """Refresh tokens close to expiry and revive sessions that only expired.
+
+        LINE access tokens last about 7 days while the refresh token lasts a
+        year, so a session is renewed when fewer than two days remain. Accounts
+        already marked for reconnect because the token expired (code 119) get
+        one refresh attempt per hour before anyone has to scan a QR again.
+        Returns the account ids that were refreshed.
+        """
+        now = time.time() if now is None else now
+        refreshed: list[str] = []
+        for account in self.account_store.list_accounts():
+            account_id = str(account.get("id") or "")
+            if not account_id or not account.get("tokenFileExists"):
+                continue
+            expired = account.get("sessionState") == "reauth_required"
+            if expired and "code 119" not in str(account.get("sessionError") or ""):
+                continue  # revoked (e.g. signed out on the phone): needs a QR
+            last_try = self.session_refresh_attempts.get(account_id, 0.0)
+            if now - last_try < SESSION_REFRESH_RETRY_SECONDS:
+                continue
+            try:
+                api = self.get_api(account_id, require_auth=False)
+            except Exception:
+                continue
+            tokens = api.transport.tokens
+            if not tokens.refresh_token:
+                continue
+            if not expired:
+                expires_at = _jwt_expiry(tokens.access_token)
+                if expires_at is None or expires_at - now > SESSION_REFRESH_BEFORE_SECONDS:
+                    continue
+            self.session_refresh_attempts[account_id] = now
+            if self._refresh_account_session(account_id, api, revived=expired):
+                refreshed.append(account_id)
+        return refreshed
+
+    def _refresh_account_session(self, account_id: str, api: OkLine, *, revived: bool) -> bool:
+        try:
+            with self.api_lock_for(account_id), api._token_refresh_lock:
+                api.auth.refresh_access_token()
+                if api._session_save_hook is not None:
+                    api._session_save_hook()
+        except Exception as exc:
+            self.append_bot_log(
+                "line.session.refresh_failed",
+                account_id=account_id,
+                ok=False,
+                detail=_short_text(str(exc), 300),
+            )
+            return False
+        self.account_store.mark_session_connected(account_id)
+        self.invalidate_inbox_snapshot(account_id)
+        self.append_bot_log(
+            "line.session.refreshed",
+            account_id=account_id,
+            detail="revived after expiry" if revived else "renewed before expiry",
+        )
+        return True
 
     def _handle_account_auth_failure(
         self, account_id: str, exc: LineAuthError
@@ -27019,6 +27121,19 @@ def _bot_log(
 
 _RAND_RE = re.compile(r"\{rand:(-?\d+)-(-?\d+)\}")
 _DIGITS_RE = re.compile(r"\{([123])D\}")
+
+
+def _jwt_expiry(token: str | None) -> float | None:
+    """Return the ``exp`` claim of a JWT access token (no signature check)."""
+    if not token or token.count(".") != 2:
+        return None
+    payload = token.split(".")[1]
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        exp = float(claims.get("exp"))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return exp / 1000.0 if exp > 1e11 else exp
 
 
 def _apply_placeholders(text: str) -> str:

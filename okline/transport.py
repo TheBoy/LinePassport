@@ -211,14 +211,16 @@ class Transport:
             self._bridge_init = True
         return self._bridge
 
-    def _sign(self, headers: dict, path: str, body: str) -> None:
+    def _sign(self, headers: dict, path: str, body: str, token: str | None = None) -> None:
+        """Sign with ``token`` (default: the current access token)."""
         if not self.config.enable_hmac:
             return
         signer = self.signer
         if signer is None:
             return
+        key = self.tokens.access_token or "" if token is None else token
         try:
-            signature = signer.sign(self.tokens.access_token or "", path, body)
+            signature = signer.sign(key, path, body)
         except Exception as exc:
             from .hmac_signer import HmacSignerError
 
@@ -229,7 +231,7 @@ class Transport:
                 raise
             log.warning("LTSM HMAC bridge failed; restarting it once: %s", exc)
             restart()
-            signature = signer.sign(self.tokens.access_token or "", path, body)
+            signature = signer.sign(key, path, body)
         headers["X-Hmac"] = signature
 
     def _refresh_credentials(self, failed_access_token: str | None) -> bool:
@@ -314,7 +316,9 @@ class Transport:
         allow_refresh: bool = True,
         endpoint_key: str | None = None,
         base: str | None = None,
+        sign_token: str | None = None,
     ) -> Any:
+        """POST a JSON body. ``sign_token`` overrides the token X-Hmac is keyed on."""
         if require_auth and not self.tokens.access_token:
             raise LineLoginRequired("no access token; run a login flow first", path=path)
 
@@ -326,7 +330,7 @@ class Transport:
         # X-Hmac must be computed over the exact (path, body) we transmit, and
         # before any caller-supplied header overrides.
         if is_gateway:
-            self._sign(headers, path, data)
+            self._sign(headers, path, data, token=sign_token)
         if extra_headers:
             headers.update(extra_headers)
 
@@ -352,6 +356,7 @@ class Transport:
                     allow_refresh=False,
                     endpoint_key=endpoint_key,
                     base=base,
+                    sign_token=sign_token,
                 )
             if require_auth and is_gateway:
                 self._notify_auth_failure(exc)

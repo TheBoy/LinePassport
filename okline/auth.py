@@ -37,7 +37,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from . import endpoints as ep
 from .crypto import RSAKeyInfo, rsa_encrypt_credentials
 from .enums import IdentityProvider, LoginResultType, LoginType
-from .exceptions import LineApiError, LineAuthError, LineTransportError
+from .exceptions import LineApiError, LineAuthError, LineError, LineTransportError
 from .transport import Transport
 
 log = logging.getLogger("okline.auth")
@@ -306,7 +306,25 @@ class AuthFlows:
         if not rt:
             raise LineAuthError("no refresh token available")
         path = "/" + ep.SPECIAL_ENDPOINTS["auth.tokenRefresh"]
-        data = self._t.post_json(path, {"refreshToken": rt}, require_auth=False)
+        body = {"refreshToken": rt}
+        stale = self._t.tokens.access_token or ""
+        # X-Hmac is keyed on the access token the gateway sees in X-Line-Access.
+        # Sending no access header while signing with the stale token never
+        # verifies, so first sign with no token; if that is rejected, send the
+        # stale token in the header and sign with it.
+        try:
+            data = self._t.post_json(path, body, require_auth=False, sign_token="")
+        except LineError as first:
+            if not stale:
+                raise
+            log.info("token refresh without access header failed (%s); retrying with it", first)
+            data = self._t.post_json(
+                path,
+                body,
+                require_auth=False,
+                sign_token=stale,
+                extra_headers={"X-Line-Access": stale},
+            )
         tok = data.get("tokenV3IssueResult", data) if isinstance(data, dict) else {}
         access = tok.get("accessToken") or data.get("accessToken")
         if not access:
