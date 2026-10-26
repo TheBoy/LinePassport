@@ -42,6 +42,8 @@ qr = ["qrcode>=7.0"]
 # Optional PostgreSQL persistence for LinePassport (`okline web`). Without it,
 # the web UI falls back to on-disk JSON state (and prints an install hint).
 web = ["psycopg[binary]>=3.1"]
+# Personal Telegram accounts as a chat channel (MTProto). Bots need nothing extra.
+telegram = ["telethon>=1.36"]
 test = ["pytest>=7.0"]
 dev = [
     "pytest>=7.0",

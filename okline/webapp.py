@@ -67,6 +67,7 @@ from .telegram import StaffNotifier, TelegramError
 from .telegram import routes as telegram_routes
 from .telegram.bot_api import TelegramApiError, valid_token
 from .telegram.channels import TelegramChannels, telegram_user_id
+from .telegram.mtproto import INSTALL_HINT, TelegramUsers, telethon_available
 from .telegram.notify import preview_label
 from .transport import LineConfig
 from .webpush import (
@@ -19073,9 +19074,15 @@ class WebState:
         self.staff_notifier = StaffNotifier(self)
         # Telegram bots added as customer chat accounts.
         self.telegram = TelegramChannels(self)
+        # Personal Telegram accounts (MTProto), and their sign-ins in progress.
+        self.telegram_users = TelegramUsers(self)
         for account in self.account_store.list_accounts():
-            if account.get("channel") == "telegram_bot" and account.get("sessionState") == "connected":
+            if account.get("sessionState") != "connected":
+                continue
+            if account.get("channel") == "telegram_bot":
                 self.telegram.start(str(account["id"]))
+            elif account.get("channel") == "telegram_user":
+                self.telegram_users.start(str(account["id"]))
         self.scheduler = ScheduleEngine(self)
         self.ai_auto_reply_engine = AiAutoReplyEngine(self)
         self.session_refresh_attempts: dict[str, float] = {}
@@ -19374,6 +19381,7 @@ class WebState:
             self.store.set("schedules", {"schedules": schedules})
 
     def close(self) -> None:
+        self.telegram_users.close()
         self.telegram.close()
         self.staff_notifier.close()
         self.crm_engine.stop()
@@ -20235,6 +20243,7 @@ class WebState:
             traceback.print_exc()
         if _account_channel(removed) != "line":
             self.telegram.stop(account_id)
+            self.telegram_users.stop(account_id)
             credential_file = str(removed.get("credentialFile") or "")
             if credential_file and os.path.exists(credential_file):
                 try:
@@ -21357,6 +21366,18 @@ class WebState:
                 account_id, chat_id, sent, by=by, text=text, content_type=0, meta={}
             )
             return str(sent.get("message_id") or "")
+        if channel == "telegram_user":
+            target = self._telegram_target(account_id, chat_id)
+            with self.api_lock_for(account_id):
+                sent = self._telegram_user_call(
+                    account_id, lambda adapter: adapter.send_text(target, text)
+                )
+                self.note_outgoing(account_id, chat_id, by)
+            self._telegram_record_outgoing(
+                account_id, chat_id, sent, by=by, text=text, content_type=0,
+                meta={"mtproto": True},
+            )
+            return str(sent.get("message_id") or "")
         if channel != "line":
             raise _line_only()
         api = self.get_api(account_id)
@@ -21383,6 +21404,14 @@ class WebState:
                 "telegram_not_started",
             )
         return target
+
+    def _telegram_user_call(self, account_id: str, fn: Callable[[Any], Any]) -> Any:
+        try:
+            return fn(self.telegram_users.adapter(account_id))
+        except TelegramError as exc:
+            if exc.code == "telegram_reauth":
+                self.tg_auth_failed(account_id)
+            raise
 
     def _telegram_send_error(self, account_id: str, exc: TelegramApiError) -> WebError:
         if exc.blocked:
@@ -21443,22 +21472,68 @@ class WebState:
         if result and result.get("status") != result.get("previousStatus"):
             self._bump_crm_version(account_id)
 
-    def tg_token(self, account_id: str) -> str:
+    def _telegram_secret(self, account_id: str) -> dict[str, Any]:
         account = self.account_store.get(account_id) or {}
         path = str(account.get("credentialFile") or "")
         if not path or not os.path.exists(path):
-            return ""
+            return {}
         try:
             with open(path, encoding="utf-8") as handle:
                 stored = json.load(handle)
             secret = json.loads(self._decrypt_secret(str(stored.get("secret") or "")) or "{}")
         except (OSError, ValueError):
             traceback.print_exc()
-            return ""
-        return str(secret.get("token") or "")
+            return {}
+        return secret if isinstance(secret, dict) else {}
+
+    def tg_token(self, account_id: str) -> str:
+        return str(self._telegram_secret(account_id).get("token") or "")
+
+    def tgu_credentials(self, account_id: str) -> dict[str, Any]:
+        return self._telegram_secret(account_id)
+
+    def _write_telegram_secret(self, path: str, secret: dict[str, Any]) -> None:
+        _write_json_file(path, {"secret": self._encrypt_secret(json.dumps(secret))})
 
     def _write_telegram_credentials(self, path: str, token: str) -> None:
-        _write_json_file(path, {"secret": self._encrypt_secret(json.dumps({"token": token}))})
+        self._write_telegram_secret(path, {"token": token})
+
+    def tg_backfill(self, account_id: str, messages: list[dict[str, Any]]) -> None:
+        """Recent chats when a personal account connects: history only, no alerts."""
+        account = self.account_store.get(account_id)
+        if not account:
+            return
+        owner_id = self._account_owner_id(account_id)
+        for message in messages:
+            outgoing = bool(message.get("outgoing"))
+            try:
+                self.crm.ingest(
+                    owner_id=owner_id,
+                    account_id=account_id,
+                    channel=_account_channel(account),
+                    chat_id=str(message.get("chatId") or ""),
+                    contact={
+                        "externalId": str(message.get("userId") or ""),
+                        "name": message.get("name"),
+                        "username": message.get("username"),
+                    },
+                    messages=[
+                        {
+                            "externalId": message.get("externalId"),
+                            "direction": "out" if outgoing else "in",
+                            "senderKind": "app" if outgoing else "customer",
+                            "senderId": "" if outgoing else str(message.get("userId") or ""),
+                            "text": message.get("text"),
+                            "contentType": message.get("contentType"),
+                            "meta": message.get("meta") or {},
+                            "at": message.get("at"),
+                        }
+                    ],
+                )
+            except Exception:
+                traceback.print_exc()
+        self._bump_inbox_version(account_id)
+        self._bump_crm_version(account_id)
 
     def tg_receive(self, account_id: str, message: dict[str, Any]) -> None:
         account = self.account_store.get(account_id)
@@ -21508,6 +21583,14 @@ class WebState:
             self._telegram_auto_reply(account_id, owner_id, chat_id, message)
 
     def tg_auth_failed(self, account_id: str) -> None:
+        if _account_channel(self.account_store.get(account_id)) == "telegram_user":
+            self.account_store.mark_session_reauth_required(
+                account_id, "This Telegram account was signed out. Sign in again."
+            )
+            threading.Thread(
+                target=self.telegram_users.stop, args=(account_id,), daemon=True
+            ).start()
+            return
         self.account_store.mark_session_reauth_required(
             account_id, "Telegram rejected the bot token. Paste a new token."
         )
@@ -21570,10 +21653,7 @@ class WebState:
                 self.ai_auto_reply_inflight.discard(inflight_key)
 
     def add_telegram_bot(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
-        if not user or not self.web_auth.has_permission(user, "manage_accounts"):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied.", "forbidden")
-        if user.get("teamOwnerId"):
-            raise WebError(HTTPStatus.FORBIDDEN, "Only the shop owner can add accounts.", "forbidden")
+        owner_id = self._require_account_adder(user)
         token = str(body.get("token") or "").strip()
         me = self._check_telegram_token(token)
         bot_id = str(me.get("id"))
@@ -21593,7 +21673,6 @@ class WebState:
         label = str(body.get("label") or "").strip()[:MAX_NAME_LENGTH] or str(
             me.get("first_name") or username
         )
-        owner_id = str(user.get("id") or "")
         record = {
             "id": f"tg-{_safe_slug(username or label, 'bot')}",
             "label": label,
@@ -21606,6 +21685,14 @@ class WebState:
             "createdAt": _now_iso(),
             "updatedAt": _now_iso(),
         }
+        account = self._create_telegram_account(record, {"token": token}, owner_id)
+        self.telegram.start(account["id"])
+        return self._accounts_payload(owner_id, account["id"])
+
+    def _create_telegram_account(
+        self, record: dict[str, Any], secret: dict[str, Any], owner_id: str
+    ) -> dict[str, Any]:
+        """Save a Telegram account, its encrypted secret and its owner in one go."""
         with self.lock, self.web_auth.lock, self.account_store.lock:
             previous_accounts = copy.deepcopy(self.account_store.data)
             previous_auth = copy.deepcopy(self.web_auth.data)
@@ -21616,7 +21703,7 @@ class WebState:
                 credential_file = str(
                     Path(self.config.accounts_dir) / f"{account['id']}.telegram.json"
                 )
-                self._write_telegram_credentials(credential_file, token)
+                self._write_telegram_secret(credential_file, secret)
                 for stored in self.account_store.data["accounts"]:
                     if isinstance(stored, dict) and stored.get("id") == account["id"]:
                         stored["credentialFile"] = credential_file
@@ -21629,7 +21716,6 @@ class WebState:
                     raise WebError(HTTPStatus.NOT_FOUND, "Account owner not found.")
                 owner["accountIds"] = sorted(set(owner.get("accountIds") or []) | {account["id"]})
                 owner["updatedAt"] = _now_iso()
-                # Accounts and their owner are saved together, so the account is never orphaned.
                 self.store.set_many({"accounts": self.account_store.data, "auth": auth_data})
                 self.web_auth.data = auth_data
             except Exception:
@@ -21639,13 +21725,15 @@ class WebState:
                     os.remove(credential_file)
                 raise
         self.store.set(f"telegram_runtime:{account['id']}", {"offset": 0})
-        self.telegram.start(account["id"])
+        return account
+
+    def _accounts_payload(self, owner_id: str, account_id: str) -> dict[str, Any]:
         # The request's user copy predates the new account; list from the saved owner.
         fresh_owner = self.web_auth._find_user(owner_id)
         return {
             "ok": True,
             "account": next(
-                a for a in self.account_store.list_accounts() if a["id"] == account["id"]
+                a for a in self.account_store.list_accounts() if a["id"] == account_id
             ),
             "accounts": {
                 "accounts": self.account_store.list_accounts(
@@ -21653,6 +21741,108 @@ class WebState:
                 )
             },
         }
+
+    def _require_account_adder(self, user: dict[str, Any] | None) -> str:
+        if not user or not self.web_auth.has_permission(user, "manage_accounts"):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied.", "forbidden")
+        if user.get("teamOwnerId"):
+            raise WebError(HTTPStatus.FORBIDDEN, "Only the shop owner can add accounts.", "forbidden")
+        return str(user.get("id") or "")
+
+    def tg_user_available(self) -> dict[str, Any]:
+        return {"ok": True, "available": telethon_available(), "install": INSTALL_HINT}
+
+    def tg_user_login_start(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        owner_id = self._require_account_adder(user)
+        reconnect_id = str(body.get("reconnectAccountId") or "").strip()
+        if reconnect_id:
+            account = self.account_store.get(reconnect_id)
+            if (
+                not account
+                or _account_channel(account) != "telegram_user"
+                or self._account_owner_id(reconnect_id) != owner_id
+            ):
+                raise WebError(HTTPStatus.NOT_FOUND, "Telegram account not found.")
+        return self.telegram_users.begin_login(
+            owner_id,
+            body.get("apiId"),
+            str(body.get("apiHash") or ""),
+            str(body.get("phone") or ""),
+            {
+                "label": str(body.get("label") or "").strip()[:MAX_NAME_LENGTH],
+                "reconnectAccountId": reconnect_id,
+            },
+        )
+
+    def tg_user_login_code(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+        owner_id = self._require_account_adder(user)
+        finished = self.telegram_users.submit_code(owner_id, str(body.get("code") or ""))
+        if finished is None:
+            return {"ok": True, "state": "password"}
+        return self._finish_telegram_user(owner_id, finished)
+
+    def tg_user_login_password(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        owner_id = self._require_account_adder(user)
+        finished = self.telegram_users.submit_password(owner_id, str(body.get("password") or ""))
+        return self._finish_telegram_user(owner_id, finished)
+
+    def tg_user_login_cancel(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        self.telegram_users.cancel_login(str((user or {}).get("id") or ""))
+        return {"ok": True, "state": "idle"}
+
+    def _finish_telegram_user(self, owner_id: str, finished: dict[str, Any]) -> dict[str, Any]:
+        me = finished["me"]
+        telegram_id = str(me.get("id"))
+        secret = {
+            "apiId": finished["apiId"],
+            "apiHash": finished["apiHash"],
+            "session": finished["session"],
+        }
+        reconnect_id = str(finished.get("reconnectAccountId") or "")
+        if reconnect_id:
+            account = self.account_store.get(reconnect_id) or {}
+            if str(account.get("telegramUserId")) != telegram_id:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    "You signed in to a different Telegram account.",
+                    "telegram_account_mismatch",
+                )
+            self._write_telegram_secret(str(account.get("credentialFile") or ""), secret)
+            self.account_store.mark_session_connected(reconnect_id)
+            self.telegram_users.start(reconnect_id)
+            return {**self._accounts_payload(owner_id, reconnect_id), "state": "done"}
+        for account in self.account_store.list_accounts():
+            if account.get("channel") == "telegram_user" and str(
+                account.get("telegramUserId")
+            ) == telegram_id:
+                raise WebError(
+                    HTTPStatus.CONFLICT,
+                    "This Telegram account is already connected.",
+                    "telegram_account_exists",
+                )
+        username = str(me.get("username") or "")
+        phone = str(me.get("phone") or "")
+        name = " ".join(p for p in (me.get("first_name"), me.get("last_name")) if p)
+        label = str(finished.get("label") or "") or name or username or "Telegram"
+        record = {
+            "id": f"tgu-{_safe_slug(username or phone[-4:] or label, 'telegram')}",
+            "label": label,
+            "channel": "telegram_user",
+            "mid": f"tgu{telegram_id}",
+            "userid": f"@{username}" if username else (f"+…{phone[-4:]}" if phone else ""),
+            "username": username,
+            "telegramUserId": telegram_id,
+            "sessionState": "connected",
+            "createdAt": _now_iso(),
+            "updatedAt": _now_iso(),
+        }
+        account = self._create_telegram_account(record, secret, owner_id)
+        self.telegram_users.start(account["id"])
+        return {**self._accounts_payload(owner_id, account["id"]), "state": "done"}
 
     def update_telegram_token(
         self, body: dict[str, Any], user: dict[str, Any] | None
@@ -21711,9 +21901,11 @@ class WebState:
         account_id = str(account.get("id") or "")
         session_state = self.account_store.session_state(account_id)
         authenticated = session_state == "connected"
-        if authenticated and not self.telegram.running(account_id):
-            self.telegram.start(account_id)
-        username = str(account.get("botUsername") or "")
+        personal = _account_channel(account) == "telegram_user"
+        runtime = self.telegram_users if personal else self.telegram
+        if authenticated and not runtime.running(account_id) and not personal:
+            runtime.start(account_id)
+        username = str(account.get("botUsername") or account.get("username") or "")
         return {
             "version": __version__,
             "authenticated": authenticated,
@@ -21726,7 +21918,11 @@ class WebState:
                 "mid": str(account.get("mid") or ""),
                 "displayName": str(account.get("label") or username),
                 "userid": str(account.get("userid") or ""),
-                "statusMessage": f"t.me/{username}" if username else "",
+                "statusMessage": (
+                    str(account.get("userid") or "")
+                    if personal
+                    else (f"t.me/{username}" if username else "")
+                ),
                 "picturePath": "",
             },
             "profileError": None,
@@ -21882,6 +22078,23 @@ class WebState:
         user: dict[str, Any] | None,
     ) -> dict[str, Any]:
         target = self._telegram_target(account_id, to)
+        if _account_channel(self.account_store.get(account_id)) == "telegram_user":
+            with self.api_lock_for(account_id):
+                sent = self._telegram_user_call(
+                    account_id, lambda adapter: adapter.send_file(target, raw, name, is_image)
+                )
+                self.note_outgoing(account_id, to, str((user or {}).get("id") or ""))
+            self._telegram_record_outgoing(
+                account_id,
+                to,
+                sent,
+                by=str((user or {}).get("id") or ""),
+                text="",
+                content_type=1 if is_image else 14,
+                meta={"mtproto": True, "fileName": name, "fileSize": len(raw)},
+            )
+            self.record_operator_send(account_id, user, to, "media")
+            return {"ok": True, "messageId": str(sent.get("message_id") or "")}
         client = self.telegram.client(account_id)
         with self.api_lock_for(account_id):
             try:
@@ -21919,6 +22132,12 @@ class WebState:
         if not row:
             raise WebError(HTTPStatus.NOT_FOUND, "Media not available.")
         meta = json.loads(row.get("meta") or "{}")
+        if meta.get("mtproto"):
+            target = telegram_user_id(chat_mid)
+            data, filename = self._telegram_user_call(
+                account_id, lambda adapter: adapter.download(target, int(message_id))
+            )
+            return data, str(meta.get("fileName") or filename), _coerce_int(row.get("content_type"))
         file_id = str(meta.get("fileId") or meta.get("thumbId") or "")
         if not file_id:
             raise WebError(HTTPStatus.NOT_FOUND, "Media not available.")
@@ -21935,6 +22154,10 @@ class WebState:
 
     def tg_avatar(self, account_id: str) -> bytes:
         account = self.account_store.get(account_id) or {}
+        if _account_channel(account) != "telegram_bot":
+            raise WebError(
+                HTTPStatus.NOT_FOUND, "No profile picture.", "profile_picture_not_found"
+            )
         client = self.telegram.client(account_id)
         try:
             file_id = client.user_photo_file_id(str(account.get("botId") or ""))
@@ -27182,6 +27405,16 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/telegram/accounts/token":
             self._require_permission("manage_accounts")
             return self.state.update_telegram_token(self._read_json(), self.current_user)
+        if method == "GET" and path == "/api/telegram/user/available":
+            return self.state.tg_user_available()
+        if method == "POST" and path == "/api/telegram/user/start":
+            return self.state.tg_user_login_start(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/telegram/user/code":
+            return self.state.tg_user_login_code(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/telegram/user/password":
+            return self.state.tg_user_login_password(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/telegram/user/cancel":
+            return self.state.tg_user_login_cancel(self.current_user)
         if method == "POST" and path == "/api/call":
             self._require_permission("tools")
             body = self._read_json()

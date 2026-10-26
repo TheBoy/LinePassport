@@ -71,4 +71,9 @@ RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("POST", "/api/telegram/notify/settings"): (6, 60.0),
     ("POST", "/api/telegram/notify/link"): (10, 60.0),
     ("POST", "/api/telegram/notify/test"): (6, 60.0),
+    ("POST", "/api/telegram/accounts/create"): (6, 60.0),
+    ("POST", "/api/telegram/accounts/token"): (6, 60.0),
+    ("POST", "/api/telegram/user/start"): (5, 300.0),
+    ("POST", "/api/telegram/user/code"): (10, 300.0),
+    ("POST", "/api/telegram/user/password"): (10, 300.0),
 }
