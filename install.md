@@ -266,12 +266,35 @@ docker rm -f linepassport
 
 สำหรับ Coolify ให้เปิด Auto Deploy หรือกด Redeploy หลัง repository มี commit ใหม่
 
+## ลูกค้า (CRM) และ Telegram
+
+- ข้อมูลลูกค้า (การ์ดลูกค้า แท็ก โน้ต งานติดตาม กลุ่มลูกค้า) เก็บใน
+  `crm.sqlite3` ภายใน state directory หรือในฐาน PostgreSQL เดียวกันเมื่อตั้ง
+  `OKLINE_DATABASE_URL` (ตาราง `crm_*`) — ไม่ต้องตั้งค่าเพิ่ม
+- **บอทแจ้งเตือนพนักงาน:** ตั้งค่า → Telegram → วาง token จาก @BotFather แล้วให้ทุกคน
+  กด "เชื่อม Telegram ของฉัน"
+- **Telegram Bot เป็นช่องทางแชท:** เพิ่มจากเมนูบัญชี → "+ เพิ่ม Telegram Bot"
+  (ใช้บอทคนละตัวกับบอทแจ้งเตือน) ระบบใช้ long polling จึงต้องออกเน็ตไปที่
+  `api.telegram.org` ได้ แต่ไม่ต้องเปิดพอร์ตหรือมี URL สาธารณะ
+- **Telegram บัญชีส่วนตัว:** ติดตั้งส่วนเสริมก่อน
+
+  ```bash
+  pip install -e ".[telegram]"
+  ```
+
+  แล้วเพิ่มจากเมนูบัญชี → "+ เพิ่ม Telegram ส่วนตัว" (ต้องมี api_id / api_hash จาก
+  my.telegram.org) — Docker image ติดตั้งส่วนเสริมนี้ให้แล้ว
+- ถ้าเครื่องออกเน็ตตรงไป Telegram ไม่ได้ ตั้ง `LINEPASSPORT_TELEGRAM_PROXY`
+  เช่น `socks5://user:pass@host:1080`
+- token ของบอทและ session ของบัญชีส่วนตัวถูกเข้ารหัสด้วย `LINEPASSPORT_SECRET_KEY`
+  เหมือน session ของ LINE
+
 ## สำรองข้อมูล
 
 สิ่งที่ควรสำรอง:
 
 - PostgreSQL database
-- State directory หรือ volume `/data`
+- State directory หรือ volume `/data` (รวม `crm.sqlite3` เมื่อไม่ได้ใช้ PostgreSQL)
 - Reverse proxy และ environment variables
 
 ตัวอย่างสำรอง PostgreSQL:

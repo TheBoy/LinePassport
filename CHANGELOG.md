@@ -7,6 +7,43 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Customers (CRM).** A new "Customers" section keeps one card per person
+  across every account of a shop: contact details, tags, team notes, each
+  chat with its status (new / in progress / waiting on customer / closed) and
+  the staff member looking after it, follow-up tasks with reminders, and a
+  timeline of messages and changes. The same person writing to two accounts
+  is one card; duplicates can be merged. Cards are created from incoming
+  chats automatically. Data lives in `crm.sqlite3` in the state directory, or
+  in the same PostgreSQL database when `OKLINE_DATABASE_URL` is set.
+
+- **Customer panel in Chat.** Beside the conversation: set the chat status,
+  take the chat or hand it to someone, add tags, notes and follow-ups. The
+  chat list filters by mine / nobody yet / waiting on customer / closed and
+  shows who handles each chat. The first staff member to reply takes a new
+  chat (can be turned off), quiet chats close after a set number of days, a
+  customer writing to a closed chat reopens it, and alerts for an assigned
+  chat go only to its handler.
+
+- **Segments and messages to a segment.** Save a filter (tags, status,
+  handler, channel, last contact) as a segment, export it as CSV, and send it
+  one message with `{ชื่อลูกค้า}` and the scheduler placeholders. Sending is
+  one person at a time, 30-90 seconds apart and within the account's hourly
+  and daily limits shared with scheduled sends (bots go faster); runs can be
+  paused, resumed and cancelled.
+
+- **Telegram alerts for staff.** A shop connects its own Telegram bot
+  (Settings > Telegram) and each team member links their Telegram. Alerts for
+  waiting customers, assigned chats and due follow-ups follow the browser
+  push rules; replying to an alert answers the customer in that person's
+  name, and buttons take or close the chat.
+
+- **Telegram as a chat channel.** Add a Telegram bot, or a personal Telegram
+  account (`pip install "okline[telegram]"`, sign in with api_id/api_hash,
+  phone, code and two-step password), next to LINE accounts. Their chats use
+  the same inbox, customer cards, KPI, alerts and AI auto-reply. Tokens and
+  sessions are stored encrypted; LINE-only features say so instead of
+  failing.
+
 - **LINE sessions stay connected.** Access tokens last about 7 days; a
   background keeper now renews them when fewer than two days remain, and
   retries hourly (with the one-year refresh token) for accounts that dropped
