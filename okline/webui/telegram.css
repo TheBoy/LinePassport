@@ -4,3 +4,8 @@
     #tgLinkBox { display: grid; gap: 6px; }
     #tgLinkBox.hidden { display: none; }
     #tgLinkUrl { font-weight: 700; }
+    .tg-hidden { display: none !important; }
+    .badge.telegram { background: #E6F4FB; color: #0B6EA8; }
+    .account-popover .badge.telegram { margin-left: auto; font-size: 11px; }
+    .tg-login-alt { justify-content: center; margin-top: 8px; }
+    #addTelegramAccountButton { margin-left: 8px; }

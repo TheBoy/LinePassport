@@ -65,6 +65,8 @@ from .hmac_signer import LtsmBridge
 from .obs import encode_message_talk_meta
 from .telegram import StaffNotifier, TelegramError
 from .telegram import routes as telegram_routes
+from .telegram.bot_api import TelegramApiError, valid_token
+from .telegram.channels import TelegramChannels, telegram_user_id
 from .telegram.notify import preview_label
 from .transport import LineConfig
 from .webpush import (
@@ -18579,13 +18581,7 @@ class AccountStore:
                     continue
                 if allowed_ids is not None and account.get("id") not in allowed_ids:
                     continue
-                token_file = account.get("tokenFile") or ""
-                item = dict(account)
-                item["tokenFileExists"] = bool(token_file and os.path.exists(token_file))
-                item["sessionState"] = self._session_state(account)
-                item.pop("tokenFile", None)
-                item["proxyConfigured"] = bool(item.pop("proxyUrl", None))
-                out.append(item)
+                out.append(self._public_fields(dict(account), account))
             return out
 
     def active_id(self) -> str | None:
@@ -18612,12 +18608,7 @@ class AccountStore:
                 raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
             self.data["activeAccountId"] = account_id
             self.save()
-            token_file = str(account.get("tokenFile") or "")
-            account["sessionState"] = self._session_state(account)
-            account.pop("tokenFile", None)
-            account["tokenFileExists"] = bool(token_file and os.path.exists(token_file))
-            account["proxyConfigured"] = bool(account.pop("proxyUrl", None))
-            return account
+            return self._public_fields(dict(account), account)
 
     @staticmethod
     def _session_state(account: dict[str, Any]) -> str:
@@ -18625,7 +18616,52 @@ class AccountStore:
         if explicit == "reauth_required":
             return explicit
         token_file = str(account.get("tokenFile") or "")
+        if _account_channel(account) != "line":
+            token_file = str(account.get("credentialFile") or "")
         return "connected" if token_file and os.path.exists(token_file) else "missing"
+
+    @staticmethod
+    def _public_fields(item: dict[str, Any], account: dict[str, Any]) -> dict[str, Any]:
+        """Add derived fields and drop anything secret from an account copy."""
+        channel = _account_channel(account)
+        secret_file = str(
+            account.get("tokenFile") if channel == "line" else account.get("credentialFile")
+        ) if (account.get("tokenFile") or account.get("credentialFile")) else ""
+        item["channel"] = channel
+        item["capabilities"] = list(ACCOUNT_CAPABILITIES.get(channel, []))
+        item["tokenFileExists"] = bool(secret_file and os.path.exists(secret_file))
+        item["sessionState"] = AccountStore._session_state(account)
+        item["proxyConfigured"] = bool(item.pop("proxyUrl", None))
+        item.pop("tokenFile", None)
+        item.pop("credentialFile", None)
+        return item
+
+    def add_channel_account(self, record: dict[str, Any], owner_id: str) -> dict[str, Any]:
+        """Append a non-LINE account (caller persists accounts + auth together)."""
+        with self.lock:
+            owned = sum(
+                1
+                for account in self.data.get("accounts", [])
+                if isinstance(account, dict) and str(account.get("ownerId") or "") == owner_id
+            )
+            if owned >= MAX_ACCOUNTS_PER_USER:
+                raise WebError(
+                    HTTPStatus.CONFLICT,
+                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} accounts.",
+                    "account_quota",
+                )
+            existing = {
+                a.get("id") for a in self.data.get("accounts", []) if isinstance(a, dict)
+            }
+            base = str(record["id"])
+            account_id = base
+            suffix = 2
+            while account_id in existing:
+                account_id = f"{base}-{suffix}"
+                suffix += 1
+            account = {**record, "id": account_id, "ownerId": owner_id}
+            self.data.setdefault("accounts", []).append(account)
+            return dict(account)
 
     def session_state(self, account_id: str) -> str:
         account = self.get(account_id)
@@ -19035,6 +19071,11 @@ class WebState:
         self.crm_engine = CrmEngine(self.crm, self)
         # Staff alerts on Telegram (one bot per shop, linked per person).
         self.staff_notifier = StaffNotifier(self)
+        # Telegram bots added as customer chat accounts.
+        self.telegram = TelegramChannels(self)
+        for account in self.account_store.list_accounts():
+            if account.get("channel") == "telegram_bot" and account.get("sessionState") == "connected":
+                self.telegram.start(str(account["id"]))
         self.scheduler = ScheduleEngine(self)
         self.ai_auto_reply_engine = AiAutoReplyEngine(self)
         self.session_refresh_attempts: dict[str, float] = {}
@@ -19333,6 +19374,7 @@ class WebState:
             self.store.set("schedules", {"schedules": schedules})
 
     def close(self) -> None:
+        self.telegram.close()
         self.staff_notifier.close()
         self.crm_engine.stop()
         self.crm_executor.shutdown(wait=True, cancel_futures=True)
@@ -19587,6 +19629,8 @@ class WebState:
             account_id = str(account.get("id") or "")
             if not account_id or not account.get("tokenFileExists"):
                 continue
+            if account.get("channel") != "line":
+                continue
             expired = account.get("sessionState") == "reauth_required"
             if expired and "code 119" not in str(account.get("sessionError") or ""):
                 continue  # revoked (e.g. signed out on the phone): needs a QR
@@ -19660,6 +19704,9 @@ class WebState:
         else:
             account_id = account_id or self.account_store.active_id()
             cache_key = account_id or "__anonymous__"
+        if account_id and _account_channel(self.account_store.get(account_id)) != "line":
+            # Telegram accounts have no LINE session; never fall into the QR flow.
+            raise _line_only()
         if account_id and require_auth and self.account_store.requires_reauth(account_id):
             raise LineLoginRequired(
                 "LINE session expired or was revoked; connect the account again"
@@ -19709,6 +19756,8 @@ class WebState:
                 raise WebError(
                     HTTPStatus.FORBIDDEN, "Permission denied for this LINE account."
                 )
+            if _account_channel(account) != "line":
+                return self._telegram_status(account, allowed_ids)
             api = self.get_api(account_id, require_auth=False)
             session_state = self.account_store.session_state(account_id)
             session_error = str(account.get("sessionError") or "")
@@ -19784,6 +19833,8 @@ class WebState:
                     HTTPStatus.FORBIDDEN,
                     "Permission denied for this LINE account.",
                 )
+            if _account_channel(account) != "line":
+                raise _line_only()
             if validated_proxy is None:
                 validated_proxy = self._proxy_url_for_account(account)
         owner_id = self._login_owner_key(user)
@@ -20071,6 +20122,8 @@ class WebState:
         self, account_id: str, user: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         account_id = _required_account_id(account_id)
+        if _account_channel(self.account_store.get(account_id)) != "line":
+            return self.delete_account(account_id, user)
         server_error = None
         with self.api_lock_for(account_id):
             api = self.get_api(account_id, require_auth=False)
@@ -20180,6 +20233,18 @@ class WebState:
             self.crm.purge_account(account_id)
         except Exception:
             traceback.print_exc()
+        if _account_channel(removed) != "line":
+            self.telegram.stop(account_id)
+            credential_file = str(removed.get("credentialFile") or "")
+            if credential_file and os.path.exists(credential_file):
+                try:
+                    os.remove(credential_file)
+                except OSError:
+                    traceback.print_exc()
+            self.store.set(f"telegram_runtime:{account_id}", {"offset": 0})
+        with self.room_state_lock:
+            self.room_states_cache.pop(account_id, None)
+        removed.pop("credentialFile", None)
         return removed
 
     def update_account(
@@ -20200,6 +20265,8 @@ class WebState:
             )
         validated_proxy = _validate_proxy_url(proxy_url) if proxy_url else None
         before = self.account_store.get(account_id) or {}
+        if _account_channel(before) != "line" and (proxy_enabled or validated_proxy):
+            raise _line_only()
         account = self.account_store.update_settings(
             account_id,
             label,
@@ -20495,6 +20562,8 @@ class WebState:
                 continue
             account_id = str(account.get("id") or "")
             token_file = str(account.get("tokenFile") or "")
+            if _account_channel(account) != "line":
+                continue
             if not account_id or not token_file or not os.path.exists(token_file):
                 continue
             if self.account_store.requires_reauth(account_id):
@@ -21192,7 +21261,10 @@ class WebState:
         return profiles
 
     def crm_engine_tick(self) -> None:
-        return None
+        # Telegram rooms never pass through a LINE inbox fetch; close quiet ones here.
+        for account in self.account_store.list_accounts():
+            if account.get("channel") != "line":
+                self.sweep_rooms(str(account.get("id") or ""))
 
     def notify_user(self, user_id: str, payload: dict[str, Any]) -> None:
         """Send one person a notification on every device they turned it on for."""
@@ -21271,6 +21343,22 @@ class WebState:
 
     def channel_send_text(self, account_id: str, chat_id: str, text: str, *, by: str) -> str:
         """Send a text to a chat from any connected account; returns the message id."""
+        channel = _account_channel(self.account_store.get(account_id))
+        if channel == "telegram_bot":
+            target = self._telegram_target(account_id, chat_id)
+            client = self.telegram.client(account_id)
+            with self.api_lock_for(account_id):
+                try:
+                    sent = client.send_message(target, text)
+                except TelegramApiError as exc:
+                    raise self._telegram_send_error(account_id, exc) from None
+                self.note_outgoing(account_id, chat_id, by)
+            self._telegram_record_outgoing(
+                account_id, chat_id, sent, by=by, text=text, content_type=0, meta={}
+            )
+            return str(sent.get("message_id") or "")
+        if channel != "line":
+            raise _line_only()
         api = self.get_api(account_id)
         with self.api_lock_for(account_id):
             result = api.send_text(chat_id, text)
@@ -21278,6 +21366,588 @@ class WebState:
         self.invalidate_inbox_snapshot(account_id)
         self.request_inbox_refresh(account_id)
         return str(result.get("id") or "") if isinstance(result, dict) else ""
+
+    # -- Telegram bot accounts ------------------------------------------------
+    def _telegram_target(self, account_id: str, chat_id: str) -> int:
+        try:
+            target = telegram_user_id(chat_id)
+        except ValueError:
+            raise WebError(
+                HTTPStatus.BAD_REQUEST, "Pick a Telegram chat first.", "telegram_chat_invalid"
+            ) from None
+        if not self.crm.conversation_for_chat(account_id, chat_id):
+            # A bot can only write to people who started it.
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "This person has not started a chat with the bot yet.",
+                "telegram_not_started",
+            )
+        return target
+
+    def _telegram_send_error(self, account_id: str, exc: TelegramApiError) -> WebError:
+        if exc.blocked:
+            return WebError(
+                HTTPStatus.CONFLICT,
+                "This customer blocked the bot or never pressed Start.",
+                "telegram_blocked",
+            )
+        if exc.unauthorized:
+            self.tg_auth_failed(account_id)
+            return WebError(
+                HTTPStatus.UNAUTHORIZED,
+                "Telegram rejected the bot token. Paste a new token for this account.",
+                "telegram_reauth",
+            )
+        if exc.network:
+            return WebError(HTTPStatus.BAD_GATEWAY, exc.message, "upstream_error")
+        return WebError(HTTPStatus.BAD_REQUEST, exc.message, "telegram_send_failed")
+
+    def _telegram_record_outgoing(
+        self,
+        account_id: str,
+        chat_id: str,
+        sent: dict[str, Any],
+        *,
+        by: str,
+        text: str,
+        content_type: int,
+        meta: dict[str, Any],
+    ) -> None:
+        kind, sender_id = _crm_sender(by)
+        result: dict[str, Any] = {}
+        try:
+            result = self.crm.ingest(
+                owner_id=self._account_owner_id(account_id),
+                account_id=account_id,
+                channel=_account_channel(self.account_store.get(account_id)),
+                chat_id=chat_id,
+                contact={"externalId": chat_id[3:]},
+                messages=[
+                    {
+                        "externalId": str(sent.get("message_id") or uuid.uuid4().hex),
+                        "direction": "out",
+                        "senderKind": kind,
+                        "senderId": sender_id,
+                        "text": text,
+                        "contentType": content_type,
+                        "meta": meta,
+                        # Our own clock, in ms: Telegram dates are whole seconds.
+                        "at": int(time.time() * 1000),
+                    }
+                ],
+                track_unread=True,
+            )
+        except Exception:
+            traceback.print_exc()
+        self._bump_inbox_version(account_id)
+        if result and result.get("status") != result.get("previousStatus"):
+            self._bump_crm_version(account_id)
+
+    def tg_token(self, account_id: str) -> str:
+        account = self.account_store.get(account_id) or {}
+        path = str(account.get("credentialFile") or "")
+        if not path or not os.path.exists(path):
+            return ""
+        try:
+            with open(path, encoding="utf-8") as handle:
+                stored = json.load(handle)
+            secret = json.loads(self._decrypt_secret(str(stored.get("secret") or "")) or "{}")
+        except (OSError, ValueError):
+            traceback.print_exc()
+            return ""
+        return str(secret.get("token") or "")
+
+    def _write_telegram_credentials(self, path: str, token: str) -> None:
+        _write_json_file(path, {"secret": self._encrypt_secret(json.dumps({"token": token}))})
+
+    def tg_receive(self, account_id: str, message: dict[str, Any]) -> None:
+        account = self.account_store.get(account_id)
+        if not account:
+            return
+        owner_id = self._account_owner_id(account_id)
+        chat_id = str(message.get("chatId") or "")
+        outgoing = bool(message.get("outgoing"))
+        if outgoing:
+            kind, sender_id = _crm_sender(
+                self._outgoing_attribution_for(account_id, chat_id) or "telegram_app"
+            )
+        else:
+            kind, sender_id = "customer", str(message.get("userId") or "")
+        result = self.crm.ingest(
+            owner_id=owner_id,
+            account_id=account_id,
+            channel=_account_channel(account),
+            chat_id=chat_id,
+            contact={
+                "externalId": str(message.get("userId") or ""),
+                "name": message.get("name"),
+                "username": message.get("username"),
+            },
+            messages=[
+                {
+                    "externalId": message.get("externalId"),
+                    "direction": "out" if outgoing else "in",
+                    "senderKind": kind,
+                    "senderId": sender_id,
+                    "text": message.get("text"),
+                    "contentType": message.get("contentType"),
+                    "meta": message.get("meta") or {},
+                    "at": message.get("at"),
+                }
+            ],
+            track_unread=True,
+        )
+        if not outgoing:
+            self.note_incoming(account_id, chat_id, _coerce_int(message.get("at")))
+        self._bump_inbox_version(account_id)
+        if result and (
+            result.get("created") or result.get("status") != result.get("previousStatus")
+        ):
+            self._bump_crm_version(account_id)
+        if not outgoing:
+            self._telegram_auto_reply(account_id, owner_id, chat_id, message)
+
+    def tg_auth_failed(self, account_id: str) -> None:
+        self.account_store.mark_session_reauth_required(
+            account_id, "Telegram rejected the bot token. Paste a new token."
+        )
+        self.telegram.stop(account_id)
+
+    def tg_offset(self, account_id: str) -> int:
+        raw = self.store.get(f"telegram_runtime:{account_id}", {})
+        return _coerce_int(raw.get("offset")) if isinstance(raw, dict) else 0
+
+    def tg_save_offset(self, account_id: str, offset: int) -> None:
+        self.store.set(f"telegram_runtime:{account_id}", {"offset": int(offset)})
+
+    def _telegram_auto_reply(
+        self, account_id: str, owner_id: str, chat_id: str, message: dict[str, Any]
+    ) -> None:
+        question = str(message.get("text") or "").strip()
+        if _coerce_int(message.get("contentType")) != 0 or not question:
+            return
+        record = self._ai_auto_reply_record(account_id)
+        enabled_at_ms = _coerce_int(record.get("enabledAtMs"))
+        if not record.get("enabled") or _coerce_int(message.get("at")) < enabled_at_ms:
+            return
+        if not self._ai_auto_reply_chat_enabled(record, "contact", chat_id):
+            return
+        inflight_key = (account_id, chat_id)
+        with self.ai_auto_reply_lock:
+            if inflight_key in self.ai_auto_reply_inflight:
+                return
+        if not self._consume_ai_auto_reply_rate(account_id, chat_id):
+            self.append_bot_log(
+                "ai.auto_reply.rate_limit",
+                account_id=account_id,
+                ok=False,
+                detail=f"contact:{chat_id}",
+                data={"chatMid": chat_id, "chatType": "contact"},
+            )
+            return
+        with self.ai_auto_reply_lock:
+            self.ai_auto_reply_inflight.add(inflight_key)
+        name = str(message.get("name") or "")
+        try:
+            self.ai_auto_reply_executor.submit(
+                self._process_ai_auto_reply,
+                {
+                    "accountId": account_id,
+                    "chatMid": chat_id,
+                    "chatType": "contact",
+                    "question": question[:MAX_ASSISTANT_QUESTION_LENGTH],
+                    "senderMid": chat_id,
+                    "senderName": name,
+                    "chatName": name,
+                    "messageId": message.get("externalId"),
+                    "cursor": None,
+                    "enabledAtMs": enabled_at_ms,
+                    "ownerId": owner_id,
+                },
+            )
+        except RuntimeError:
+            with self.ai_auto_reply_lock:
+                self.ai_auto_reply_inflight.discard(inflight_key)
+
+    def add_telegram_bot(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+        if not user or not self.web_auth.has_permission(user, "manage_accounts"):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied.", "forbidden")
+        if user.get("teamOwnerId"):
+            raise WebError(HTTPStatus.FORBIDDEN, "Only the shop owner can add accounts.", "forbidden")
+        token = str(body.get("token") or "").strip()
+        me = self._check_telegram_token(token)
+        bot_id = str(me.get("id"))
+        for account in self.account_store.list_accounts():
+            if account.get("channel") == "telegram_bot" and str(account.get("botId")) == bot_id:
+                raise WebError(
+                    HTTPStatus.CONFLICT, "This bot is already connected.", "telegram_bot_exists"
+                )
+        notify_tenants = self.staff_notifier._data()["tenants"].values()
+        if any(str(t.get("botId")) == bot_id for t in notify_tenants if isinstance(t, dict)):
+            raise WebError(
+                HTTPStatus.CONFLICT,
+                "This bot already sends staff alerts. Create a separate bot for customers.",
+                "telegram_bot_in_use",
+            )
+        username = str(me.get("username") or "")
+        label = str(body.get("label") or "").strip()[:MAX_NAME_LENGTH] or str(
+            me.get("first_name") or username
+        )
+        owner_id = str(user.get("id") or "")
+        record = {
+            "id": f"tg-{_safe_slug(username or label, 'bot')}",
+            "label": label,
+            "channel": "telegram_bot",
+            "mid": f"tgu{bot_id}",
+            "userid": f"@{username}" if username else "",
+            "botId": bot_id,
+            "botUsername": username,
+            "sessionState": "connected",
+            "createdAt": _now_iso(),
+            "updatedAt": _now_iso(),
+        }
+        with self.lock, self.web_auth.lock, self.account_store.lock:
+            previous_accounts = copy.deepcopy(self.account_store.data)
+            previous_auth = copy.deepcopy(self.web_auth.data)
+            credential_file = ""
+            try:
+                account = self.account_store.add_channel_account(record, owner_id)
+                os.makedirs(self.config.accounts_dir, exist_ok=True)
+                credential_file = str(
+                    Path(self.config.accounts_dir) / f"{account['id']}.telegram.json"
+                )
+                self._write_telegram_credentials(credential_file, token)
+                for stored in self.account_store.data["accounts"]:
+                    if isinstance(stored, dict) and stored.get("id") == account["id"]:
+                        stored["credentialFile"] = credential_file
+                auth_data = copy.deepcopy(self.web_auth.data)
+                owner = next(
+                    (u for u in auth_data.get("users", []) if str(u.get("id") or "") == owner_id),
+                    None,
+                )
+                if owner is None:
+                    raise WebError(HTTPStatus.NOT_FOUND, "Account owner not found.")
+                owner["accountIds"] = sorted(set(owner.get("accountIds") or []) | {account["id"]})
+                owner["updatedAt"] = _now_iso()
+                # Accounts and their owner are saved together, so the account is never orphaned.
+                self.store.set_many({"accounts": self.account_store.data, "auth": auth_data})
+                self.web_auth.data = auth_data
+            except Exception:
+                self.account_store.data = previous_accounts
+                self.web_auth.data = previous_auth
+                if credential_file and os.path.exists(credential_file):
+                    os.remove(credential_file)
+                raise
+        self.store.set(f"telegram_runtime:{account['id']}", {"offset": 0})
+        self.telegram.start(account["id"])
+        # The request's user copy predates the new account; list from the saved owner.
+        fresh_owner = self.web_auth._find_user(owner_id)
+        return {
+            "ok": True,
+            "account": next(
+                a for a in self.account_store.list_accounts() if a["id"] == account["id"]
+            ),
+            "accounts": {
+                "accounts": self.account_store.list_accounts(
+                    self.web_auth.allowed_account_ids(fresh_owner)
+                )
+            },
+        }
+
+    def update_telegram_token(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        account_id = _required_account_id(str(body.get("accountId") or ""))
+        account = self.account_store.get(account_id)
+        if not account or _account_channel(account) != "telegram_bot":
+            raise WebError(HTTPStatus.NOT_FOUND, "Telegram account not found.")
+        if not self.web_auth.owns_account(user, account_id) or not self.web_auth.has_permission(
+            user, "manage_accounts"
+        ):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied.", "forbidden")
+        token = str(body.get("token") or "").strip()
+        me = self._check_telegram_token(token)
+        if str(me.get("id")) != str(account.get("botId")):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "This token belongs to a different bot.",
+                "telegram_bot_mismatch",
+            )
+        self._write_telegram_credentials(str(account.get("credentialFile") or ""), token)
+        self.account_store.mark_session_connected(account_id)
+        self.telegram.stop(account_id)
+        self.telegram.start(account_id)
+        return {"ok": True, "status": self.status(account_id, user)}
+
+    def _check_telegram_token(self, token: str) -> dict[str, Any]:
+        if not valid_token(token):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "That does not look like a bot token from @BotFather.",
+                "telegram_token_invalid",
+            )
+        client = self.telegram.client_factory(token, proxy=self.notify_proxy())
+        try:
+            me = client.get_me()
+            try:
+                client.delete_webhook()
+            except TelegramApiError:
+                pass
+        except TelegramApiError as exc:
+            if exc.unauthorized:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST, exc.message, "telegram_token_rejected"
+                ) from None
+            raise WebError(HTTPStatus.BAD_GATEWAY, exc.message, "telegram_unreachable") from None
+        finally:
+            client.close()
+        if not me.get("is_bot"):
+            raise WebError(HTTPStatus.BAD_REQUEST, "That token is not a bot.", "telegram_token_invalid")
+        return me
+
+    def _telegram_status(
+        self, account: dict[str, Any], allowed_ids: set[str] | None
+    ) -> dict[str, Any]:
+        account_id = str(account.get("id") or "")
+        session_state = self.account_store.session_state(account_id)
+        authenticated = session_state == "connected"
+        if authenticated and not self.telegram.running(account_id):
+            self.telegram.start(account_id)
+        username = str(account.get("botUsername") or "")
+        return {
+            "version": __version__,
+            "authenticated": authenticated,
+            "activeAccountId": account_id,
+            "accounts": self.account_store.list_accounts(allowed_ids),
+            "storage": self.store.label(),
+            "nodeAvailable": LtsmBridge.is_available(),
+            "e2eeReady": False,
+            "profile": {
+                "mid": str(account.get("mid") or ""),
+                "displayName": str(account.get("label") or username),
+                "userid": str(account.get("userid") or ""),
+                "statusMessage": f"t.me/{username}" if username else "",
+                "picturePath": "",
+            },
+            "profileError": None,
+            "sessionState": session_state,
+            "sessionError": str(account.get("sessionError") or ""),
+            "loginRequired": session_state == "reauth_required",
+            "channel": _account_channel(account),
+            "capabilities": list(ACCOUNT_CAPABILITIES.get(_account_channel(account), [])),
+        }
+
+    def _telegram_message(
+        self, row: dict[str, Any], own_mid: str, chat_id: str, names: dict[str, str]
+    ) -> dict[str, Any]:
+        meta = row.get("meta")
+        meta = json.loads(meta) if isinstance(meta, str) and meta else (meta or {})
+        outgoing = row.get("direction") != "in"
+        sender = own_mid if outgoing else chat_id
+        content_type = _coerce_int(row.get("content_type"))
+        duration = meta.get("duration")
+        return {
+            "id": str(row.get("external_id") or ""),
+            "from": sender,
+            "fromName": names.get(sender) or sender,
+            "to": chat_id if outgoing else own_mid,
+            "text": row.get("text") or "",
+            "contentType": content_type,
+            "stickerId": None,
+            "fileName": meta.get("fileName") or None,
+            "fileSize": str(meta.get("fileSize") or "") or None,
+            "durationMs": int(duration) * 1000 if isinstance(duration, (int, float)) else None,
+            "location": _message_location({"location": meta.get("location")})
+            if meta.get("location")
+            else None,
+            "contactMid": None,
+            "contactName": meta.get("contactName") or None,
+            "altText": None,
+            "linkUrl": None,
+            "eventKey": None,
+            "eventNames": [],
+            "createdTime": _coerce_int(row.get("at")),
+            "encrypted": False,
+            "mediaReady": True,
+            "hasPreview": False,
+        }
+
+    def _telegram_chat_rows(self, account_id: str) -> list[dict[str, Any]]:
+        account = self.account_store.get(account_id) or {}
+        own_mid = str(account.get("mid") or "")
+        rows = []
+        for rank, row in enumerate(self.crm.account_chats(account_id)):
+            username = str(row.get("identity_username") or "")
+            name = str(row.get("display_name") or row.get("identity_name") or "") or (
+                f"@{username}" if username else row["chat_id"]
+            )
+            preview = str(row.get("last_preview") or "")
+            content_type = TELEGRAM_PREVIEW_TYPES.get(preview, 0)
+            outgoing = _coerce_int(row.get("last_outbound_at")) >= _coerce_int(
+                row.get("last_inbound_at")
+            ) and _coerce_int(row.get("last_outbound_at")) > 0
+            last_at = _coerce_int(row.get("last_message_at"))
+            rows.append(
+                {
+                    "mid": row["chat_id"],
+                    "name": name,
+                    "statusMessage": f"@{username}" if username else "",
+                    "picturePath": None,
+                    "rank": rank,
+                    "unreadCount": _coerce_int(row.get("unread")),
+                    "lastMessageAt": last_at,
+                    "lastMessage": {
+                        "id": None,
+                        "from": own_mid if outgoing else row["chat_id"],
+                        "text": "" if content_type else preview,
+                        "contentType": content_type,
+                        "createdTime": last_at,
+                    }
+                    if last_at
+                    else None,
+                }
+            )
+        return rows
+
+    def tg_conversations(self, account_id: str) -> dict[str, Any]:
+        self.watch_inbox(account_id)
+        items = [
+            {key: row[key] for key in ("mid", "rank", "unreadCount", "lastMessageAt", "lastMessage")}
+            for row in self._telegram_chat_rows(account_id)
+        ]
+        return {"conversations": items, "count": len(items)}
+
+    def tg_contacts(self, account_id: str, query: dict[str, list[str]]) -> dict[str, Any]:
+        search = _query_one(query, "search", "").lower()
+        limit = _query_int(query, "limit", 250, minimum=1, maximum=1000)
+        rows = [
+            row
+            for row in self._telegram_chat_rows(account_id)
+            if not search or search in str(row["name"]).lower()
+        ][:limit]
+        return {"contacts": rows, "count": len(rows)}
+
+    def tg_messages(self, account_id: str, query: dict[str, list[str]]) -> dict[str, Any]:
+        chat_mid = _query_one(query, "chat_mid")
+        if not chat_mid:
+            raise WebError(HTTPStatus.BAD_REQUEST, "chat_mid is required.")
+        count = _query_int(query, "count", 30, minimum=1, maximum=200)
+        account = self.account_store.get(account_id) or {}
+        own_mid = str(account.get("mid") or "")
+        conv = self.crm.conversation_for_chat(account_id, chat_mid) or {}
+        names = {own_mid: str(account.get("label") or ""), chat_mid: str(conv.get("display_name") or "")}
+        rows = self.crm.chat_messages(account_id, chat_mid, limit=count)
+        messages = []
+        for row in rows:
+            message = self._telegram_message(row, own_mid, chat_mid, names)
+            messages.append(message)
+            if message["contentType"] in (1, 2, 3, 14) and message["text"]:
+                # The chat view shows media without text; keep the caption visible.
+                messages.append(
+                    {**message, "id": f"{message['id']}:caption", "contentType": 0,
+                     "fileName": None, "fileSize": None, "durationMs": None}
+                )
+                message["text"] = ""
+        return {"messages": messages, "count": len(messages)}
+
+    def tg_mark_read(self, account_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        chat_mid = str(body.get("chatMid") or "").strip()
+        if not chat_mid:
+            raise WebError(HTTPStatus.BAD_REQUEST, "chatMid is required.")
+        self.crm.mark_read(account_id, chat_mid)
+        return {"ok": True, "chatMid": chat_mid, "lastMessageId": body.get("lastMessageId")}
+
+    def tg_send(
+        self, account_id: str, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        to = str(body.get("to") or "").strip()
+        text = str(body.get("text") or "")
+        if not text:
+            raise WebError(HTTPStatus.BAD_REQUEST, "text is required.")
+        if body.get("encrypt"):
+            raise _line_only()
+        message_id = self.channel_send_text(
+            account_id, to, text, by=str((user or {}).get("id") or "")
+        )
+        self.record_operator_send(account_id, user, to, "text")
+        return {"ok": True, "messageId": message_id}
+
+    def tg_send_media(
+        self,
+        account_id: str,
+        to: str,
+        raw: bytes,
+        name: str,
+        is_image: bool,
+        user: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        target = self._telegram_target(account_id, to)
+        client = self.telegram.client(account_id)
+        with self.api_lock_for(account_id):
+            try:
+                sent = (
+                    client.send_photo(target, raw, filename=name)
+                    if is_image
+                    else client.send_document(target, raw, filename=name)
+                )
+            except TelegramApiError as exc:
+                raise self._telegram_send_error(account_id, exc) from None
+            self.note_outgoing(account_id, to, str((user or {}).get("id") or ""))
+        photos = sent.get("photo") or []
+        document = sent.get("document") or {}
+        file_id = (
+            max(photos, key=lambda p: int(p.get("width") or 0)).get("file_id")
+            if photos
+            else document.get("file_id")
+        )
+        self._telegram_record_outgoing(
+            account_id,
+            to,
+            sent,
+            by=str((user or {}).get("id") or ""),
+            text="",
+            content_type=1 if is_image else 14,
+            meta={"fileId": file_id, "fileName": name, "fileSize": len(raw)},
+        )
+        self.record_operator_send(account_id, user, to, "media")
+        return {"ok": True, "messageId": str(sent.get("message_id") or "")}
+
+    def tg_media(
+        self, account_id: str, chat_mid: str, message_id: str
+    ) -> tuple[bytes, str, int]:
+        row = self.crm.find_message(account_id, chat_mid, message_id)
+        if not row:
+            raise WebError(HTTPStatus.NOT_FOUND, "Media not available.")
+        meta = json.loads(row.get("meta") or "{}")
+        file_id = str(meta.get("fileId") or meta.get("thumbId") or "")
+        if not file_id:
+            raise WebError(HTTPStatus.NOT_FOUND, "Media not available.")
+        client = self.telegram.client(account_id)
+        try:
+            info = client.get_file(file_id)
+            data = client.download(str(info.get("file_path") or ""))
+        except TelegramApiError as exc:
+            raise WebError(HTTPStatus.NOT_FOUND, "Media not available.") from exc
+        filename = str(meta.get("fileName") or "") or os.path.basename(
+            str(info.get("file_path") or "file")
+        )
+        return data, filename, _coerce_int(row.get("content_type"))
+
+    def tg_avatar(self, account_id: str) -> bytes:
+        account = self.account_store.get(account_id) or {}
+        client = self.telegram.client(account_id)
+        try:
+            file_id = client.user_photo_file_id(str(account.get("botId") or ""))
+            if not file_id:
+                raise TelegramApiError("no photo", error_code=404)
+            info = client.get_file(file_id)
+            return client.download(str(info.get("file_path") or ""))
+        except TelegramApiError as exc:
+            raise WebError(
+                HTTPStatus.NOT_FOUND,
+                "The bot has no profile picture.",
+                "profile_picture_not_found",
+            ) from exc
 
     def _bump_inbox_version(self, account_id: str) -> None:
         with self.inbox_events:
@@ -21509,35 +22179,85 @@ class WebState:
                 if not is_new and not was_waiting and room.get("status") == "waiting":
                     room["pushEscalated"] = False
                     newly_waiting.append(chat_mid)
-            for chat_mid, room in rooms.items():
-                last = max(
-                    _coerce_int(room.get("lastIncomingAt")),
-                    _coerce_int(room.get("lastOutgoingAt")),
-                )
-                if (
-                    room.get("status") != "closed"
-                    and last
-                    and now_ms - last > ROOM_CLOSE_AFTER_SECONDS * 1000
-                ):
-                    if room.get("status") == "waiting":
-                        asked_ms = _coerce_int(room.get("firstUnansweredAt"))
-                        self._record_kpi_response(
-                            account_id,
-                            {
-                                "chatMid": chat_mid,
-                                "askedAt": asked_ms,
-                                "answeredAt": None,
-                                "answeredBy": None,
-                                "missed": True,
-                            },
-                        )
-                    room["status"] = "closed"
-                    room["firstUnansweredAt"] = None
-                    changed = True
+            if self._close_stale_rooms(account_id, rooms, now_ms):
+                changed = True
             if changed:
                 self._save_room_states(account_id, rooms)
         if newly_waiting:
             self.queue_push_for_rooms(account_id, newly_waiting)
+
+    def _close_stale_rooms(
+        self, account_id: str, rooms: dict[str, dict[str, Any]], now_ms: int
+    ) -> bool:
+        """Close rooms quiet for a day; a still-waiting one counts as missed."""
+        changed = False
+        for chat_mid, room in rooms.items():
+            last = max(
+                _coerce_int(room.get("lastIncomingAt")),
+                _coerce_int(room.get("lastOutgoingAt")),
+            )
+            if (
+                room.get("status") != "closed"
+                and last
+                and now_ms - last > ROOM_CLOSE_AFTER_SECONDS * 1000
+            ):
+                if room.get("status") == "waiting":
+                    asked_ms = _coerce_int(room.get("firstUnansweredAt"))
+                    self._record_kpi_response(
+                        account_id,
+                        {
+                            "chatMid": chat_mid,
+                            "askedAt": asked_ms,
+                            "answeredAt": None,
+                            "answeredBy": None,
+                            "missed": True,
+                        },
+                    )
+                room["status"] = "closed"
+                room["firstUnansweredAt"] = None
+                changed = True
+        return changed
+
+    def note_incoming(self, account_id: str, chat_mid: str, at_ms: int) -> None:
+        """A customer message seen outside a LINE inbox fetch (Telegram)."""
+        if not _room_tracked(chat_mid):
+            return
+        newly_waiting = False
+        with self.room_state_lock:
+            rooms = self._room_states(account_id)
+            room = rooms.get(chat_mid)
+            if not isinstance(room, dict):
+                room = {
+                    "status": "closed",
+                    "cursorAt": 0,
+                    "lastIncomingAt": 0,
+                    "lastOutgoingAt": 0,
+                    "firstUnansweredAt": None,
+                    "answeredBy": None,
+                    "answeredAt": None,
+                }
+            room["lastIncomingAt"] = max(_coerce_int(room.get("lastIncomingAt")), at_ms)
+            room["cursorAt"] = max(_coerce_int(room.get("cursorAt")), at_ms)
+            if room.get("status") != "waiting":
+                # Unlike the LINE inbox, a first message here is a real new chat.
+                room.update(
+                    status="waiting",
+                    firstUnansweredAt=at_ms,
+                    answeredBy=None,
+                    answeredAt=None,
+                    pushEscalated=False,
+                )
+                newly_waiting = True
+            rooms[chat_mid] = room
+            self._save_room_states(account_id, rooms)
+        if newly_waiting:
+            self.queue_push_for_rooms(account_id, [chat_mid])
+
+    def sweep_rooms(self, account_id: str) -> None:
+        with self.room_state_lock:
+            rooms = self._room_states(account_id)
+            if self._close_stale_rooms(account_id, rooms, int(time.time() * 1000)):
+                self._save_room_states(account_id, rooms)
 
     def room_states(self, account_id: str) -> dict[str, dict[str, Any]]:
         with self.room_state_lock:
@@ -22400,6 +23120,8 @@ class WebState:
         account_id = _required_account_id(str(body.get("accountId") or ""))
         if not self.account_store.get(account_id):
             raise WebError(HTTPStatus.BAD_REQUEST, "A valid account is required.")
+        if _account_channel(self.account_store.get(account_id)) != "line":
+            raise _line_only()
         job = _schedule_from_body(body, account_id=account_id)
         with self.schedule_lock:
             count = sum(1 for item in self.schedules if item.get("accountId") == account_id)
@@ -22427,6 +23149,8 @@ class WebState:
             _ensure_schedule_account(job, account_id)
             if not self.account_store.get(account_id):
                 raise WebError(HTTPStatus.BAD_REQUEST, "A valid account is required.")
+            if _account_channel(self.account_store.get(account_id)) != "line":
+                raise _line_only()
             updated = _schedule_from_body(body, account_id=account_id, existing=job)
             _ensure_schedule_image_quota(self.schedules, updated, replacing_id=schedule_id)
             job.clear()
@@ -24336,6 +25060,8 @@ class WebState:
 
     @staticmethod
     def _ai_auto_reply_chat_type(chat_mid: str) -> str:
+        if chat_mid.startswith("tgu"):
+            return "contact"
         prefix = chat_mid[:1].lower()
         if prefix == "u":
             return "contact"
@@ -24620,6 +25346,8 @@ class WebState:
             account_id = str(record.get("accountId") or "")
             if not account_id:
                 continue
+            if _account_channel(self.account_store.get(account_id)) != "line":
+                continue  # Telegram replies are driven by incoming messages
             if self.account_store.requires_reauth(account_id):
                 account = self.account_store.get(account_id) or {}
                 self._set_ai_auto_reply_runtime(
@@ -24799,10 +25527,11 @@ class WebState:
                     **conversation,
                 },
             )
+            channel = _account_channel(self.account_store.get(account_id))
             generated = self.ask_global_ai(
                 question,
                 owner,
-                source="line_auto_reply",
+                source="line_auto_reply" if channel == "line" else f"{channel}_auto_reply",
                 account_id=account_id,
                 chat_mid=chat_mid,
                 chat_type=chat_type,
@@ -24827,12 +25556,7 @@ class WebState:
                 account_id, enabled_at_ms, chat_type, chat_mid
             ):
                 return
-            api = self.get_api(account_id)
-            with self.api_lock_for(account_id):
-                result = api.send_text(chat_mid, outbound)
-                # Inside the lock so the inbox poll sees the attribution first.
-                self.note_outgoing(account_id, chat_mid, "ai")
-            message_id = result.get("id") if isinstance(result, dict) else result
+            message_id = self.channel_send_text(account_id, chat_mid, outbound, by="ai")
             self.append_bot_log(
                 "ai.auto_reply.sent",
                 account_id=account_id,
@@ -25390,6 +26114,14 @@ class WebState:
                 if not job.get("enabled") or job.get("running"):
                     continue
                 job_account_id = str(job.get("accountId") or "")
+                if job_account_id and _account_channel(
+                    self.account_store.get(job_account_id)
+                ) != "line":
+                    if job.get("status") != "unsupported":
+                        job["status"] = "unsupported"
+                        job["enabled"] = False
+                        changed = True
+                    continue
                 if job_account_id and self.account_store.requires_reauth(job_account_id):
                     if job.get("status") != "login required":
                         job["status"] = "login required"
@@ -26063,7 +26795,9 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/assistant/auto-reply/groups":
             self._require_permission("ask_ai")
             return self._with_api(
-                query, lambda api: self._auto_reply_groups(api, query)
+                query,
+                lambda api: self._auto_reply_groups(api, query),
+                telegram=lambda _account_id: {"groups": [], "count": 0},
             )
         if method == "POST" and path == "/api/assistant/auto-reply":
             self._require_permission("ask_ai")
@@ -26374,34 +27108,80 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.clear_stuck_schedules(account_id, self.current_user)
         if method == "GET" and path == "/api/contacts":
             self._require_permission("read")
-            return self._with_api(query, lambda api: self._contacts(api, query))
+            return self._with_api(
+                query,
+                lambda api: self._contacts(api, query),
+                telegram=lambda account_id: self.state.tg_contacts(account_id, query),
+            )
         if method == "GET" and path == "/api/groups":
             self._require_permission("read")
-            return self._with_api(query, lambda api: self._groups(api, query))
+            return self._with_api(
+                query,
+                lambda api: self._groups(api, query),
+                telegram=lambda _account_id: {"groups": [], "count": 0},
+            )
         if method == "GET" and path == "/api/conversations":
             self._require_permission("read")
-            return self._with_api(query, lambda api: self._conversations(api, query))
+            return self._with_api(
+                query,
+                lambda api: self._conversations(api, query),
+                telegram=self.state.tg_conversations,
+            )
         if method == "GET" and path == "/api/boxes":
             self._require_permission("read")
             return self._with_api(query, lambda api: self._boxes(api, query))
         if method == "GET" and path == "/api/messages":
             self._require_permission("read")
-            return self._with_api(query, lambda api: self._messages(api, query))
+            return self._with_api(
+                query,
+                lambda api: self._messages(api, query),
+                telegram=lambda account_id: self.state.tg_messages(account_id, query),
+            )
         if method == "POST" and path == "/api/messages/read":
             self._require_permission("read")
             body = self._read_json()
-            return self._with_api(body, lambda api: self._mark_messages_read(api, body))
+            return self._with_api(
+                body,
+                lambda api: self._mark_messages_read(api, body),
+                telegram=lambda account_id: self.state.tg_mark_read(account_id, body),
+            )
         if method == "GET" and path == "/api/find-user":
             self._require_permission("tools")
             return self._with_api(query, lambda api: self._find_user(api, query))
         if method == "POST" and path == "/api/send":
             self._require_permission("send")
             body = self._read_json()
-            return self._with_api(body, lambda api: self._send(api, body))
+            return self._with_api(
+                body,
+                lambda api: self._send(api, body),
+                telegram=lambda account_id: self.state.tg_send(
+                    account_id, body, self.current_user
+                ),
+            )
         if method == "POST" and path == "/api/send-media":
             self._require_permission("send")
             body = self._read_json(max_bytes=MAX_MEDIA_JSON_BODY_BYTES)
-            return self._with_api(body, lambda api: self._send_media(api, body))
+
+            def telegram_media(account_id: str) -> dict[str, Any]:
+                raw, name, is_image = _decode_upload(body)
+                return self.state.tg_send_media(
+                    account_id,
+                    str(body.get("to") or "").strip(),
+                    raw,
+                    name,
+                    is_image,
+                    self.current_user,
+                )
+
+            return self._with_api(
+                body, lambda api: self._send_media(api, body), telegram=telegram_media
+            )
+        if method == "POST" and path == "/api/telegram/accounts/create":
+            self._require_permission("manage_accounts")
+            return self.state.add_telegram_bot(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/telegram/accounts/token":
+            self._require_permission("manage_accounts")
+            return self.state.update_telegram_token(self._read_json(), self.current_user)
         if method == "POST" and path == "/api/call":
             self._require_permission("tools")
             body = self._read_json()
@@ -26455,14 +27235,29 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if not self.state.web_auth.can_access_account(self.current_user, account_id):
             raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
 
-    def _with_api(self, source: dict[str, Any] | dict[str, list[str]], fn):
+    def _with_api(
+        self,
+        source: dict[str, Any] | dict[str, list[str]],
+        fn,
+        *,
+        telegram: Callable[[str], Any] | None = None,
+    ):
+        """Run ``fn`` with the account's LINE client; Telegram accounts run ``telegram``.
+
+        Routes that pass no ``telegram`` alternative are LINE-only and say so.
+        """
         raw_account_id = source.get("accountId") if isinstance(source, dict) else ""
         if isinstance(raw_account_id, list):
             raw_account_id = raw_account_id[0] if raw_account_id else ""
         account_id = _required_account_id(str(raw_account_id or ""))
         self._require_account_access(account_id)
-        if not self.state.account_store.get(account_id):
+        account = self.state.account_store.get(account_id)
+        if not account:
             raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
+        if _account_channel(account) != "line":
+            if telegram is None:
+                raise _line_only()
+            return telegram(account_id)
         api = self.state.get_api(account_id)
         with self.state.api_lock_for(account_id):
             return fn(api)
@@ -26684,32 +27479,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
 
     def _send_media(self, api: OkLine, body: dict[str, Any]) -> dict[str, Any]:
         to = _resolve_to(api, str(body.get("to") or ""))
-        data_b64 = str(body.get("data") or "")
-        if "," in data_b64 and data_b64.lstrip().startswith("data:"):
-            data_b64 = data_b64.split(",", 1)[1]  # strip a data: URL prefix
-        if not data_b64:
-            raise WebError(HTTPStatus.BAD_REQUEST, "file data is required.")
-        if len(data_b64) > ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 4:
-            raise WebError(HTTPStatus.BAD_REQUEST, "File is too large (max 30 MB).")
-        try:
-            raw = base64.b64decode(data_b64, validate=True)
-        except (ValueError, TypeError) as exc:
-            raise WebError(HTTPStatus.BAD_REQUEST, f"Invalid file data: {exc}") from exc
-        if not raw:
-            raise WebError(HTTPStatus.BAD_REQUEST, "file is empty.")
-        if len(raw) > MAX_IMAGE_BYTES:
-            raise WebError(HTTPStatus.BAD_REQUEST, "File is too large (max 30 MB).")
-        name = str(body.get("filename") or "").strip() or "upload"
-        if len(name) > 255:
-            raise WebError(HTTPStatus.BAD_REQUEST, "Filename is too long.")
-        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-        is_image = str(body.get("kind") or "").lower() == "image" or ext in {
-            "jpg",
-            "jpeg",
-            "png",
-            "gif",
-            "webp",
-        }
+        raw, name, is_image = _decode_upload(body)
         if is_image:
             result = api.send_image(to, raw, name=name)
         else:
@@ -26726,6 +27496,10 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         preview = _query_one(query, "preview").lower() in {"1", "true", "yes"}
         if not message_id:
             raise WebError(HTTPStatus.BAD_REQUEST, "message_id is required.")
+        state = getattr(getattr(self, "server", None), "state", None)
+        account = state.account_store.get(_query_one(query, "accountId", "")) if state else None
+        if account and _account_channel(account) != "line":
+            return self._telegram_media(query, message_id, chat_mid)
         try:
             data, filename, content_type = self._with_api(
                 query,
@@ -26759,12 +27533,47 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             headers=headers,
         )
 
+    def _telegram_media(
+        self, query: dict[str, list[str]], message_id: str, chat_mid: str
+    ) -> None:
+        """Proxy a Telegram file; only images, video and audio are shown inline."""
+        account_id = _required_account_id(_query_one(query, "accountId", ""))
+        self._require_account_access(account_id)
+        data, filename, content_type = self.state.tg_media(account_id, chat_mid, message_id)
+        mime = _message_content_type(data, "", content_type)
+        headers = [("accept-ranges", "bytes")]
+        if content_type == 14 or not mime.startswith(("image/", "video/", "audio/")):
+            mime = "application/octet-stream"
+            encoded_name = quote(_safe_message_filename(filename), safe="")
+            headers.append(
+                ("content-disposition", f"attachment; filename*=UTF-8''{encoded_name}")
+            )
+        status = HTTPStatus.OK
+        payload = data
+        requested_range = _parse_byte_range(self.headers.get("range") or "", len(data))
+        if requested_range:
+            start, end = requested_range
+            payload = data[start : end + 1]
+            status = HTTPStatus.PARTIAL_CONTENT
+            headers.append(("content-range", f"bytes {start}-{end}/{len(data)}"))
+        self._bytes(payload, mime, status, headers=headers)
+
     def _profile_avatar(self, query: dict[str, list[str]]) -> None:
         """Load the selected account's LINE profile picture through our session."""
         self._require_permission("read")
         account_id = _required_account_id(_query_one(query, "accountId", ""))
         self._require_account_access(account_id)
         account = self.state.account_store.get(account_id) or {}
+        if _account_channel(account) != "line":
+            data = self.state.tg_avatar(account_id)
+            content_type = _sniff_content_type(data)
+            if not content_type.startswith("image/"):
+                raise WebError(
+                    HTTPStatus.NOT_FOUND,
+                    "The bot has no profile picture.",
+                    "profile_picture_not_found",
+                )
+            return self._bytes(data, content_type, HTTPStatus.OK)
         cached_picture_path = str(account.get("picturePath") or "").strip()
 
         def load_avatar(api: OkLine) -> bytes:
@@ -29133,6 +29942,37 @@ def _coerce_int(value: Any) -> int:
         return 0
 
 
+def _decode_upload(body: dict[str, Any]) -> tuple[bytes, str, bool]:
+    """Decode a base64 upload from the composer: (bytes, filename, is_image)."""
+    data_b64 = str(body.get("data") or "")
+    if "," in data_b64 and data_b64.lstrip().startswith("data:"):
+        data_b64 = data_b64.split(",", 1)[1]  # strip a data: URL prefix
+    if not data_b64:
+        raise WebError(HTTPStatus.BAD_REQUEST, "file data is required.")
+    if len(data_b64) > ((MAX_IMAGE_BYTES + 2) // 3) * 4 + 4:
+        raise WebError(HTTPStatus.BAD_REQUEST, "File is too large (max 30 MB).")
+    try:
+        raw = base64.b64decode(data_b64, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise WebError(HTTPStatus.BAD_REQUEST, f"Invalid file data: {exc}") from exc
+    if not raw:
+        raise WebError(HTTPStatus.BAD_REQUEST, "file is empty.")
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise WebError(HTTPStatus.BAD_REQUEST, "File is too large (max 30 MB).")
+    name = str(body.get("filename") or "").strip() or "upload"
+    if len(name) > 255:
+        raise WebError(HTTPStatus.BAD_REQUEST, "Filename is too long.")
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    is_image = str(body.get("kind") or "").lower() == "image" or ext in {
+        "jpg",
+        "jpeg",
+        "png",
+        "gif",
+        "webp",
+    }
+    return raw, name, is_image
+
+
 def _record_operator_send(handler: Any, body: dict[str, Any], to: str, kind: str) -> None:
     """Log which web user sent a chat message (KPI attribution)."""
     state = getattr(getattr(handler, "server", None), "state", None)
@@ -29206,6 +30046,33 @@ def _knowledge_sections_from_markdown(markdown: str) -> list[dict[str, str]]:
     return sections
 
 
+# What each kind of account can do beyond chatting (the browser hides the rest).
+ACCOUNT_CAPABILITIES: dict[str, list[str]] = {
+    "line": ["groups", "e2ee", "schedules", "incoming_api", "tools", "stickers"],
+    "telegram_bot": [],
+    "telegram_user": [],
+}
+TELEGRAM_PREVIEW_TYPES = {
+    "[image]": 1,
+    "[video]": 2,
+    "[audio]": 3,
+    "[sticker]": 7,
+    "[contact]": 13,
+    "[file]": 14,
+    "[location]": 15,
+}
+
+
+def _account_channel(account: dict[str, Any] | None) -> str:
+    return str((account or {}).get("channel") or "line")
+
+
+def _line_only() -> WebError:
+    return WebError(
+        HTTPStatus.BAD_REQUEST, "This works with LINE accounts only.", "line_only"
+    )
+
+
 def _crm_sender(by: str) -> tuple[str, str]:
     """CRM sender kind and id for an outgoing message attributed by ``note_outgoing``."""
     if not by or by in {"line_app", "telegram_app"}:
@@ -29217,7 +30084,8 @@ def _crm_sender(by: str) -> tuple[str, str]:
 
 def _room_tracked(chat_mid: str) -> bool:
     """KPI rooms are 1:1 customer chats; groups are not tracked."""
-    return str(chat_mid or "")[:1].lower() == "u"
+    chat_mid = str(chat_mid or "")
+    return chat_mid[:1].lower() == "u" or chat_mid.startswith("tgu")
 
 
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")

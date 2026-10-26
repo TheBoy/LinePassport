@@ -265,10 +265,14 @@ class CrmService:
             new_inbound = 0
             for message in inserted:
                 at = _int(message.get("at"))
-                if created or at <= previous_last:
+                # Equal times are new too: Telegram stamps whole seconds.
+                if at < previous_last:
                     continue
                 if message.get("direction") == "in":
                     new_inbound += 1
+                if created:
+                    continue  # a new chat already starts with the right status
+                if message.get("direction") == "in":
                     if status == "closed":
                         status = "open" if assigned else "new"
                         reopened = True
