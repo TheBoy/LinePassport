@@ -1,0 +1,42 @@
+          <div class="settings-pane" id="telegramSettingsPane">
+            <div class="wizard-card" id="tgMeCard">
+              <h3 data-i18n="tg.me_title">My Telegram</h3>
+              <span class="muted" id="tgMeState"></span>
+              <div class="ux-row">
+                <button class="primary" id="tgLinkButton" type="button" data-i18n="tg.link">Link my Telegram</button>
+                <button id="tgTestButton" type="button" data-i18n="tg.test">Send a test</button>
+                <button id="tgUnlinkButton" type="button" data-i18n="tg.unlink">Unlink</button>
+              </div>
+              <div class="ux-warning hidden" id="tgLinkBox">
+                <span data-i18n="tg.link_hint">Telegram opens and shows a Start button. Press it to finish.</span>
+                <a id="tgLinkUrl" href="#" target="_blank" rel="noopener noreferrer" data-i18n="tg.link_open">Open Telegram</a>
+              </div>
+              <label class="tg-mode"><span data-i18n="tg.mode_label">Alert me</span>
+                <select id="tgMode">
+                  <option value="away" data-i18n="tg.mode_away">Only when LinePassport is not open</option>
+                  <option value="always" data-i18n="tg.mode_always">Every time</option>
+                </select>
+              </label>
+              <ul class="tg-howto">
+                <li data-i18n="tg.howto_reply">To answer a customer, press Reply on their alert and type. It is sent from your shop account, in your name.</li>
+                <li data-i18n="tg.howto_buttons">"I'll take it" makes the chat yours; "Close chat" marks it done.</li>
+                <li data-i18n="tg.howto_stop">Type /stop in the bot to stop alerts.</li>
+              </ul>
+            </div>
+            <div class="wizard-card" id="tgBotCard">
+              <h3 data-i18n="tg.bot_title">Shop alert bot</h3>
+              <span class="muted" data-i18n="tg.bot_intro">Alerts come from a Telegram bot that belongs to your shop. Create one once; every team member links to it.</span>
+              <ol class="tg-howto">
+                <li data-i18n="tg.bot_step1">In Telegram, open @BotFather and send /newbot.</li>
+                <li data-i18n="tg.bot_step2">Choose a name and a username ending in "bot".</li>
+                <li data-i18n="tg.bot_step3">Copy the token BotFather gives you and paste it below.</li>
+              </ol>
+              <div class="ux-row" id="tgBotStatus"></div>
+              <label><span data-i18n="tg.bot_token">Bot token</span>
+                <input id="tgBotToken" type="password" autocomplete="off" spellcheck="false" placeholder="123456789:AA…"></label>
+              <div class="ux-row">
+                <button class="primary" id="tgBotSave" type="button" data-i18n="tg.bot_save">Save and test</button>
+                <button class="danger" id="tgBotRemove" type="button" data-i18n="tg.bot_remove">Stop using this bot</button>
+              </div>
+            </div>
+          </div>

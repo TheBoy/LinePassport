@@ -63,6 +63,9 @@ from .entities import Group
 from .exceptions import LineAuthError, LineLoginRequired
 from .hmac_signer import LtsmBridge
 from .obs import encode_message_talk_meta
+from .telegram import StaffNotifier, TelegramError
+from .telegram import routes as telegram_routes
+from .telegram.notify import preview_label
 from .transport import LineConfig
 from .webpush import (
     VapidKeys,
@@ -5132,6 +5135,7 @@ INDEX_HTML = r"""<!doctype html>
             <button id="aiTabButton" data-settings-pane="ai" data-i18n="settings.nav_ai">AI</button>
             <button id="kpiSettingsTabButton" data-settings-pane="kpi" data-i18n="settings.nav_kpi">KPI &amp; shifts</button>
             <button id="notifySettingsTabButton" data-settings-pane="notify" data-i18n="settings.nav_notify">Notifications</button>
+<!--ext:settings-tabs-->
             <button id="settingsGuideTabButton" data-settings-pane="guide" data-i18n="settings.nav_guide">วิธีใช้</button>
           </nav>
           <div class="settings-content">
@@ -5209,6 +5213,7 @@ INDEX_HTML = r"""<!doctype html>
             </div>
           </div>
 
+<!--ext:settings-panes-->
           <div class="settings-pane" id="passwordPane">
             <div class="wizard-card">
               <h3 data-i18n="password.title">Change Password</h3>
@@ -16769,6 +16774,7 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("POST", "/api/team/create"): (10, 60.0),
     ("POST", "/api/schedules/test"): (6, 60.0),
     **crm_routes.RATE_LIMITS,
+    **telegram_routes.RATE_LIMITS,
 }
 MAX_USERS = 1000
 MAX_ACCOUNTS_PER_USER = 20
@@ -19027,6 +19033,8 @@ class WebState:
             max_workers=1, thread_name_prefix="linepassport-crm-ingest"
         )
         self.crm_engine = CrmEngine(self.crm, self)
+        # Staff alerts on Telegram (one bot per shop, linked per person).
+        self.staff_notifier = StaffNotifier(self)
         self.scheduler = ScheduleEngine(self)
         self.ai_auto_reply_engine = AiAutoReplyEngine(self)
         self.session_refresh_attempts: dict[str, float] = {}
@@ -19325,6 +19333,7 @@ class WebState:
             self.store.set("schedules", {"schedules": schedules})
 
     def close(self) -> None:
+        self.staff_notifier.close()
         self.crm_engine.stop()
         self.crm_executor.shutdown(wait=True, cancel_futures=True)
         self.session_keeper.close()
@@ -20664,9 +20673,13 @@ class WebState:
         owner = self.web_auth.user_for_account(account_id)
         return bool(self._assistant_settings_for(self._global_ai_all(), owner).get("configured"))
 
+    def _alerts_wanted(self) -> bool:
+        """Someone gets alerts: a browser push subscription or a linked Telegram."""
+        return bool(self._push_subscriptions()) or self.staff_notifier.has_links()
+
     def queue_push_for_rooms(self, account_id: str, chat_mids: list[str]) -> None:
         """New customer chats waiting; the AI gets a moment to answer first."""
-        if not self._push_subscriptions():
+        if not self._alerts_wanted():
             return
         delay = PUSH_AI_GRACE_SECONDS if self._ai_covers_contacts(account_id) else 0.0
         due = time.time() + delay
@@ -20689,22 +20702,52 @@ class WebState:
             mine = [item for item in subscriptions if item.get("userId") == user_id]
             if not mine:
                 continue
-            current = self.presence_current.get(user_id)
-            if current and now_ms - _coerce_int(current.get("at")) <= PRESENCE_OFFLINE_SECONDS * 1000:
+            if self._user_online(user_id, now_ms):
                 # A LinePassport page is open; it shows its own notifications.
                 continue
-            if not settings.get("notifyOutsideHours"):
-                rules = (settings.get("shifts") or {}).get(user_id)
-                hours = settings.get("businessHours") or {}
-                if not rules and hours.get("enabled"):
-                    rules = [hours]
-                if rules and not _time_windows(rules, now_ms, now_ms + 1):
-                    continue
+            if not self._on_duty(settings, user_id, now_ms):
+                continue
             recipients.append((user_id, mine))
         return recipients
 
+    def _user_online(self, user_id: str, now_ms: int) -> bool:
+        current = self.presence_current.get(user_id)
+        return bool(
+            current
+            and now_ms - _coerce_int(current.get("at")) <= PRESENCE_OFFLINE_SECONDS * 1000
+        )
+
+    @staticmethod
+    def _on_duty(settings: dict[str, Any], user_id: str, now_ms: int) -> bool:
+        if settings.get("notifyOutsideHours"):
+            return True
+        rules = (settings.get("shifts") or {}).get(user_id)
+        hours = settings.get("businessHours") or {}
+        if not rules and hours.get("enabled"):
+            rules = [hours]
+        return not rules or bool(_time_windows(rules, now_ms, now_ms + 1))
+
+    def _telegram_recipients(self, account_id: str) -> list[str]:
+        """Staff with a linked Telegram who should hear about this account now."""
+        owner_id = self._account_owner_id(account_id)
+        if not self.staff_notifier.tenant(owner_id):
+            return []
+        settings = self._kpi_settings_for_owner(owner_id)
+        now_ms = int(time.time() * 1000)
+        recipients = []
+        for member in self._kpi_members(account_id):
+            user_id = member["id"]
+            link = self.staff_notifier.link_for(user_id)
+            if not member.get("active") or not link or link.get("ownerId") != owner_id:
+                continue
+            if link.get("mode") != "always" and self._user_online(user_id, now_ms):
+                continue
+            if self._on_duty(settings, user_id, now_ms):
+                recipients.append(user_id)
+        return recipients
+
     def process_push_queue(self) -> None:
-        if not self.push_pending and not self._push_subscriptions():
+        if not self.push_pending and not self._alerts_wanted():
             return
         now = time.time()
         with self.push_lock:
@@ -20719,7 +20762,7 @@ class WebState:
         for account_id, chat_mids in by_account.items():
             self._dispatch_push(account_id, chat_mids)
         # One louder reminder for chats still waiting past the reply target.
-        if not self._push_subscriptions():
+        if not self._alerts_wanted():
             return
         for account_id in list(self.room_states_cache):
             sla = int(
@@ -20826,6 +20869,90 @@ class WebState:
                         self.push_executor.submit(self._deliver_push, subscription, payload)
                     except RuntimeError:
                         return
+        self._dispatch_telegram(account_id, chat_mids, escalate=escalate, assignees=assignees)
+
+    def _chat_alert_lines(
+        self, account_id: str, chat_mid: str, label: str
+    ) -> tuple[str, list[str]]:
+        try:
+            conv = self.crm.conversation_for_chat(account_id, chat_mid)
+        except Exception:
+            conv = None
+        name = str((conv or {}).get("display_name") or "") or f"…{chat_mid[-6:]}"
+        preview = preview_label(str((conv or {}).get("last_preview") or ""))
+        head = f"{name} · {label}" if label else name
+        return name, [head, f"“{preview}”" if preview else ""]
+
+    def _dispatch_telegram(
+        self,
+        account_id: str,
+        chat_mids: list[str],
+        *,
+        escalate: bool,
+        assignees: dict[str, str],
+    ) -> None:
+        """Telegram alerts follow the same rules as browser pushes."""
+        if not self.staff_notifier.has_links():
+            return
+        owner_id = self._account_owner_id(account_id)
+        recipients = self._telegram_recipients(account_id)
+        if not recipients:
+            return
+        account = self.account_store.get(account_id) or {}
+        label = str(account.get("label") or account_id)
+        now = time.time()
+        for user_id in recipients:
+            key = "tg:" + user_id
+            with self.push_lock:
+                fresh = [
+                    mid
+                    for mid in chat_mids
+                    if assignees.get(mid, user_id) == user_id
+                    and (
+                        escalate
+                        or now - self.push_last_sent.get((key, account_id, mid), 0)
+                        >= PUSH_ROOM_COOLDOWN_SECONDS
+                    )
+                ]
+                for mid in fresh:
+                    self.push_last_sent[(key, account_id, mid)] = now
+                recent = [
+                    at
+                    for at in self.push_recent.get(key, [])
+                    if now - at < PUSH_DIGEST_WINDOW_SECONDS
+                ]
+                digest = not escalate and len(recent) + len(fresh) > PUSH_DIGEST_THRESHOLD
+                if digest and now - self.push_digest_at.get(key, 0) < PUSH_DIGEST_WINDOW_SECONDS:
+                    fresh = []
+                elif digest:
+                    self.push_digest_at[key] = now
+                recent.extend(now for _ in fresh)
+                self.push_recent[key] = recent
+            if not fresh:
+                continue
+            if digest:
+                waiting = sum(
+                    1
+                    for room in self.room_states(account_id).values()
+                    if room.get("status") == "waiting"
+                )
+                self.staff_notifier.send_alert(
+                    owner_id,
+                    user_id,
+                    title=f"🔔 ลูกค้า {waiting} คนรอตอบ",
+                    lines=[f"{label} · เปิด LinePassport เพื่อตอบ"],
+                )
+                continue
+            for mid in fresh:
+                _name, lines = self._chat_alert_lines(account_id, mid, label)
+                self.staff_notifier.send_alert(
+                    owner_id,
+                    user_id,
+                    title="⏰ ลูกค้ารอตอบนานแล้ว" if escalate else "💬 ลูกค้าทักมาใหม่",
+                    lines=lines,
+                    account_id=account_id,
+                    chat_id=mid,
+                )
 
     def _deliver_push(self, subscription: dict[str, Any], payload: dict[str, Any]) -> None:
         subject = str(os.getenv("LINEPASSPORT_VAPID_SUBJECT") or DEFAULT_VAPID_SUBJECT)
@@ -21075,7 +21202,82 @@ class WebState:
             try:
                 self.push_executor.submit(self._deliver_push, subscription, payload)
             except RuntimeError:
-                return
+                break
+        user = self.web_auth._find_user(user_id) or {}
+        owner_id = str(user.get("teamOwnerId") or user_id)
+        account_id = str(payload.get("accountId") or "")
+        chat_mid = str(payload.get("mid") or "")
+        lines = [str(payload.get("body") or "")]
+        if account_id and chat_mid:
+            label = str((self.account_store.get(account_id) or {}).get("label") or account_id)
+            _name, lines = self._chat_alert_lines(account_id, chat_mid, label)
+        icon = {"assigned": "👤", "task_due": "📌", "task_assigned": "📝"}.get(
+            str(payload.get("kind") or ""), "🔔"
+        )
+        self.staff_notifier.send_alert(
+            owner_id,
+            user_id,
+            title=f"{icon} {payload.get('title') or ''}".strip(),
+            lines=lines,
+            account_id=account_id,
+            chat_id=chat_mid,
+        )
+
+    # NotifyHost: what the Telegram staff notifier needs from the web app.
+    def notify_encrypt(self, value: str) -> str:
+        return self._encrypt_secret(value)
+
+    def notify_decrypt(self, value: str) -> str:
+        return self._decrypt_secret(value)
+
+    def notify_proxy(self) -> str | None:
+        value = str(os.getenv("LINEPASSPORT_TELEGRAM_PROXY") or "").strip()
+        return _validate_proxy_url(value) if value else None
+
+    def notify_user_record(self, user_id: str) -> dict[str, Any] | None:
+        user = self.web_auth._find_user(user_id)
+        if not user or not user.get("active", True) or self.web_auth._is_god(user):
+            return None
+        return dict(user)
+
+    def notify_reply(
+        self, user: dict[str, Any], account_id: str, chat_id: str, text: str
+    ) -> str:
+        if not self.web_auth.has_permission(user, "send") or not self.web_auth.can_access_account(
+            user, account_id
+        ):
+            raise WebError(HTTPStatus.FORBIDDEN, "คุณไม่มีสิทธิ์ตอบแชทของบัญชีนี้", "forbidden")
+        self.channel_send_text(account_id, chat_id, text[:5000], by=str(user["id"]))
+        self.record_operator_send(account_id, user, chat_id, "text")
+        name, _lines = self._chat_alert_lines(account_id, chat_id, "")
+        return f"✓ ส่งถึง {name} แล้ว"
+
+    def notify_claim(self, user: dict[str, Any], account_id: str, chat_id: str) -> str:
+        self.crm.assign(user, {"accountId": account_id, "chatId": chat_id, "assignee": "me"})
+        return "รับเรื่องแล้ว แชทนี้เป็นของคุณ"
+
+    def notify_close(self, user: dict[str, Any], account_id: str, chat_id: str) -> str:
+        self.crm.set_status(
+            user, {"accountId": account_id, "chatId": chat_id, "status": "closed"}
+        )
+        return "ปิดแชทแล้ว"
+
+    def telegram_can_manage(self, user: dict[str, Any] | None) -> bool:
+        return bool(
+            user
+            and self.web_auth.has_permission(user, "manage_accounts")
+            and not user.get("teamOwnerId")
+        )
+
+    def channel_send_text(self, account_id: str, chat_id: str, text: str, *, by: str) -> str:
+        """Send a text to a chat from any connected account; returns the message id."""
+        api = self.get_api(account_id)
+        with self.api_lock_for(account_id):
+            result = api.send_text(chat_id, text)
+            self.note_outgoing(account_id, chat_id, by)
+        self.invalidate_inbox_snapshot(account_id)
+        self.request_inbox_refresh(account_id)
+        return str(result.get("id") or "") if isinstance(result, dict) else ""
 
     def _bump_inbox_version(self, account_id: str) -> None:
         with self.inbox_events:
@@ -25602,7 +25804,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 exc.status,
                 headers=exc.headers,
             )
-        except CrmError as exc:
+        except (CrmError, TelegramError) as exc:
             return self._json({"error": exc.message, "code": exc.code}, exc.status)
         except LineAuthError as exc:
             return self._json(
@@ -26221,6 +26423,17 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 self.state.crm, self.current_user, method, path, query, self._read_json
             )
             if result is not crm_routes.NOT_HANDLED:
+                return result
+        if path == "/api/telegram/notify" or path.startswith("/api/telegram/notify/"):
+            result = telegram_routes.dispatch_notify(
+                self.state.staff_notifier,
+                self.state,
+                self.current_user,
+                method,
+                path,
+                self._read_json,
+            )
+            if result is not telegram_routes.NOT_HANDLED:
                 return result
         raise WebError(HTTPStatus.NOT_FOUND, "Unknown route.")
 

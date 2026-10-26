@@ -1,0 +1,6 @@
+    /* ===== Telegram ===== */
+    .tg-howto { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
+    .tg-mode { display: grid; gap: 4px; max-width: 360px; }
+    #tgLinkBox { display: grid; gap: 6px; }
+    #tgLinkBox.hidden { display: none; }
+    #tgLinkUrl { font-weight: 700; }
