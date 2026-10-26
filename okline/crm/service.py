@@ -38,6 +38,7 @@ MAX_TAGS = 300
 MAX_MERGE = 20
 MAX_BULK = 500
 MAX_FIELDS = 30
+MAX_BROADCAST_RECIPIENTS = 1000
 
 
 class CrmContext(Protocol):
@@ -1809,6 +1810,193 @@ class CrmService:
         ))
         return {"ok": True, "myOpen": mine, "unassigned": unassigned, "tasksDue": due}
 
+    # -- messages to a segment (broadcasts) ----------------------------------
+    def _broadcast_targets(
+        self, owner_id: str, scope: list[str] | None, flt: dict[str, Any], account_id: str
+    ) -> list[dict[str, Any]]:
+        """Customers in the filter who already chat with this account, newest first."""
+        where, args = customer_where(owner_id, flt, scope, now_ms())
+        return self.db.query(
+            "SELECT c.id AS customer_id, c.display_name, v.id AS conversation_id, v.chat_id "
+            "FROM crm_customers c JOIN crm_conversations v "
+            "ON v.customer_id = c.id AND v.account_id = ? "
+            f"WHERE {where} ORDER BY c.last_message_at DESC LIMIT ?",
+            [account_id, *args, MAX_BROADCAST_RECIPIENTS + 1],
+        )
+
+    def preview_broadcast(self, user: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
+        owner_id, scope = self._require(user, "manage_crm")
+        account = self._account(owner_id, scope, str(body.get("accountId") or ""))
+        flt = self._filter_from(owner_id, body)
+        targets = self._broadcast_targets(owner_id, scope, flt, account["id"])
+        return {
+            "ok": True,
+            "accountId": account["id"],
+            "channel": account.get("channel") or "line",
+            "inSegment": self._count(owner_id, scope, flt),
+            "reachable": min(len(targets), MAX_BROADCAST_RECIPIENTS),
+            "tooMany": len(targets) > MAX_BROADCAST_RECIPIENTS,
+            "sampleName": str(targets[0]["display_name"]) if targets else "",
+            "limit": MAX_BROADCAST_RECIPIENTS,
+        }
+
+    def create_broadcast(self, user: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
+        owner_id, scope = self._require(user, "manage_crm")
+        account = self._account(owner_id, scope, str(body.get("accountId") or ""))
+        text = _clean(body.get("text"), 2000)
+        if not text:
+            raise bad_request("Write the message first.", "broadcast_text_required")
+        flt = self._filter_from(owner_id, body)
+        targets = self._broadcast_targets(owner_id, scope, flt, account["id"])
+        if not targets:
+            raise bad_request(
+                "Nobody in this segment chats with that account yet.", "broadcast_nobody"
+            )
+        if len(targets) > MAX_BROADCAST_RECIPIENTS:
+            raise bad_request(
+                f"Send to at most {MAX_BROADCAST_RECIPIENTS} people at a time.",
+                "broadcast_too_many",
+            )
+        segment_name = ""
+        if body.get("segmentId"):
+            segment_name = str(
+                self.db.scalar(
+                    "SELECT name FROM crm_segments WHERE id = ? AND owner_id = ?",
+                    (str(body.get("segmentId")), owner_id),
+                )
+                or ""
+            )
+        now = now_ms()
+        broadcast_id = new_id()
+        with self.db.transaction():
+            self.db.execute(
+                "INSERT INTO crm_broadcasts (id, owner_id, segment_id, name, account_id, text, "
+                "status, created_by, created_at, updated_at, started_at, next_at, total) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)",
+                (
+                    broadcast_id,
+                    owner_id,
+                    str(body.get("segmentId") or ""),
+                    _one_line(body.get("name"), 80) or segment_name,
+                    account["id"],
+                    text,
+                    _user_id(user),
+                    now,
+                    now,
+                    now,
+                    now,
+                    len(targets),
+                ),
+            )
+            for position, target in enumerate(targets):
+                self.db.execute(
+                    "INSERT INTO crm_broadcast_recipients (broadcast_id, customer_id, "
+                    "conversation_id, chat_id, name, position) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        broadcast_id,
+                        target["customer_id"],
+                        target["conversation_id"],
+                        target["chat_id"],
+                        target["display_name"],
+                        position,
+                    ),
+                )
+        return {"ok": True, "broadcast": self._broadcast(owner_id, broadcast_id)}
+
+    def _broadcast(self, owner_id: str, broadcast_id: str) -> dict[str, Any]:
+        row = self.db.query_one(
+            "SELECT * FROM crm_broadcasts WHERE id = ? AND owner_id = ?", (broadcast_id, owner_id)
+        )
+        if not row:
+            raise not_found("Message not found.", "broadcast_not_found")
+        return _public_broadcast(row)
+
+    def list_broadcasts(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        owner_id, scope = self._require(user, "read")
+        rows = self.db.query(
+            "SELECT * FROM crm_broadcasts WHERE owner_id = ? ORDER BY created_at DESC LIMIT 50",
+            (owner_id,),
+        )
+        visible = [r for r in rows if scope is None or r["account_id"] in scope]
+        return {
+            "ok": True,
+            "broadcasts": [_public_broadcast(r) for r in visible],
+            "canManage": self._can(user, "manage_crm"),
+        }
+
+    def control_broadcast(self, user: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
+        owner_id, _scope = self._require(user, "manage_crm")
+        broadcast = self._broadcast(owner_id, str(body.get("id") or ""))
+        action = str(body.get("action") or "")
+        moves = {
+            "pause": ({"running"}, "paused"),
+            "resume": ({"paused"}, "running"),
+            "cancel": ({"running", "paused"}, "cancelled"),
+        }
+        if action not in moves:
+            raise bad_request("Unknown action.", "broadcast_action_invalid")
+        allowed, target = moves[action]
+        if broadcast["status"] not in allowed:
+            raise CrmError(409, "This message cannot do that now.", "broadcast_state")
+        now = now_ms()
+        updates: dict[str, Any] = {"status": target, "updated_at": now, "error": ""}
+        if target == "running":
+            updates["next_at"] = now
+        if target == "cancelled":
+            updates["finished_at"] = now
+        self._update_row("crm_broadcasts", broadcast["id"], updates)
+        return {"ok": True, "broadcast": self._broadcast(owner_id, broadcast["id"])}
+
+    def due_broadcasts(self, now: int | None = None) -> list[dict[str, Any]]:
+        return self.db.query(
+            "SELECT * FROM crm_broadcasts WHERE status = 'running' AND next_at <= ? "
+            "ORDER BY next_at LIMIT 20",
+            (now or now_ms(),),
+        )
+
+    def next_broadcast_recipient(self, broadcast_id: str) -> dict[str, Any] | None:
+        return self.db.query_one(
+            "SELECT * FROM crm_broadcast_recipients WHERE broadcast_id = ? AND status = 'pending' "
+            "ORDER BY position LIMIT 1",
+            (broadcast_id,),
+        )
+
+    def finish_broadcast_recipient(
+        self, broadcast_id: str, customer_id: str, status: str, error: str = ""
+    ) -> None:
+        counter = {"sent": "sent", "failed": "failed", "skipped": "skipped"}[status]
+        now = now_ms()
+        with self.db.transaction():
+            self.db.execute(
+                "UPDATE crm_broadcast_recipients SET status = ?, sent_at = ?, error = ? "
+                "WHERE broadcast_id = ? AND customer_id = ?",
+                (status, now, error[:300], broadcast_id, customer_id),
+            )
+            self.db.execute(
+                f"UPDATE crm_broadcasts SET {counter} = {counter} + 1, updated_at = ? WHERE id = ?",
+                (now, broadcast_id),
+            )
+            if not self.next_broadcast_recipient(broadcast_id):
+                self.db.execute(
+                    "UPDATE crm_broadcasts SET status = 'done', finished_at = ?, next_at = 0 "
+                    "WHERE id = ? AND status = 'running'",
+                    (now, broadcast_id),
+                )
+
+    def delay_broadcast(self, broadcast_id: str, next_at: int, note: str = "") -> None:
+        self.db.execute(
+            "UPDATE crm_broadcasts SET next_at = ?, error = ?, updated_at = ? WHERE id = ?",
+            (next_at, note[:300], now_ms(), broadcast_id),
+        )
+
+    def stop_broadcast(self, broadcast_id: str, reason: str) -> None:
+        """Pause a running message because sending cannot continue (e.g. signed out)."""
+        self.db.execute(
+            "UPDATE crm_broadcasts SET status = 'paused', error = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'running'",
+            (reason[:300], now_ms(), broadcast_id),
+        )
+
     # -- housekeeping (engine) -----------------------------------------------
     def auto_close(self, now: int | None = None, limit: int = 500) -> list[str]:
         """Close chats that have been quiet for the shop's auto-close period."""
@@ -1952,6 +2140,26 @@ def _public_task(row: dict[str, Any]) -> dict[str, Any]:
         "createdBy": row["created_by"],
         "createdAt": _int(row["created_at"]),
         "doneAt": _int(row["done_at"]),
+    }
+
+
+def _public_broadcast(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "segmentId": row["segment_id"],
+        "accountId": row["account_id"],
+        "text": row["text"],
+        "status": row["status"],
+        "total": _int(row["total"]),
+        "sent": _int(row["sent"]),
+        "failed": _int(row["failed"]),
+        "skipped": _int(row["skipped"]),
+        "createdBy": row["created_by"],
+        "createdAt": _int(row["created_at"]),
+        "finishedAt": _int(row["finished_at"]),
+        "nextAt": _int(row["next_at"]),
+        "note": row["error"],
     }
 
 

@@ -97,6 +97,15 @@
     .crm-segment .crm-count { font-size: 28px; font-weight: 700; line-height: 1; }
     .crm-segment .ux-muted { overflow-wrap: anywhere; }
 
+    /* Messages to a segment */
+    .crm-broadcasts { display: grid; gap: 10px; margin-top: 10px; }
+    .crm-bc-row { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+    .crm-bc-bar { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+    .crm-bc-bar span { display: block; height: 100%; background: var(--accent); }
+    .crm-bc-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: 13px; }
+    .crm-bc-preview { display: grid; gap: 4px; padding: 10px 12px; border-radius: 12px; background: #DCF8C6; }
+    .crm-bc-preview p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
     /* Customer drawer */
     .crm-scrim { position: fixed; inset: 0; z-index: 70; background: rgba(16, 24, 40, .35); }
     .crm-drawer {

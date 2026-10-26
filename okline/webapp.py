@@ -16840,6 +16840,9 @@ OUTGOING_ATTRIBUTION_TTL_SECONDS = 300.0
 NON_REPLY_SENDERS = frozenset({"schedule", "api", "broadcast"})
 # A chat first seen by the CRM keeps its full recent history only if it is this fresh.
 CRM_BACKFILL_RECENT_DAYS = 7
+BROADCAST_TICK_SECONDS = 2.0
+# Bots may send quickly; personal accounts keep the scheduler's human-like gaps.
+BROADCAST_BOT_GAP_SECONDS = 1.0
 PRESENCE_STATES = frozenset({"active", "standby", "away", "busy", "idle"})
 PRESENCE_OFFLINE_SECONDS = 120
 PRESENCE_SAVE_SECONDS = 60.0
@@ -18906,6 +18909,29 @@ class SessionKeeper:
                 traceback.print_exc()
 
 
+class BroadcastRunner:
+    """Sends segment messages one person at a time, paced per account."""
+
+    def __init__(self, state: WebState) -> None:
+        self.state = state
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(
+            target=self._run, name="linepassport-broadcast", daemon=True
+        )
+        self.thread.start()
+
+    def close(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        while not self.stop_event.wait(BROADCAST_TICK_SECONDS):
+            try:
+                self.state.run_due_broadcasts()
+            except Exception:
+                traceback.print_exc()
+
+
 class ScheduleEngine:
     def __init__(self, state: WebState) -> None:
         self.state = state
@@ -19070,6 +19096,7 @@ class WebState:
             max_workers=1, thread_name_prefix="linepassport-crm-ingest"
         )
         self.crm_engine = CrmEngine(self.crm, self)
+        self.broadcast_runner = BroadcastRunner(self)
         # Staff alerts on Telegram (one bot per shop, linked per person).
         self.staff_notifier = StaffNotifier(self)
         # Telegram bots added as customer chat accounts.
@@ -19381,6 +19408,7 @@ class WebState:
             self.store.set("schedules", {"schedules": schedules})
 
     def close(self) -> None:
+        self.broadcast_runner.close()
         self.telegram_users.close()
         self.telegram.close()
         self.staff_notifier.close()
@@ -21180,6 +21208,97 @@ class WebState:
                 changed = True
         if changed:
             self._bump_crm_version(account_id)
+
+    # -- messages to a segment ------------------------------------------------
+    def run_due_broadcasts(self) -> None:
+        for broadcast in self.crm.due_broadcasts():
+            try:
+                self._send_next_broadcast(broadcast)
+            except Exception:
+                traceback.print_exc()
+
+    def _send_next_broadcast(self, broadcast: dict[str, Any]) -> None:
+        broadcast_id = str(broadcast["id"])
+        account_id = str(broadcast["account_id"])
+        account = self.account_store.get(account_id)
+        now = time.time()
+        if not account:
+            self.crm.stop_broadcast(broadcast_id, "account_removed")
+            return
+        if self.account_store.requires_reauth(account_id):
+            self.crm.stop_broadcast(broadcast_id, "account_disconnected")
+            return
+        channel = _account_channel(account)
+        if channel != "telegram_bot":
+            # Personal accounts share the scheduler's hourly/daily send budget.
+            settings = self.schedule_settings_for(account_id)
+            if settings["paused"] or self._schedule_quota_left(account_id) < 1:
+                self.crm.delay_broadcast(
+                    broadcast_id,
+                    int((now + SCHEDULE_QUEUE_RETRY_SECONDS) * 1000),
+                    "waiting_for_quota",
+                )
+                return
+        recipient = self.crm.next_broadcast_recipient(broadcast_id)
+        if recipient is None:
+            self.crm.delay_broadcast(broadcast_id, 0)
+            return
+        chat_id = str(recipient["chat_id"])
+        customer_id = str(recipient["customer_id"])
+        if not self.crm.conversation_for_chat(account_id, chat_id):
+            self.crm.finish_broadcast_recipient(broadcast_id, customer_id, "skipped", "no_chat")
+            return
+        text = _render_broadcast_text(str(broadcast["text"]), str(recipient["name"] or ""))
+        try:
+            self.channel_send_text(account_id, chat_id, text, by="broadcast")
+        except (LineAuthError, LineLoginRequired):
+            self.crm.stop_broadcast(broadcast_id, "account_disconnected")
+            return
+        except (WebError, TelegramError) as exc:
+            if getattr(exc, "code", "") in {"telegram_reauth", "no_session"}:
+                self.crm.stop_broadcast(broadcast_id, "account_disconnected")
+                return
+            self.crm.finish_broadcast_recipient(
+                broadcast_id, customer_id, "failed", str(getattr(exc, "code", "") or exc)
+            )
+        except Exception as exc:
+            self.crm.finish_broadcast_recipient(
+                broadcast_id, customer_id, "failed", _safe_log_detail(exc, 200)
+            )
+        else:
+            self.crm.finish_broadcast_recipient(broadcast_id, customer_id, "sent")
+            if channel != "telegram_bot":
+                self.record_schedule_sends(account_id)
+        if channel == "telegram_bot":
+            gap = BROADCAST_BOT_GAP_SECONDS
+        else:
+            gap = random.uniform(*SCHEDULE_TARGET_GAP_SECONDS)
+        self.crm.delay_broadcast(broadcast_id, int((time.time() + gap) * 1000))
+        self._bump_crm_version(account_id)
+
+    def test_broadcast(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+        """Send the segment message to the account itself first (LINE only)."""
+        if not self.web_auth.has_permission(user, "manage_crm"):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied.", "forbidden")
+        account_id = _required_account_id(str(body.get("accountId") or ""))
+        if not self.web_auth.can_access_account(user, account_id):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
+        account = self.account_store.get(account_id) or {}
+        if _account_channel(account) != "line":
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "Telegram cannot send a test to yourself; check the preview instead.",
+                "broadcast_test_unsupported",
+            )
+        text = str(body.get("text") or "").strip()[:2000]
+        if not text:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Write the message first.")
+        own_mid = str(account.get("mid") or "")
+        rendered = _render_broadcast_text(text, str(body.get("sampleName") or ""))
+        api = self.get_api(account_id)
+        with self.api_lock_for(account_id):
+            api.send_text(own_mid, rendered)
+        return {"ok": True, "text": rendered}
 
     # CrmContext: what the CRM service needs from the web app.
     def crm_tenant_id(self, user: dict[str, Any] | None) -> str:
@@ -27405,6 +27524,8 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/telegram/accounts/token":
             self._require_permission("manage_accounts")
             return self.state.update_telegram_token(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/crm/broadcasts/test":
+            return self.state.test_broadcast(self._read_json(), self.current_user)
         if method == "GET" and path == "/api/telegram/user/available":
             return self.state.tg_user_available()
         if method == "POST" and path == "/api/telegram/user/start":
@@ -30304,6 +30425,14 @@ def _line_only() -> WebError:
     return WebError(
         HTTPStatus.BAD_REQUEST, "This works with LINE accounts only.", "line_only"
     )
+
+
+def _render_broadcast_text(text: str, name: str) -> str:
+    """Segment message: the customer's name plus the scheduler's placeholders."""
+    name = name.strip() or "คุณลูกค้า"
+    for token in ("{name}", "{ชื่อลูกค้า}", "{ชื่อผู้รับ}"):
+        text = text.replace(token, name)
+    return _apply_placeholders(text)
 
 
 def _crm_sender(by: str) -> tuple[str, str]:

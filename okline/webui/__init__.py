@@ -19,7 +19,13 @@ SLOTS: dict[str, list[str]] = {
     "<!--ext:chat-side-->": ["crm_chat_side.html"],
     "<!--ext:settings-tabs-->": ["telegram_settings_tab.html"],
     "<!--ext:settings-panes-->": ["telegram_settings_pane.html"],
-    "/*ext:script*/": ["crm.js", "telegram.js", "telegram_accounts.js", "telegram_personal.js"],
+    "/*ext:script*/": [
+        "crm.js",
+        "crm_broadcast.js",
+        "telegram.js",
+        "telegram_accounts.js",
+        "telegram_personal.js",
+    ],
 }
 
 

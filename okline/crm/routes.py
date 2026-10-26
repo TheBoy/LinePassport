@@ -76,6 +76,8 @@ def dispatch(
             return service.list_segments(user)
         if path == "/api/crm/settings":
             return service.get_settings(user)
+        if path == "/api/crm/broadcasts":
+            return service.list_broadcasts(user)
         return NOT_HANDLED
     if method != "POST":
         return NOT_HANDLED
@@ -105,6 +107,9 @@ def dispatch(
         ),
         "/api/crm/segments/count": lambda body: service.count_filter(user, body),
         "/api/crm/settings": lambda body: service.save_settings(user, body),
+        "/api/crm/broadcasts/preview": lambda body: service.preview_broadcast(user, body),
+        "/api/crm/broadcasts/create": lambda body: service.create_broadcast(user, body),
+        "/api/crm/broadcasts/control": lambda body: service.control_broadcast(user, body),
     }
     handler = routes.get(path)
     if handler is None:
@@ -123,4 +128,6 @@ RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("POST", "/api/crm/notes/create"): (60, 60.0),
     ("POST", "/api/crm/tasks/create"): (60, 60.0),
     ("POST", "/api/crm/segments/count"): (120, 60.0),
+    ("POST", "/api/crm/broadcasts/create"): (6, 60.0),
+    ("POST", "/api/crm/broadcasts/test"): (6, 60.0),
 }
