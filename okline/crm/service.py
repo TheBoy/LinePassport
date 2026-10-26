@@ -659,6 +659,37 @@ class CrmService:
         rows.reverse()
         return rows
 
+    def inbox_rows(self, account_ids: list[str], *, limit: int = 500) -> list[dict[str, Any]]:
+        """Customer chats of these accounts for the all-channels inbox, newest first."""
+        if not account_ids:
+            return []
+        return self.db.query(
+            "SELECT v.id, v.account_id, v.chat_id, v.channel, v.status, v.assigned_to, v.unread, "
+            "v.last_message_at, v.last_inbound_at, v.last_outbound_at, v.last_preview, "
+            "v.customer_id, c.display_name, "
+            "(SELECT i.username FROM crm_identities i WHERE i.customer_id = v.customer_id "
+            "AND i.username <> '' LIMIT 1) AS username "
+            "FROM crm_conversations v JOIN crm_customers c ON c.id = v.customer_id "
+            f"WHERE v.account_id IN ({_placeholders(account_ids)}) "
+            "ORDER BY v.last_message_at DESC LIMIT ?",
+            [*account_ids, limit],
+        )
+
+    def tags_for_customers(self, customer_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        tags: dict[str, list[dict[str, Any]]] = {}
+        for start in range(0, len(customer_ids), 500):
+            chunk = customer_ids[start : start + 500]
+            for row in self.db.query(
+                "SELECT ct.customer_id, t.id, t.name, t.color FROM crm_customer_tags ct "
+                "JOIN crm_tags t ON t.id = ct.tag_id "
+                f"WHERE ct.customer_id IN ({_placeholders(chunk)}) ORDER BY t.name_key",
+                chunk,
+            ):
+                tags.setdefault(row["customer_id"], []).append(
+                    {"id": row["id"], "name": row["name"], "color": row["color"]}
+                )
+        return tags
+
     def find_message(self, account_id: str, chat_id: str, external_id: str) -> dict[str, Any] | None:
         return self.db.query_one(
             "SELECT m.* FROM crm_messages m JOIN crm_conversations v ON v.id = m.conversation_id "

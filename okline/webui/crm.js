@@ -20,8 +20,6 @@
       crmMap: {},
       crmMapAccountId: "",
       crmChatFilter: "all",
-      crmSide: null,
-      crmSideKey: "",
       crmSideOpen: true,
       crmDrawer: null,
       crmDrawerId: "",
@@ -1314,6 +1312,20 @@
       decorateCrmRows();
     }
 
+    // A customer panel shows one chat. The Chat page has one; the all-channels inbox adds its own.
+    const CRM_CHAT_PANEL = {
+      bodyId: "crmSideBody",
+      key: "",
+      data: null,
+      context: () => ({
+        open: state.crmSideOpen,
+        accountId: selectedAccountId(),
+        chatId: state.target,
+        name: $("chatTitle").textContent
+      })
+    };
+    state.crmPanels = [CRM_CHAT_PANEL];
+
     function setCrmSideOpen(open) {
       state.crmSideOpen = Boolean(open) && hasPermission("read");
       try { localStorage.setItem(CRM_SIDE_KEY, state.crmSideOpen ? "on" : "off"); } catch (_) { /* optional */ }
@@ -1322,19 +1334,25 @@
       if (state.crmSideOpen) loadCrmSide().catch(() => {});
     }
 
-    async function loadCrmSide() {
-      if (!state.crmSideOpen) return;
-      const body = $("crmSideBody");
-      const accountId = selectedAccountId();
-      const mid = state.target;
+    function loadCrmSide() {
+      return loadCrmPanel(CRM_CHAT_PANEL);
+    }
+
+    async function loadCrmPanel(panel) {
+      const ctx = panel.context();
+      if (!ctx.open) return;
+      const body = $(panel.bodyId);
+      const accountId = ctx.accountId;
+      const mid = ctx.chatId;
       if (!accountId || !mid) {
-        state.crmSideKey = "";
+        panel.key = "";
+        panel.data = null;
         body.replaceChildren(textSpan(t("crm.side_pick_chat"), "ux-muted"));
         return;
       }
       const key = `${accountId}:${mid}`;
-      const fresh = state.crmSideKey !== key;
-      state.crmSideKey = key;
+      const fresh = panel.key !== key;
+      panel.key = key;
       if (fresh) {
         const row = document.createElement("div");
         row.className = "state-row";
@@ -1347,24 +1365,26 @@
       try {
         data = await api(`/api/crm/chat?${accountQuery(accountId)}&chatId=${encodeURIComponent(mid)}`);
       } catch (err) {
-        if (state.crmSideKey === key) body.replaceChildren(textSpan(err.message || t("common.load_failed"), "ux-muted"));
+        if (panel.key === key) body.replaceChildren(textSpan(err.message || t("common.load_failed"), "ux-muted"));
         return;
       }
-      if (state.crmSideKey !== key) return;
-      state.crmSide = data;
+      if (panel.key !== key) return;
+      panel.data = data;
       if (data.members) state.crmMembers = data.members;
       if (data.me) state.crmMe = data.me;
-      renderCrmSide();
+      renderCrmPanel(panel);
     }
 
-    function renderCrmSide() {
-      const data = state.crmSide;
-      const body = $("crmSideBody");
+    function renderCrmPanel(panel) {
+      const data = panel.data;
+      const body = $(panel.bodyId);
       body.replaceChildren();
       if (!data) return;
-      const accountId = selectedAccountId();
-      const chatId = state.target;
-      const chatName = $("chatTitle").textContent;
+      const ctx = panel.context();
+      const accountId = ctx.accountId;
+      const chatId = ctx.chatId;
+      const chatName = ctx.name;
+      const reload = () => loadCrmPanel(panel);
       if (!data.supported) {
         body.appendChild(textSpan(t("crm.side_group"), "ux-muted"));
         return;
@@ -1375,7 +1395,7 @@
       if (!customer) {
         body.appendChild(textSpan(t("crm.side_pick_chat"), "ux-muted"));
         if (data.canEdit) {
-          body.appendChild(crmButton("crm.side_start", () => crmSetStatus({accountId, chatId, name: chatName}, "open"), "primary"));
+          body.appendChild(crmButton("crm.side_start", () => crmSetStatus({accountId, chatId, name: chatName}, "open", panel), "primary"));
         }
         return;
       }
@@ -1401,7 +1421,7 @@
         button.textContent = t("crm.status_" + status);
         button.setAttribute("aria-pressed", String(conv && conv.status === status));
         button.disabled = !data.canEdit;
-        button.addEventListener("click", () => crmSetStatus(target, status).catch(toastError));
+        button.addEventListener("click", () => crmSetStatus(target, status, panel).catch(toastError));
         seg.appendChild(button);
       }
       statusBlock.append(statusTitle, seg);
@@ -1413,12 +1433,12 @@
       ownerTitle.textContent = t("crm.side_owner");
       ownerBlock.appendChild(ownerTitle);
       if (data.canEdit && conv) {
-        ownerBlock.appendChild(crmAssigneeSelect(conv, data, (assignee) => crmAssign(target, assignee)));
+        ownerBlock.appendChild(crmAssigneeSelect(conv, data, (assignee) => crmAssign(target, assignee, panel)));
       } else {
         ownerBlock.appendChild(textSpan(conv && conv.assignedTo ? crmMemberName(conv.assignedTo) : t("crm.nobody")));
       }
       if (data.canEdit && (!conv || conv.assignedTo !== state.crmMe)) {
-        const claim = crmButton("crm.claim", () => crmAssign(target, "me").then(() => toast(t("crm.claimed"))), "primary");
+        const claim = crmButton("crm.claim", () => crmAssign(target, "me", panel).then(() => toast(t("crm.claimed"))), "primary");
         claim.style.marginTop = "6px";
         claim.style.width = "100%";
         ownerBlock.appendChild(claim);
@@ -1432,7 +1452,7 @@
       const tags = document.createElement("div");
       tags.className = "crm-tags";
       for (const tag of customer.tags || []) {
-        tags.appendChild(crmTagChip(tag, data.canEdit ? (item) => crmTagCustomer(customer.id, {remove: [item.id]}).then(loadCrmSide) : null));
+        tags.appendChild(crmTagChip(tag, data.canEdit ? (item) => crmTagCustomer(customer.id, {remove: [item.id]}).then(reload) : null));
       }
       tagBlock.append(tagTitle, tags);
       if (data.canEdit) {
@@ -1442,13 +1462,13 @@
           if (event.key !== "Enter" || !input.value.trim()) return;
           const value = input.value.trim();
           input.value = "";
-          crmTagCustomer(customer.id, {add: [{name: value}]}).then(loadCrmSide).catch(toastError);
+          crmTagCustomer(customer.id, {add: [{name: value}]}).then(reload).catch(toastError);
         });
         input.addEventListener("change", () => {
           const value = input.value.trim();
           if (!value || !state.crmTags.some((tag) => tag.name === value)) return;
           input.value = "";
-          crmTagCustomer(customer.id, {add: [{name: value}]}).then(loadCrmSide).catch(toastError);
+          crmTagCustomer(customer.id, {add: [{name: value}]}).then(reload).catch(toastError);
         });
         tagBlock.appendChild(input);
       }
@@ -1459,9 +1479,9 @@
       const taskTitle = document.createElement("h4");
       taskTitle.textContent = t("crm.sec_tasks");
       taskBlock.appendChild(taskTitle);
-      for (const task of data.tasks || []) taskBlock.appendChild(crmTaskRow(task, {afterChange: loadCrmSide}));
+      for (const task of data.tasks || []) taskBlock.appendChild(crmTaskRow(task, {afterChange: reload}));
       if (data.canEdit) {
-        taskBlock.appendChild(crmButton("crm.add_task", () => crmAddTask(conv ? {customerId: customer.id} : target, loadCrmSide), "crm-link"));
+        taskBlock.appendChild(crmButton("crm.add_task", () => crmAddTask(conv ? {customerId: customer.id} : target, reload), "crm-link"));
       }
       body.appendChild(taskBlock);
 
@@ -1479,36 +1499,44 @@
           if (!area.value.trim()) return;
           await post("/api/crm/notes/create", {customerId: customer.id, body: area.value.trim()});
           toast(t("crm.note_saved"));
-          await loadCrmSide();
+          await reload();
         });
         save.style.marginTop = "6px";
         noteBlock.append(area, save);
       }
-      for (const note of data.notes || []) noteBlock.appendChild(crmNoteItem(note, data.canManage, loadCrmSide));
+      for (const note of data.notes || []) noteBlock.appendChild(crmNoteItem(note, data.canManage, reload));
       body.appendChild(noteBlock);
     }
 
-    async function crmAssign(target, assignee) {
+    async function crmAssign(target, assignee, panel) {
       const data = await post("/api/crm/chat/assign", {...target, assignee});
-      crmAfterChange(data);
+      crmAfterChange(data, panel);
     }
 
-    async function crmSetStatus(target, status) {
+    async function crmSetStatus(target, status, panel) {
       const data = await post("/api/crm/chat/status", {...target, status});
-      crmAfterChange(data);
+      crmAfterChange(data, panel);
     }
 
-    // After a change in the panel or the card, refresh what shows it.
-    function crmAfterChange(panelData) {
-      if (panelData && panelData.supported !== undefined && state.crmSideKey) {
-        state.crmSide = panelData;
-        renderCrmSide();
-      } else if (state.crmSideOpen) {
-        loadCrmSide().catch(() => {});
+    function reloadCrmPanels(except) {
+      for (const panel of state.crmPanels) {
+        if (panel !== except && panel.context().open) loadCrmPanel(panel).catch(() => {});
+      }
+    }
+
+    // After a change in a panel or the card, refresh everything that shows it.
+    function crmAfterChange(panelData, panel) {
+      if (panel && panelData && panelData.supported !== undefined && panel.key) {
+        panel.data = panelData;
+        renderCrmPanel(panel);
+        reloadCrmPanels(panel);
+      } else {
+        reloadCrmPanels();
       }
       loadCrmMap().catch(() => {});
       loadCrmSummary();
       if (state.tab === "customers" && state.crmView === "list") loadCustomers().catch(() => {});
+      document.dispatchEvent(new CustomEvent("crm:changed"));
     }
 
     async function openCrmChat(accountId, chatId, name) {
@@ -1526,7 +1554,7 @@
       clearTimeout(state.crmRefreshTimer);
       state.crmRefreshTimer = setTimeout(() => {
         loadCrmMap().catch(() => {});
-        if (state.crmSideOpen) loadCrmSide().catch(() => {});
+        reloadCrmPanels();
         if (state.tab === "customers" && state.crmView === "list") loadCustomers().catch(() => {});
         if (state.crmDrawerId) refreshCustomerDrawer().catch(() => {});
         loadCrmSummary();

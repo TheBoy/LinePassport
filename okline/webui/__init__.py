@@ -11,9 +11,10 @@ from importlib import resources
 
 # Marker in INDEX_HTML -> fragments placed there, in order.
 SLOTS: dict[str, list[str]] = {
-    "/*ext:css*/": ["crm.css", "telegram.css"],
+    "/*ext:css*/": ["crm.css", "telegram.css", "inbox.css"],
+    "<!--ext:nav-first-->": ["inbox_nav.html"],
     "<!--ext:nav-->": ["crm_nav.html"],
-    "<!--ext:panels-->": ["crm_panels.html"],
+    "<!--ext:panels-->": ["inbox_panel.html", "crm_panels.html"],
     "<!--ext:chat-filters-->": ["crm_chat_filters.html"],
     "<!--ext:convo-actions-->": ["crm_convo_button.html"],
     "<!--ext:chat-side-->": ["crm_chat_side.html"],
@@ -22,6 +23,7 @@ SLOTS: dict[str, list[str]] = {
     "/*ext:script*/": [
         "crm.js",
         "crm_broadcast.js",
+        "inbox.js",
         "telegram.js",
         "telegram_accounts.js",
         "telegram_personal.js",

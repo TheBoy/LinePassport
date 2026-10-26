@@ -4404,6 +4404,7 @@ INDEX_HTML = r"""<!doctype html>
             <button class="account-reconnect hidden" id="accountReconnectButton" type="button" data-i18n="reconnect.button">Reconnect (scan QR)</button>
             <div class="account-popover hidden" id="accountPopover" role="listbox" aria-label="LINE"></div>
           </div>
+<!--ext:nav-first-->
           <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span data-i18n="tabs.line">Chat</span><span class="nav-badge hidden" id="navChatBadge"></span></button>
 <!--ext:nav-->
           <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 14h.01M15 14h.01"/></svg><span data-i18n="tabs.assistant">Auto reply</span></button>
@@ -9153,8 +9154,8 @@ INDEX_HTML = r"""<!doctype html>
       $("imageViewerImage").removeAttribute("src");
     }
 
-    function messageMediaSrc(m, accountId, preview) {
-      const params = `${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}&chat_mid=${encodeURIComponent(targetValue())}`;
+    function messageMediaSrc(m, accountId, preview, chatMid = targetValue()) {
+      const params = `${accountQuery(accountId)}&message_id=${encodeURIComponent(m.id)}&chat_mid=${encodeURIComponent(chatMid)}`;
       return `/api/message-content?${params}${preview ? "&preview=1" : ""}`;
     }
 
@@ -9259,7 +9260,8 @@ INDEX_HTML = r"""<!doctype html>
       return box;
     }
 
-    function messageBody(m, accountId) {
+    // chatMid: the chat the message belongs to (the Chat page's open chat by default).
+    function messageBody(m, accountId, chatMid = targetValue()) {
       const ct = Number(m.contentType);
       const isImage = (ct === 1 || ct === 21) && m.id && m.mediaReady;
       const isVideo = ct === 2 && m.id && m.mediaReady;
@@ -9278,7 +9280,7 @@ INDEX_HTML = r"""<!doctype html>
         img.className = "msg-media";
         img.loading = "lazy";
         img.alt = t("content.image");
-        const mediaSrc = messageMediaSrc(m, accountId, false);
+        const mediaSrc = messageMediaSrc(m, accountId, false, chatMid);
         img.src = `${mediaSrc}&preview=1`;
         button.addEventListener("click", () => openImageViewer(mediaSrc, img.alt));
         img.addEventListener("error", () => button.replaceWith(mediaFallback(m)));
@@ -9291,8 +9293,8 @@ INDEX_HTML = r"""<!doctype html>
         video.controls = true;
         video.preload = "metadata";
         video.playsInline = true;
-        video.src = messageMediaSrc(m, accountId, false);
-        if (m.hasPreview) video.poster = messageMediaSrc(m, accountId, true);
+        video.src = messageMediaSrc(m, accountId, false, chatMid);
+        if (m.hasPreview) video.poster = messageMediaSrc(m, accountId, true, chatMid);
         video.addEventListener("error", () => video.replaceWith(mediaFallback(m)));
         return video;
       }
@@ -9301,7 +9303,7 @@ INDEX_HTML = r"""<!doctype html>
         audio.className = "msg-audio";
         audio.controls = true;
         audio.preload = "metadata";
-        audio.src = messageMediaSrc(m, accountId, false);
+        audio.src = messageMediaSrc(m, accountId, false, chatMid);
         audio.addEventListener("error", () => audio.replaceWith(mediaFallback(m)));
         return audio;
       }
@@ -9325,7 +9327,7 @@ INDEX_HTML = r"""<!doctype html>
       if ((isFile || isPdf) && m.id && m.mediaReady) {
         const a = document.createElement("a");
         a.className = "msg-file";
-        a.href = messageMediaSrc(m, accountId, false);
+        a.href = messageMediaSrc(m, accountId, false, chatMid);
         if (isFile) a.setAttribute("download", m.fileName || "file");
         else {
           a.target = "_blank";
@@ -16778,6 +16780,8 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("POST", "/api/schedules/test"): (6, 60.0),
     **crm_routes.RATE_LIMITS,
     **telegram_routes.RATE_LIMITS,
+    ("GET", "/api/inbox"): (60, 60.0),
+    ("GET", "/api/events/inbox"): (12, 60.0),
 }
 MAX_USERS = 1000
 MAX_ACCOUNTS_PER_USER = 20
@@ -16841,6 +16845,10 @@ NON_REPLY_SENDERS = frozenset({"schedule", "api", "broadcast"})
 # A chat first seen by the CRM keeps its full recent history only if it is this fresh.
 CRM_BACKFILL_RECENT_DAYS = 7
 BROADCAST_TICK_SECONDS = 2.0
+# The all-channels inbox.
+MAX_INBOX_ACCOUNTS = 50
+MAX_INBOX_CHATS = 500
+GROUP_NAME_TTL_SECONDS = 600.0
 # Bots may send quickly; personal accounts keep the scheduler's human-like gaps.
 BROADCAST_BOT_GAP_SECONDS = 1.0
 PRESENCE_STATES = frozenset({"active", "standby", "away", "busy", "idle"})
@@ -19059,6 +19067,9 @@ class WebState:
         self.inbox_events = threading.Condition()
         self.inbox_versions: dict[str, int] = {}
         self.crm_versions: dict[str, int] = {}
+        # LINE group names for the all-channels inbox, refreshed in the background.
+        self.group_name_cache: dict[str, tuple[float, dict[str, str]]] = {}
+        self.group_name_pending: set[str] = set()
         self.inbox_watchers: dict[str, float] = {}
         self.ops_watchers: dict[str, OpsWatcher] = {}
         self.ops_refresh_pending: set[str] = set()
@@ -21209,6 +21220,170 @@ class WebState:
         if changed:
             self._bump_crm_version(account_id)
 
+    # -- the all-channels inbox ----------------------------------------------
+    def inbox_accounts(self, user: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if not self.web_auth.has_permission(user, "read"):
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied.", "forbidden")
+        allowed = self.web_auth.allowed_account_ids(user)
+        return self.account_store.list_accounts(allowed)[:MAX_INBOX_ACCOUNTS]
+
+    def inbox(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        """Every chat of every account the person can see, newest first.
+
+        Customer chats come from the CRM (all channels); LINE groups and LINE
+        unread counts come from the inbox snapshots the server already keeps,
+        so building this list never calls LINE. It does not mark the accounts
+        as watched either: that would poll LINE every few seconds for every
+        account, while LINE's own push stream already refreshes them all.
+        """
+        accounts = self.inbox_accounts(user)
+        by_id = {str(account["id"]): account for account in accounts}
+        rows = self.crm.inbox_rows(list(by_id), limit=MAX_INBOX_CHATS)
+        tags = self.crm.tags_for_customers(sorted({str(row["customer_id"]) for row in rows}))
+        snapshots: dict[str, dict[str, Any]] = {}
+        with self.inbox_snapshot_lock:
+            for account_id in by_id:
+                cached = self.inbox_snapshots.get(account_id)
+                if cached is not None:
+                    snapshots[account_id] = cached[1]
+        line_unread: dict[str, dict[str, int]] = {}
+        chats: list[dict[str, Any]] = []
+        for account_id, payload in snapshots.items():
+            account = by_id[account_id]
+            if account.get("channel") != "line":
+                continue
+            raw_boxes = payload.get("messageBoxes", []) if isinstance(payload, dict) else []
+            boxes = [box for box in raw_boxes if isinstance(box, dict)]
+            line_unread[account_id] = {
+                _message_box_id(box): _message_box_unread_count(box) for box in boxes
+            }
+            groups = [box for box in boxes if _chat_is_group(_message_box_id(box))]
+            if groups:
+                names = self._group_names(account_id)
+                for box in groups:
+                    chats.append(self._inbox_group_row(account, box, names))
+        for row in rows:
+            row_account = by_id.get(str(row["account_id"]))
+            if row_account is None:
+                continue
+            channel = str(row_account.get("channel") or "line")
+            chat_id = str(row["chat_id"])
+            preview = str(row["last_preview"] or "")
+            last_in = _coerce_int(row["last_inbound_at"])
+            last_out = _coerce_int(row["last_outbound_at"])
+            unread = (
+                line_unread.get(str(row["account_id"]), {}).get(chat_id, 0)
+                if channel == "line"
+                else _coerce_int(row["unread"])
+            )
+            chats.append(
+                {
+                    "key": f"{row['account_id']}|{chat_id}",
+                    "accountId": str(row["account_id"]),
+                    "channel": "telegram" if channel.startswith("telegram") else "line",
+                    "chatId": chat_id,
+                    "kind": "contact",
+                    "name": str(row["display_name"] or "")
+                    or (f"@{row['username']}" if row["username"] else ""),
+                    "username": str(row["username"] or ""),
+                    "customerId": str(row["customer_id"]),
+                    "conversationId": str(row["id"]),
+                    "status": str(row["status"]),
+                    "assignedTo": str(row["assigned_to"] or ""),
+                    "tags": tags.get(str(row["customer_id"]), [])[:3],
+                    "unread": unread,
+                    "lastMessageAt": _coerce_int(row["last_message_at"]),
+                    "lastPreview": "" if preview in TELEGRAM_PREVIEW_TYPES else preview,
+                    "lastContentType": TELEGRAM_PREVIEW_TYPES.get(preview, 0),
+                    "lastFromMe": bool(last_out and last_out >= last_in),
+                }
+            )
+        chats.sort(key=lambda chat: chat["lastMessageAt"], reverse=True)
+        chats = chats[:MAX_INBOX_CHATS]
+        return {
+            "ok": True,
+            "accounts": [
+                {
+                    "id": str(account["id"]),
+                    "label": str(account.get("label") or account["id"]),
+                    "channel": str(account.get("channel") or "line"),
+                    "mid": str(account.get("mid") or ""),
+                    "connected": account.get("sessionState") == "connected",
+                }
+                for account in accounts
+            ],
+            "chats": chats,
+            "unread": sum(chat["unread"] for chat in chats),
+            "me": str((user or {}).get("id") or ""),
+        }
+
+    def _inbox_group_row(
+        self, account: dict[str, Any], box: dict[str, Any], names: dict[str, str]
+    ) -> dict[str, Any]:
+        chat_id = _message_box_id(box)
+        messages = _message_box_messages(box)
+        latest = max(messages, key=_message_time) if messages else {}
+        encrypted = bool(latest.get("chunks"))
+        try:
+            content_type = int(str(latest.get("contentType")))
+        except (TypeError, ValueError):
+            content_type = 0
+        own_mid = str(account.get("mid") or "")
+        return {
+            "key": f"{account['id']}|{chat_id}",
+            "accountId": str(account["id"]),
+            "channel": "line",
+            "chatId": chat_id,
+            "kind": "group",
+            "name": names.get(chat_id, ""),
+            "username": "",
+            "customerId": "",
+            "conversationId": "",
+            "status": "",
+            "assignedTo": "",
+            "tags": [],
+            "unread": _message_box_unread_count(box),
+            "lastMessageAt": _message_box_time(box),
+            "lastPreview": "" if encrypted else _short_text(latest.get("text") or "", 160),
+            "lastContentType": content_type,
+            "lastEncrypted": encrypted,
+            "lastFromMe": bool(own_mid and str(latest.get("from") or "") == own_mid),
+        }
+
+    def _group_names(self, account_id: str) -> dict[str, str]:
+        """Group names from a cache refreshed in the background (never blocks)."""
+        cached = self.group_name_cache.get(account_id)
+        stale = cached is None or time.monotonic() - cached[0] > GROUP_NAME_TTL_SECONDS
+        if stale and account_id not in self.group_name_pending:
+            self.group_name_pending.add(account_id)
+            try:
+                self.ops_refresh_executor.submit(self._refresh_group_names, account_id)
+            except RuntimeError:
+                self.group_name_pending.discard(account_id)
+        return cached[1] if cached else {}
+
+    def _refresh_group_names(self, account_id: str) -> None:
+        previous = self.group_name_cache.get(account_id)
+        names: dict[str, str] = dict(previous[1]) if previous else {}
+        try:
+            api = self.get_api(account_id)
+            with self.api_lock_for(account_id):
+                chat_mids = api.get_all_chat_mids() or {}
+                mids = list(chat_mids.get("memberChatMids", []) or [])
+                for start in range(0, len(mids), 100):
+                    result = api.get_chats(mids[start : start + 100]) or {}
+                    for raw in result.get("chats", []):
+                        group = Group.from_dict(raw)
+                        if group.chat_mid:
+                            names[group.chat_mid] = group.name
+        except Exception:
+            pass  # keep what we had; try again after the TTL
+        finally:
+            self.group_name_cache[account_id] = (time.monotonic(), names)
+            self.group_name_pending.discard(account_id)
+        if names != (previous[1] if previous else {}):
+            self._bump_inbox_version(account_id)
+
     # -- messages to a segment ------------------------------------------------
     def run_due_broadcasts(self) -> None:
         for broadcast in self.crm.due_broadcasts():
@@ -22309,6 +22484,27 @@ class WebState:
     def crm_version(self, account_id: str) -> int:
         with self.inbox_events:
             return self.crm_versions.get(account_id, 0)
+
+    def wait_any_live_event(
+        self, versions: dict[str, tuple[int, int]], timeout: float
+    ) -> dict[str, tuple[int, int]] | None:
+        """Block until the inbox or customer records of any of these accounts change."""
+        deadline = time.monotonic() + timeout
+        with self.inbox_events:
+            while True:
+                current = {
+                    account_id: (
+                        self.inbox_versions.get(account_id, 0),
+                        self.crm_versions.get(account_id, 0),
+                    )
+                    for account_id in versions
+                }
+                if current != versions:
+                    return current
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self.ai_auto_reply_engine.stop_event.is_set():
+                    return None
+                self.inbox_events.wait(remaining)
 
     def wait_live_event(
         self, account_id: str, inbox: int, crm: int, timeout: float
@@ -26866,6 +27062,8 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 return self._profile_avatar(query)
             if method == "GET" and parsed.path == "/api/events":
                 return self._events(query)
+            if method == "GET" and parsed.path == "/api/events/inbox":
+                return self._inbox_events()
             if method == "GET" and parsed.path == "/api/crm/customers/export":
                 return self._crm_export(query)
             data = self._dispatch(method, parsed.path, query)
@@ -27524,6 +27722,8 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/telegram/accounts/token":
             self._require_permission("manage_accounts")
             return self.state.update_telegram_token(self._read_json(), self.current_user)
+        if method == "GET" and path == "/api/inbox":
+            return self.state.inbox(self.current_user)
         if method == "POST" and path == "/api/crm/broadcasts/test":
             return self.state.test_broadcast(self._read_json(), self.current_user)
         if method == "GET" and path == "/api/telegram/user/available":
@@ -27615,6 +27815,50 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         api = self.state.get_api(account_id)
         with self.state.api_lock_for(account_id):
             return fn(api)
+
+    def _inbox_events(self) -> None:
+        """Server-sent events for the all-channels inbox: any account changed."""
+        account_ids = [
+            str(account["id"]) for account in self.state.inbox_accounts(self.current_user)
+        ]
+        self.close_connection = True
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", "text/event-stream; charset=utf-8")
+        self.send_header("cache-control", "no-store, no-cache")
+        self.send_header("x-accel-buffering", "no")
+        self.send_header("x-content-type-options", "nosniff")
+        self.end_headers()
+
+        def emit(chunk: str) -> bool:
+            try:
+                self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.flush()
+                return True
+            except (OSError, ValueError):
+                return False
+
+        versions = {
+            account_id: (self.state.inbox_version(account_id), self.state.crm_version(account_id))
+            for account_id in account_ids
+        }
+        if not emit(f"retry: 5000\nevent: hello\ndata: {json.dumps({'accounts': len(versions)})}\n\n"):
+            return
+        deadline = time.monotonic() + SSE_STREAM_MAX_SECONDS
+        while time.monotonic() < deadline:
+            changed = self.state.wait_any_live_event(
+                versions, min(SSE_KEEPALIVE_SECONDS, deadline - time.monotonic())
+            )
+            if self.state.ai_auto_reply_engine.stop_event.is_set():
+                return
+            if changed is None:
+                if not emit(": ping\n\n"):
+                    return
+                continue
+            moved = [account_id for account_id, value in changed.items() if value != versions[account_id]]
+            versions = changed
+            payload = json.dumps({"accountIds": moved, "at": int(time.time() * 1000)})
+            if not emit(f"event: inbox_changed\ndata: {payload}\n\n"):
+                return
 
     def _events(self, query: dict[str, list[str]]) -> None:
         """Server-sent events: push inbox changes so hidden tabs stay current."""
@@ -30442,6 +30686,10 @@ def _crm_sender(by: str) -> tuple[str, str]:
     if by in {"ai", "schedule", "api", "broadcast"}:
         return by, ""
     return "staff", by
+
+
+def _chat_is_group(chat_mid: str) -> bool:
+    return str(chat_mid or "")[:1].lower() in {"c", "r"}
 
 
 def _room_tracked(chat_mid: str) -> bool:

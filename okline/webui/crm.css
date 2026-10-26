@@ -161,6 +161,7 @@
     .crm-chat-filters::-webkit-scrollbar { display: none; }
     .crm-chip {
       flex: 0 0 auto;
+      width: auto;
       min-height: 28px;
       padding: 2px 10px;
       border: 1px solid var(--line);

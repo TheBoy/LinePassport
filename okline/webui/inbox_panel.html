@@ -1,0 +1,70 @@
+          <div class="tab-panel" data-tab-panel="inbox" id="tabPanelInbox" role="tabpanel" aria-labelledby="tabInbox">
+            <aside class="line-list inbox-list" id="inboxListPanel">
+              <div class="inbox-head">
+                <div>
+                  <h2 data-i18n="inbox.title">All chats</h2>
+                  <span class="ux-muted" data-i18n="inbox.subtitle">Every account and channel in one place</span>
+                </div>
+                <button class="icon-ghost" id="inboxRefresh" type="button" data-i18n-title="contacts.refresh_title" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.9 6.3"/><path d="M20 5v5h-5"/></svg></button>
+              </div>
+              <div class="line-search inbox-search">
+                <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M21 21l-4-4"/></svg></span>
+                <input id="inboxSearch" type="search" data-i18n-ph="inbox.search_ph" placeholder="Search name, message or account…" aria-label="Search">
+              </div>
+              <div class="crm-chat-filters inbox-channels" role="toolbar" aria-label="Channel">
+                <button class="crm-chip" type="button" data-inbox-channel="all" aria-pressed="true" data-i18n="inbox.ch_all">All</button>
+                <button class="crm-chip" type="button" data-inbox-channel="line" aria-pressed="false"><span class="inbox-dot line" aria-hidden="true"></span>LINE <span class="count" id="inboxCountLine"></span></button>
+                <button class="crm-chip" type="button" data-inbox-channel="telegram" aria-pressed="false"><span class="inbox-dot telegram" aria-hidden="true"></span>Telegram <span class="count" id="inboxCountTelegram"></span></button>
+                <button class="crm-chip" type="button" data-inbox-channel="group" aria-pressed="false"><span data-i18n="inbox.ch_groups">Groups</span> <span class="count" id="inboxCountGroup"></span></button>
+              </div>
+              <div class="inbox-filters">
+                <select id="inboxAccountFilter" aria-label="Account">
+                  <option value="" data-i18n="inbox.all_accounts">All accounts</option>
+                </select>
+                <select id="inboxStatusFilter" aria-label="Status">
+                  <option value="" data-i18n="inbox.st_any">Any status</option>
+                  <option value="unread" data-i18n="inbox.st_unread">Unread</option>
+                  <option value="mine" data-i18n="crm.chip_mine">Mine</option>
+                  <option value="unassigned" data-i18n="crm.chip_unassigned">Nobody yet</option>
+                  <option value="pending" data-i18n="crm.chip_pending">Waiting on customer</option>
+                  <option value="closed" data-i18n="crm.chip_closed">Closed</option>
+                </select>
+              </div>
+              <div class="line-rows inbox-rows" id="inboxRows"></div>
+            </aside>
+
+            <section class="line-convo inbox-convo" id="inboxConversation">
+              <header class="convo-header">
+                <button class="icon-ghost" id="inboxBack" type="button" data-i18n-title="chat.back_to_list" title="Back to chats" aria-label="Back to chats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+                <div class="convo-title">
+                  <h2 id="inboxTitle" data-i18n="inbox.pick">Pick a chat</h2>
+                  <span class="convo-sub inbox-source" id="inboxSource"></span>
+                </div>
+                <div class="convo-actions">
+                  <button class="icon-ghost" id="inboxPanelToggle" type="button" aria-pressed="false" data-i18n-title="crm.panel_toggle" title="Customer info" aria-label="Customer info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2.5"/><path d="M5.5 17a3.5 3.5 0 0 1 7 0M15 9h3M15 13h3"/></svg></button>
+                  <button class="icon-ghost" id="inboxOpenInChat" type="button" data-i18n-title="inbox.open_in_chat" title="Open in this account's chat page" aria-label="Open in this account's chat page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg></button>
+                  <button class="icon-ghost" id="inboxReload" type="button" data-i18n-title="chat.refresh" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.9 6.3"/><path d="M20 5v5h-5"/></svg></button>
+                </div>
+              </header>
+              <div class="inbox-notice hidden" id="inboxNotice" role="status"></div>
+              <div class="line-messages-shell">
+                <div class="message-list line-messages" id="inboxMessages"></div>
+              </div>
+              <div class="line-composer" id="inboxComposer">
+                <input type="file" id="inboxImageInput" accept="image/*" hidden>
+                <input type="file" id="inboxFileInput" hidden>
+                <button class="icon-ghost" id="inboxAttach" type="button" data-requires-permission="send" data-i18n-title="composer.attach" title="Attach" aria-label="Attach"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 6"/></svg></button>
+                <button class="icon-ghost" id="inboxImage" type="button" data-requires-permission="send" data-i18n-title="composer.image" title="Image" aria-label="Image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg></button>
+                <textarea id="inboxText" rows="1" data-requires-permission="send" data-i18n-ph="chat.message_ph" placeholder="Message"></textarea>
+                <button class="send-btn with-label" id="inboxSend" type="button" data-requires-permission="send" data-i18n-title="chat.send" title="Send"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4l17.4-8a1 1 0 0 0 0-1.8l-17.4-8A1 1 0 0 0 2 3.5L4 11l10 1-10 1-2 7.5a1 1 0 0 0 1.4 1z"/></svg><span data-i18n="chat.send">Send</span></button>
+              </div>
+            </section>
+
+            <aside class="crm-side inbox-side" id="inboxSide" aria-label="Customer">
+              <header class="crm-side-head">
+                <strong data-i18n="crm.side_title">Customer</strong>
+                <button class="icon-ghost" id="inboxSideClose" type="button" data-i18n-title="common.close" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+              </header>
+              <div class="crm-side-body" id="inboxSideBody"></div>
+            </aside>
+          </div>

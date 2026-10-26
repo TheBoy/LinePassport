@@ -16,8 +16,13 @@ def test_every_marker_is_filled_once():
     assert "/*ext:" not in INDEX_HTML
     assert "<!--ext:" not in INDEX_HTML
     for element_id in ("tabCustomers", "tabPanelCustomers", "crmDrawer", "crmSide",
-                       "crmChatFilters", "crmPanelToggle"):
+                       "crmChatFilters", "crmPanelToggle", "tabInbox", "tabPanelInbox",
+                       "inboxRows", "inboxMessages", "inboxSide", "navInboxBadge"):
         assert INDEX_HTML.count(f'id="{element_id}"') == 1, element_id
+
+
+def test_all_chats_comes_first_in_the_menu():
+    assert INDEX_HTML.index('id="tabInbox"') < INDEX_HTML.index('id="tabLine"')
 
 
 def test_compose_refuses_a_page_without_markers():
@@ -28,6 +33,7 @@ def test_compose_refuses_a_page_without_markers():
 def test_crm_script_runs_before_the_page_starts():
     script = INDEX_HTML[INDEX_HTML.index("<script>"):INDEX_HTML.index("</script>")]
     assert script.index('TABS.push("customers")') < script.index("setTab(localStorage.getItem")
+    assert script.index('TABS.push("inbox")') < script.index("setTab(localStorage.getItem")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
