@@ -67,7 +67,15 @@ okline = "okline.__main__:main"
 include = ["okline*"]
 
 [tool.setuptools.package-data]
-okline = ["py.typed", "ltsm/ltsm.wasm", "ltsm/ltsmSandbox.js", "ltsm/ltsm_bridge.js"]
+okline = [
+    "py.typed",
+    "ltsm/ltsm.wasm",
+    "ltsm/ltsmSandbox.js",
+    "ltsm/ltsm_bridge.js",
+    "webui/*.css",
+    "webui/*.html",
+    "webui/*.js",
+]
 
 # ---------------------------------------------------------------------------
 # Tooling

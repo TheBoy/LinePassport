@@ -1,0 +1,137 @@
+          <div class="tab-panel" data-tab-panel="customers" id="tabPanelCustomers" role="tabpanel" aria-labelledby="tabCustomers">
+            <div class="crm-page">
+              <div class="ux-row space crm-head">
+                <div>
+                  <h2 data-i18n="crm.title">Customers</h2>
+                  <span class="ux-muted" data-i18n="crm.subtitle">Everyone who has chatted with your shop, from every account, in one list.</span>
+                </div>
+                <button class="ux-help" id="crmGuideButton" type="button" data-i18n-title="crm.guide_open" title="Usage guide" aria-label="Usage guide">?</button>
+              </div>
+              <nav class="subtabs crm-views" role="tablist" aria-label="Customers">
+                <button class="subtab" type="button" role="tab" data-crm-view="list" aria-selected="true" data-i18n="crm.view_list">Customer list</button>
+                <button class="subtab" type="button" role="tab" data-crm-view="tasks" aria-selected="false"><span data-i18n="crm.view_tasks">Follow-ups</span><span class="badge bad hidden" id="crmTasksBadge"></span></button>
+                <button class="subtab" type="button" role="tab" data-crm-view="segments" aria-selected="false" data-i18n="crm.view_segments">Segments</button>
+              </nav>
+
+              <section class="ux-grid" data-crm-pane="list">
+                <div class="crm-toolbar">
+                  <input type="search" id="crmSearch" data-i18n-ph="crm.search_ph" placeholder="Search name, phone, email…" aria-label="Search">
+                  <select id="crmFilterStatus" aria-label="Status">
+                    <option value="" data-i18n="crm.filter_any_status">Any status</option>
+                    <option value="new" data-i18n="crm.status_new">New</option>
+                    <option value="open" data-i18n="crm.status_open">In progress</option>
+                    <option value="pending" data-i18n="crm.status_pending">Waiting on customer</option>
+                    <option value="closed" data-i18n="crm.status_closed">Closed</option>
+                  </select>
+                  <select id="crmFilterAssignee" aria-label="Assignee"></select>
+                  <select id="crmFilterTag" aria-label="Tag"></select>
+                  <select id="crmFilterChannel" aria-label="Channel">
+                    <option value="" data-i18n="crm.filter_any_channel">All channels</option>
+                    <option value="line">LINE</option>
+                    <option value="telegram">Telegram</option>
+                  </select>
+                  <select id="crmFilterLast" aria-label="Last contact">
+                    <option value="" data-i18n="crm.filter_any_time">Any time</option>
+                    <option value="within:1" data-i18n="crm.filter_today">Talked today</option>
+                    <option value="within:7" data-i18n="crm.filter_week">Talked this week</option>
+                    <option value="older:30" data-i18n="crm.filter_quiet30">Quiet for 30+ days</option>
+                    <option value="older:90" data-i18n="crm.filter_quiet90">Quiet for 90+ days</option>
+                  </select>
+                  <button type="button" id="crmSaveSegmentButton" data-requires-permission="manage_crm" data-i18n="crm.save_segment">Save as segment</button>
+                  <button type="button" id="crmExportButton" data-requires-permission="manage_crm" data-i18n="crm.export">Download CSV</button>
+                  <button type="button" class="primary" id="crmAddCustomerButton" data-requires-permission="crm" data-i18n="crm.add_customer">+ Add customer</button>
+                </div>
+                <div class="crm-bulk hidden" id="crmSegmentBanner">
+                  <span id="crmSegmentBannerText"></span>
+                  <button type="button" id="crmSegmentClear" data-i18n="crm.segment_clear">Show everyone</button>
+                </div>
+                <div class="crm-bulk hidden" id="crmBulkBar">
+                  <strong id="crmBulkCount"></strong>
+                  <button type="button" id="crmBulkTag" data-requires-permission="crm" data-i18n="crm.bulk_tag">Add tag</button>
+                  <button type="button" id="crmBulkUntag" data-requires-permission="crm" data-i18n="crm.bulk_untag">Remove tag</button>
+                  <button type="button" id="crmBulkMerge" data-requires-permission="manage_crm" data-i18n="crm.bulk_merge">Merge into one</button>
+                  <button type="button" id="crmBulkClear" data-i18n="crm.bulk_clear">Clear selection</button>
+                </div>
+                <div class="crm-table-wrap">
+                  <table class="crm-table">
+                    <thead>
+                      <tr>
+                        <th class="crm-check"><input type="checkbox" id="crmSelectAll" aria-label="Select all"></th>
+                        <th data-i18n="crm.col_customer">Customer</th>
+                        <th class="crm-hide-sm" data-i18n="crm.col_channel">Channel</th>
+                        <th class="crm-hide-sm" data-i18n="crm.col_tags">Tags</th>
+                        <th data-i18n="crm.col_status">Status</th>
+                        <th class="crm-hide-sm" data-i18n="crm.col_assignee">Handled by</th>
+                        <th class="crm-hide-sm" data-i18n="crm.col_last">Last contact</th>
+                      </tr>
+                    </thead>
+                    <tbody id="crmTableBody"></tbody>
+                  </table>
+                </div>
+                <div class="crm-pager">
+                  <span id="crmPagerText"></span>
+                  <button type="button" id="crmPrevPage" data-i18n="crm.prev">Previous</button>
+                  <button type="button" id="crmNextPage" data-i18n="crm.next">Next</button>
+                </div>
+              </section>
+
+              <section class="ux-grid hidden" data-crm-pane="tasks">
+                <div class="crm-toolbar">
+                  <select id="crmTaskScope" aria-label="Whose tasks">
+                    <option value="mine" data-i18n="crm.tasks_mine">My follow-ups</option>
+                    <option value="all" data-i18n="crm.tasks_all">Whole team</option>
+                  </select>
+                  <select id="crmTaskStatus" aria-label="Task status">
+                    <option value="open" data-i18n="crm.tasks_open">To do</option>
+                    <option value="done" data-i18n="crm.tasks_done">Done</option>
+                  </select>
+                  <span class="sidenav-spacer"></span>
+                  <button type="button" class="primary" id="crmAddTaskButton" data-requires-permission="crm" data-i18n="crm.add_task">+ Add follow-up</button>
+                </div>
+                <div id="crmTaskList"></div>
+              </section>
+
+              <section class="ux-grid hidden" data-crm-pane="segments">
+                <p class="ux-muted" data-i18n="crm.segments_intro">A segment is a saved filter, such as "VIP and quiet for 30 days". Its list updates by itself as customers change.</p>
+                <div class="crm-segments" id="crmSegmentList"></div>
+                <section class="ux-card" id="crmSettingsCard">
+                  <h3 data-i18n="crm.settings_title">Chat handling</h3>
+                  <div class="ux-grid">
+                    <label class="ux-row"><span data-i18n="crm.settings_autoclose">Close chats automatically after</span>
+                      <select id="crmAutoCloseDays" style="width:auto">
+                        <option value="0" data-i18n="crm.settings_never">Never</option>
+                        <option value="1">1</option><option value="3">3</option><option value="7">7</option>
+                        <option value="14">14</option><option value="30">30</option>
+                      </select>
+                      <span data-i18n="crm.settings_days_quiet">quiet days</span></label>
+                    <label class="ux-row"><span class="switch"><input type="checkbox" id="crmAutoAssign"><span></span></span>
+                      <span data-i18n="crm.settings_autoassign">Give a new chat to the first staff member who replies</span></label>
+                    <div class="ux-row"><button type="button" class="primary" id="crmSettingsSave" data-requires-permission="manage_crm" data-i18n="common.save">Save</button></div>
+                  </div>
+                </section>
+              </section>
+
+              <section class="hidden" data-crm-pane="guide">
+                <div class="help-page">
+                  <header class="help-head"><span class="help-icon">👥</span>
+                    <div class="help-head-text"><h2 data-i18n="help.customers.title">Customers</h2><p class="ux-muted" data-i18n="help.customers.intro">Know who each customer is, who is looking after them and what to do next.</p></div></header>
+                  <section class="help-card"><h3 data-i18n="help.common.steps">Follow these steps</h3>
+                    <ol class="help-steps">
+                      <li><span class="help-num">1</span><div><strong data-i18n="help.customers.s1_title">Customers appear by themselves</strong><p data-i18n="help.customers.s1_body">Anyone who chats one-to-one with any of your accounts gets a customer card. The same person on two accounts is one card.</p></div></li>
+                      <li><span class="help-num">2</span><div><strong data-i18n="help.customers.s2_title">Take on a chat</strong><p data-i18n="help.customers.s2_body">In Chat, open the customer panel and press "I'll take it", or just reply: the first person to reply looks after the chat.</p></div></li>
+                      <li><span class="help-num">3</span><div><strong data-i18n="help.customers.s3_title">Tag, note and follow up</strong><p data-i18n="help.customers.s3_body">Add tags like VIP, write notes the whole team can read, and set a follow-up with a date. You get a reminder when it is due.</p></div></li>
+                      <li><span class="help-num">4</span><div><strong data-i18n="help.customers.s4_title">Save segments</strong><p data-i18n="help.customers.s4_body">Filter the list, then save it as a segment to find the same group again.</p></div></li>
+                    </ol></section>
+                  <section class="help-card help-tips"><h3 data-i18n="help.common.tips">Tips</h3>
+                    <ul><li data-i18n="help.customers.tip1">A chat assigned to someone only notifies that person.</li>
+                      <li data-i18n="help.customers.tip2">When a customer writes to a closed chat, it opens again by itself.</li></ul></section>
+                  <section class="help-card"><h3 data-i18n="help.common.faq">Questions</h3>
+                    <details class="help-faq"><summary data-i18n="help.customers.q1">Why are groups missing?</summary><p data-i18n="help.customers.a1">Customer cards are for one-to-one chats. Group chats still work as usual in Chat.</p></details>
+                    <details class="help-faq"><summary data-i18n="help.customers.q2">The same person shows up twice</summary><p data-i18n="help.customers.a2">Tick both rows and choose "Merge into one". Chats, tags, notes and follow-ups move to one card.</p></details></section>
+                  <div class="help-actions"><button type="button" id="crmGuideBack" data-i18n="crm.guide_back">Back to customers</button></div>
+                </div>
+              </section>
+            </div>
+          </div>
+          <div class="crm-scrim hidden" id="crmScrim"></div>
+          <aside class="crm-drawer hidden" id="crmDrawer" role="dialog" aria-modal="true" aria-labelledby="crmDrawerName"></aside>

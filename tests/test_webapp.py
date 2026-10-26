@@ -3057,12 +3057,13 @@ def test_every_primary_menu_and_settings_has_a_detailed_usage_guide():
         ('id="logsGuideView"', "logs"),
         ('id="toolsGuideView"', "tools"),
         ('id="settingsGuidePane"', "settings"),
+        ('data-crm-pane="guide"', "customers"),
     ):
         assert container in INDEX_HTML
         for part in ("title", "intro", "s1_title", "s1_body", "tip1", "q1", "a1"):
             assert f'data-i18n="help.{name}.{part}"' in INDEX_HTML, (name, part)
             assert f'"help.{name}.{part}": {{th: ' in INDEX_HTML, (name, part)
-    assert INDEX_HTML.count('<div class="help-page">') == 7
+    assert INDEX_HTML.count('<div class="help-page">') == 8
     assert 'id="lineGuideButton"' in INDEX_HTML
     assert 'id="assistantGuideAutoReplyButton"' in INDEX_HTML
     assert 'id="toolsGuideViewButton"' in INDEX_HTML

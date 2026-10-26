@@ -70,6 +70,7 @@ from .webpush import (
     push_endpoint_allowed,
     send_web_push,
 )
+from .webui import compose_index
 
 INDEX_HTML = r"""<!doctype html>
 <html lang="en">
@@ -4194,7 +4195,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     body.account-pop-mobile .sidenav .account-card { display: none; }
     body.account-pop-mobile .account-popover { position: static; }
-
+/*ext:css*/
 
   </style>
 </head>
@@ -4398,6 +4399,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="account-popover hidden" id="accountPopover" role="listbox" aria-label="LINE"></div>
           </div>
           <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span data-i18n="tabs.line">Chat</span><span class="nav-badge hidden" id="navChatBadge"></span></button>
+<!--ext:nav-->
           <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 14h.01M15 14h.01"/></svg><span data-i18n="tabs.assistant">Auto reply</span></button>
           <button class="tab" id="tabBot" type="button" role="tab" aria-selected="false" aria-controls="tabPanelBot" data-tab="bot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span data-i18n="tabs.bot">Scheduled sends</span></button>
           <button class="tab" id="tabKpi" type="button" role="tab" aria-selected="false" aria-controls="tabPanelKpi" data-tab="kpi" data-requires-permission="manage_accounts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span data-i18n="tabs.kpi">Staff KPI</span><span class="nav-badge hidden" id="navKpiBadge"></span></button>
@@ -4409,6 +4411,7 @@ INDEX_HTML = r"""<!doctype html>
           <button class="tab dev" id="tabLogs" type="button" role="tab" aria-selected="false" aria-controls="tabPanelLogs" data-tab="logs" data-requires-permission="read"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg><span data-i18n="tabs.logs">Activity log</span></button>
         </nav>
         <div class="tab-panels">
+<!--ext:panels-->
           <div class="tab-panel active" data-tab-panel="line" id="tabPanelLine" role="tabpanel" aria-labelledby="tabLine">
         <aside class="line-list" id="lineListPanel">
           <div class="reconnect-banner hidden" id="reconnectBanner" role="alert">
@@ -4457,6 +4460,7 @@ INDEX_HTML = r"""<!doctype html>
             <input id="contactSearch" data-requires-account data-i18n-ph="contacts.search_ph" placeholder="Search…">
           </div>
           <div class="fresh-row"><span class="fresh-chip" id="freshnessChip" aria-live="off" hidden></span></div>
+<!--ext:chat-filters-->
           <div class="line-rows all-list" id="allList"></div>
           <div class="line-rows contact-list hidden" id="contactsList"></div>
           <div class="line-rows group-list hidden" id="groupsList"></div>
@@ -4471,6 +4475,7 @@ INDEX_HTML = r"""<!doctype html>
             </div>
             <div class="convo-actions">
               <button class="presence-chip" id="presenceChip" type="button" data-i18n-title="presence.chip_title" title="Your status"><span class="status-dot" id="presenceDot"></span><span id="presenceLabel">-</span></button>
+<!--ext:convo-actions-->
               <button class="icon-ghost" id="lineGuideButton" type="button" data-i18n-title="line_guide.open" title="Usage guide" aria-label="Usage guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.7 2c-1 .6-1.5 1.1-1.5 2.2"/><path d="M12 17h.01"/></svg></button>
               <button class="icon-ghost" id="reloadMessagesButton" type="button" data-requires-account data-requires-permission="read" data-i18n-title="chat.refresh" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-1.9 6.3"/><path d="M20 5v5h-5"/></svg></button>
               <div class="convo-menu-wrap">
@@ -4510,6 +4515,7 @@ INDEX_HTML = r"""<!doctype html>
             <button class="send-btn with-label" id="sendButton" type="button" data-requires-account data-requires-permission="send" data-i18n-title="chat.send" title="Send"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4l17.4-8a1 1 0 0 0 0-1.8l-17.4-8A1 1 0 0 0 2 3.5L4 11l10 1-10 1-2 7.5a1 1 0 0 0 1.4 1z"/></svg><span data-i18n="chat.send">Send</span></button>
           </div>
         </section>
+<!--ext:chat-side-->
         <div class="line-guide-view hidden" id="lineGuideView">
           <div class="tab-panel-inner guide-panel-inner">
             <div class="help-page">
@@ -15508,6 +15514,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       if (state.jobsView === "calendar" && !options.background) await loadJobsCalendar().catch(() => {});
     };
 
+/*ext:script*/
     state.wizard = newWizardDraft();
     setInterval(renderFreshness, 1000);
     setInterval(() => sendPresence(false), 10000);
@@ -15530,6 +15537,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
 </body>
 </html>
 """
+INDEX_HTML = compose_index(INDEX_HTML)
 
 SERVICE_WORKER_JS = r"""
 self.addEventListener("push", (event) => {
