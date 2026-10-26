@@ -34,7 +34,7 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
@@ -56,6 +56,9 @@ from .assistant import (
     rank_chunks,
 )
 from .client import OkLine
+from .crm import CrmDatabase, CrmError, CrmService
+from .crm import routes as crm_routes
+from .crm.engine import CrmEngine
 from .entities import Group
 from .exceptions import LineAuthError, LineLoginRequired
 from .hmac_signer import LtsmBridge
@@ -16757,6 +16760,7 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("GET", "/api/kpi"): (30, 60.0),
     ("POST", "/api/team/create"): (10, 60.0),
     ("POST", "/api/schedules/test"): (6, 60.0),
+    **crm_routes.RATE_LIMITS,
 }
 MAX_USERS = 1000
 MAX_ACCOUNTS_PER_USER = 20
@@ -16816,7 +16820,9 @@ ROOM_CLOSE_AFTER_SECONDS = 24 * 3600
 MAX_TRACKED_ROOMS = 2000
 OUTGOING_ATTRIBUTION_TTL_SECONDS = 300.0
 # Outgoing messages that are not a human/AI reply to a waiting customer.
-NON_REPLY_SENDERS = frozenset({"schedule", "api"})
+NON_REPLY_SENDERS = frozenset({"schedule", "api", "broadcast"})
+# A chat first seen by the CRM keeps its full recent history only if it is this fresh.
+CRM_BACKFILL_RECENT_DAYS = 7
 PRESENCE_STATES = frozenset({"active", "standby", "away", "busy", "idle"})
 PRESENCE_OFFLINE_SECONDS = 120
 PRESENCE_SAVE_SECONDS = 60.0
@@ -17219,6 +17225,8 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "manage_api",
             "ask_ai",
             "change_password",
+            "crm",
+            "manage_crm",
         ],
     },
     "admin": {
@@ -17233,6 +17241,8 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "manage_api",
             "ask_ai",
             "change_password",
+            "crm",
+            "manage_crm",
         ],
     },
     "member": {
@@ -17246,6 +17256,8 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "manage_api",
             "ask_ai",
             "change_password",
+            "crm",
+            "manage_crm",
         ],
     },
     "operator": {
@@ -17257,6 +17269,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "tools",
             "ask_ai",
             "change_password",
+            "crm",
         ],
     },
     "viewer": {
@@ -17572,6 +17585,16 @@ def _make_state_store(config: WebConfig) -> StateStore:
     if database_url:
         return PostgresStateStore(database_url, config)
     return FileStateStore(config)
+
+
+def _make_crm_database(config: WebConfig) -> CrmDatabase:
+    """Customer records live next to the web state: PostgreSQL when configured."""
+    database_url = (
+        config.database_url or os.getenv("OKLINE_DATABASE_URL") or os.getenv("DATABASE_URL")
+    )
+    if database_url:
+        return CrmDatabase(database_url=database_url)
+    return CrmDatabase(sqlite_path=os.path.join(config.state_dir, "crm.sqlite3"))
 
 
 class WebAuth:
@@ -18958,6 +18981,7 @@ class WebState:
         self.inbox_signatures: dict[str, str] = {}
         self.inbox_events = threading.Condition()
         self.inbox_versions: dict[str, int] = {}
+        self.crm_versions: dict[str, int] = {}
         self.inbox_watchers: dict[str, float] = {}
         self.ops_watchers: dict[str, OpsWatcher] = {}
         self.ops_refresh_pending: set[str] = set()
@@ -18988,6 +19012,13 @@ class WebState:
         self.ai_auto_reply_executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="linepassport-ai-reply"
         )
+        # Customer records (CRM): fed from the inbox, written by one worker thread.
+        self.crm = CrmService(_make_crm_database(config), self)
+        self.crm_cursors: dict[str, dict[str, int]] = {}
+        self.crm_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="linepassport-crm-ingest"
+        )
+        self.crm_engine = CrmEngine(self.crm, self)
         self.scheduler = ScheduleEngine(self)
         self.ai_auto_reply_engine = AiAutoReplyEngine(self)
         self.session_refresh_attempts: dict[str, float] = {}
@@ -19286,6 +19317,8 @@ class WebState:
             self.store.set("schedules", {"schedules": schedules})
 
     def close(self) -> None:
+        self.crm_engine.stop()
+        self.crm_executor.shutdown(wait=True, cancel_futures=True)
         self.session_keeper.close()
         self.ai_auto_reply_engine.close()
         for watcher in list(self.ops_watchers.values()):
@@ -19306,6 +19339,7 @@ class WebState:
             self.apis = {}
         for api in apis:
             api.close()
+        self.crm.close()
         self.store.close()
 
     def api_lock_for(self, account_id: str) -> threading.RLock:
@@ -19355,7 +19389,7 @@ class WebState:
             with self.inbox_snapshot_lock:
                 self.inbox_snapshots[account_id] = (time.monotonic(), payload)
             self.inbox_refreshed_at[account_id] = time.monotonic()
-            self._after_inbox_fetch(account_id, payload)
+            self._after_inbox_fetch(account_id, payload, api)
             return payload
 
     def chat_summary_map(
@@ -20124,6 +20158,11 @@ class WebState:
                 os.remove(token_file)
             except OSError:
                 traceback.print_exc()
+        self.crm_cursors.pop(account_id, None)
+        try:
+            self.crm.purge_account(account_id)
+        except Exception:
+            traceback.print_exc()
         return removed
 
     def update_account(
@@ -20705,11 +20744,22 @@ class WebState:
         account = self.account_store.get(account_id) or {}
         label = str(account.get("label") or "LINE")
         now = time.time()
+        try:
+            # A chat someone took on only alerts that person.
+            assignees = self.crm.assignees_for_chats(account_id, chat_mids)
+        except Exception:
+            traceback.print_exc()
+            assignees = {}
         for user_id, subscriptions in self._push_recipients(account_id):
             with self.push_lock:
                 fresh = [
                     mid
                     for mid in chat_mids
+                    if assignees.get(mid, user_id) == user_id
+                ]
+                fresh = [
+                    mid
+                    for mid in fresh
                     if escalate
                     or now - self.push_last_sent.get((user_id, account_id, mid), 0)
                     >= PUSH_ROOM_COOLDOWN_SECONDS
@@ -20779,7 +20829,9 @@ class WebState:
         except Exception:
             traceback.print_exc()
 
-    def _after_inbox_fetch(self, account_id: str, payload: dict[str, Any]) -> None:
+    def _after_inbox_fetch(
+        self, account_id: str, payload: dict[str, Any], api: OkLine | None = None
+    ) -> None:
         try:
             raw_boxes = payload.get("messageBoxes", [])
             boxes = [box for box in raw_boxes if isinstance(box, dict)] if isinstance(
@@ -20798,8 +20850,224 @@ class WebState:
             own_mid = str((self.account_store.get(account_id) or {}).get("mid") or "")
             if own_mid:
                 self.update_room_state(account_id, own_mid, boxes)
+                self._queue_crm_ingest(account_id, own_mid, boxes)
         except Exception:
             traceback.print_exc()
+
+    # -- customer records (CRM) ----------------------------------------------
+    def _crm_cursor_map(self, account_id: str) -> dict[str, int]:
+        cursors = self.crm_cursors.get(account_id)
+        if cursors is None:
+            cursors = {
+                str(row["chat_id"]): int(row["last_message_at"] or 0)
+                for row in self.crm.db.query(
+                    "SELECT chat_id, last_message_at FROM crm_conversations WHERE account_id = ?",
+                    (account_id,),
+                )
+            }
+            self.crm_cursors[account_id] = cursors
+        return cursors
+
+    def _queue_crm_ingest(
+        self, account_id: str, own_mid: str, boxes: list[dict[str, Any]]
+    ) -> None:
+        """Hand new one-to-one messages to the CRM worker (decrypting happens there)."""
+        owner_id = self._account_owner_id(account_id)
+        if not owner_id:
+            return
+        cursors = self._crm_cursor_map(account_id)
+        now_ms = int(time.time() * 1000)
+        work: list[tuple[str, list[dict[str, Any]], tuple[float, str] | None]] = []
+        for box in boxes:
+            chat_id = _message_box_id(box)
+            if not _room_tracked(chat_id):
+                continue
+            messages = sorted(_message_box_messages(box), key=_message_time)
+            latest = _message_time(messages[-1]) if messages else 0
+            seen = cursors.get(chat_id, 0)
+            if not latest or latest <= seen:
+                continue
+            fresh = [message for message in messages if _message_time(message) > seen]
+            if not seen and now_ms - latest > CRM_BACKFILL_RECENT_DAYS * 86_400_000:
+                # First sight of an old chat: keep the latest message as its summary.
+                fresh = fresh[-1:]
+            cursors[chat_id] = latest
+            work.append((chat_id, fresh, self.outgoing_attribution.get((account_id, chat_id))))
+        if not work:
+            return
+        try:
+            self.crm_executor.submit(self._crm_ingest_line, account_id, owner_id, own_mid, work)
+        except RuntimeError:
+            return
+
+    def _crm_ingest_line(
+        self,
+        account_id: str,
+        owner_id: str,
+        own_mid: str,
+        work: list[tuple[str, list[dict[str, Any]], tuple[float, str] | None]],
+    ) -> None:
+        api: OkLine | None = None
+        try:
+            api = self.get_api(account_id)
+        except Exception:
+            api = None
+        changed = False
+        for chat_id, messages, attribution in work:
+            items = []
+            for message in messages:
+                at = _message_time(message)
+                encrypted = bool(message.get("chunks"))
+                if encrypted and api is None:
+                    summary: dict[str, Any] = {"text": "[encrypted]", "contentType": 0}
+                elif encrypted:
+                    with self.api_lock_for(account_id):
+                        summary = _message_summary(cast(OkLine, api), message, {})
+                else:
+                    # Plain messages never touch the client.
+                    summary = _message_summary(cast(OkLine, api), message, {})
+                sender = str(message.get("from") or "")
+                outgoing = sender == own_mid
+                kind, sender_id = "customer", sender
+                if outgoing:
+                    by = ""
+                    if attribution and at >= attribution[0] * 1000 - 60_000:
+                        by = attribution[1]
+                    kind, sender_id = _crm_sender(by)
+                content_type = _coerce_int(summary.get("contentType"))
+                items.append(
+                    {
+                        "externalId": str(message.get("id") or f"{chat_id}:{at}"),
+                        "direction": "out" if outgoing else "in",
+                        "senderKind": kind,
+                        "senderId": sender_id,
+                        "text": str(summary.get("text") or "") if content_type == 0 else
+                        str(summary.get("fileName") or summary.get("altText") or ""),
+                        "contentType": content_type,
+                        "at": at,
+                    }
+                )
+            try:
+                result = self.crm.ingest(
+                    owner_id=owner_id,
+                    account_id=account_id,
+                    channel="line",
+                    chat_id=chat_id,
+                    contact={"externalId": chat_id},
+                    messages=items,
+                )
+            except Exception:
+                traceback.print_exc()
+                continue
+            if result and (
+                result.get("created")
+                or result.get("status") != result.get("previousStatus")
+                or result.get("reopened")
+            ):
+                changed = True
+        if changed:
+            self._bump_crm_version(account_id)
+
+    # CrmContext: what the CRM service needs from the web app.
+    def crm_tenant_id(self, user: dict[str, Any] | None) -> str:
+        if not user or self.web_auth._is_god(user):
+            return ""
+        return str((self.tenant_user(user) or {}).get("id") or "")
+
+    def crm_scope(self, user: dict[str, Any] | None) -> list[str] | None:
+        if not user:
+            return []
+        if user.get("teamOwnerId"):
+            return sorted({str(item) for item in user.get("staffAccountIds") or [] if item})
+        return None
+
+    def crm_accounts(self, owner_id: str) -> list[dict[str, Any]]:
+        owner = self.web_auth._find_user(owner_id) or {}
+        ids = {str(item) for item in owner.get("accountIds") or []}
+        return [
+            {
+                "id": str(account.get("id") or ""),
+                "label": str(account.get("label") or account.get("id") or ""),
+                "channel": str(account.get("channel") or "line"),
+            }
+            for account in self.account_store.list_accounts(ids)
+        ]
+
+    def crm_members(self, owner_id: str) -> list[dict[str, Any]]:
+        owner = self.web_auth._find_user(owner_id)
+        if not owner:
+            return []
+        members = [
+            {
+                "id": owner_id,
+                "name": str(owner.get("displayName") or owner.get("username") or ""),
+                "role": "owner",
+                "active": bool(owner.get("active", True)),
+                "accountIds": sorted(str(item) for item in owner.get("accountIds") or []),
+            }
+        ]
+        for item in self.web_auth.data.get("users", []):
+            if isinstance(item, dict) and str(item.get("teamOwnerId") or "") == owner_id:
+                members.append(
+                    {
+                        "id": str(item.get("id") or ""),
+                        "name": str(item.get("displayName") or item.get("username") or ""),
+                        "role": "staff",
+                        "active": bool(item.get("active", True)),
+                        "accountIds": sorted(
+                            str(acct) for acct in item.get("staffAccountIds") or []
+                        ),
+                    }
+                )
+        return members
+
+    def crm_has_permission(self, user: dict[str, Any] | None, permission: str) -> bool:
+        return self.web_auth.has_permission(user, permission)
+
+    def crm_notify(self, user_id: str, payload: dict[str, Any]) -> None:
+        self.notify_user(user_id, payload)
+
+    def crm_changed(self, account_ids: list[str]) -> None:
+        for account_id in account_ids:
+            self._bump_crm_version(account_id)
+
+    def crm_resolve_names(
+        self, account_id: str, external_ids: list[str]
+    ) -> dict[str, dict[str, str]]:
+        account = self.account_store.get(account_id) or {}
+        if (account.get("channel") or "line") != "line" or self.account_store.requires_reauth(
+            account_id
+        ):
+            return {}
+        api = self.get_api(account_id)
+        with self.api_lock_for(account_id):
+            result = api.get_contacts(external_ids[:100])
+        contacts = result.get("contacts", {}) if isinstance(result, dict) else {}
+        profiles: dict[str, dict[str, str]] = {}
+        for mid, wrapper in contacts.items():
+            contact = wrapper.get("contact", wrapper) if isinstance(wrapper, dict) else {}
+            if not isinstance(contact, dict):
+                continue
+            name = contact.get("displayNameOverridden") or contact.get("displayName") or ""
+            if name:
+                profiles[str(mid)] = {
+                    "name": str(name),
+                    "picture": str(contact.get("picturePath") or ""),
+                }
+        return profiles
+
+    def crm_engine_tick(self) -> None:
+        return None
+
+    def notify_user(self, user_id: str, payload: dict[str, Any]) -> None:
+        """Send one person a notification on every device they turned it on for."""
+        for subscription in self._push_subscriptions():
+            if subscription.get("userId") != user_id:
+                continue
+            try:
+                self.push_executor.submit(self._deliver_push, subscription, payload)
+            except RuntimeError:
+                return
 
     def _bump_inbox_version(self, account_id: str) -> None:
         with self.inbox_events:
@@ -20809,6 +21077,34 @@ class WebState:
     def inbox_version(self, account_id: str) -> int:
         with self.inbox_events:
             return self.inbox_versions.get(account_id, 0)
+
+    def _bump_crm_version(self, account_id: str) -> None:
+        """Customer records of this account changed (status, assignee, tags...)."""
+        with self.inbox_events:
+            self.crm_versions[account_id] = self.crm_versions.get(account_id, 0) + 1
+            self.inbox_events.notify_all()
+
+    def crm_version(self, account_id: str) -> int:
+        with self.inbox_events:
+            return self.crm_versions.get(account_id, 0)
+
+    def wait_live_event(
+        self, account_id: str, inbox: int, crm: int, timeout: float
+    ) -> tuple[int, int] | None:
+        """Block until the inbox or the customer records of ``account_id`` change."""
+        deadline = time.monotonic() + timeout
+        with self.inbox_events:
+            while True:
+                current = (
+                    self.inbox_versions.get(account_id, 0),
+                    self.crm_versions.get(account_id, 0),
+                )
+                if current != (inbox, crm):
+                    return current
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self.ai_auto_reply_engine.stop_event.is_set():
+                    return None
+                self.inbox_events.wait(remaining)
 
     def wait_inbox_event(
         self, account_id: str, version: int, timeout: float
@@ -25286,6 +25582,8 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 return self._profile_avatar(query)
             if method == "GET" and parsed.path == "/api/events":
                 return self._events(query)
+            if method == "GET" and parsed.path == "/api/crm/customers/export":
+                return self._crm_export(query)
             data = self._dispatch(method, parsed.path, query)
             if isinstance(data, WebResult):
                 return self._json(data.data, data.status, headers=data.headers)
@@ -25296,6 +25594,8 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 exc.status,
                 headers=exc.headers,
             )
+        except CrmError as exc:
+            return self._json({"error": exc.message, "code": exc.code}, exc.status)
         except LineAuthError as exc:
             return self._json(
                 {"error": str(exc), "code": "line_login_required"},
@@ -25908,7 +26208,23 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.generate_ai_image(
                 str(body.get("prompt") or ""), self.current_user
             )
+        if path.startswith("/api/crm/"):
+            result = crm_routes.dispatch(
+                self.state.crm, self.current_user, method, path, query, self._read_json
+            )
+            if result is not crm_routes.NOT_HANDLED:
+                return result
         raise WebError(HTTPStatus.NOT_FOUND, "Unknown route.")
+
+    def _crm_export(self, query: dict[str, list[str]]) -> None:
+        payload = self.state.crm.export_csv(self.current_user, crm_routes.export_params(query))
+        filename = f"linepassport-customers-{time.strftime('%Y%m%d')}.csv"
+        self._bytes(
+            payload,
+            "text/csv; charset=utf-8",
+            HTTPStatus.OK,
+            headers=[("content-disposition", f'attachment; filename="{filename}"')],
+        )
 
     def _require_permission(self, permission: str) -> None:
         self.state.web_auth.require_permission(self.current_user, permission)
@@ -25954,14 +26270,18 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 return False
 
         version = self.state.inbox_version(account_id)
+        crm_version = self.state.crm_version(account_id)
         hello = json.dumps({"accountId": account_id, "version": version})
         if not emit(f"retry: 5000\nevent: hello\ndata: {hello}\n\n"):
             return
         deadline = time.monotonic() + SSE_STREAM_MAX_SECONDS
         while time.monotonic() < deadline:
             self.state.watch_inbox(account_id)
-            changed = self.state.wait_inbox_event(
-                account_id, version, min(SSE_KEEPALIVE_SECONDS, deadline - time.monotonic())
+            changed = self.state.wait_live_event(
+                account_id,
+                version,
+                crm_version,
+                min(SSE_KEEPALIVE_SECONDS, deadline - time.monotonic()),
             )
             if self.state.ai_auto_reply_engine.stop_event.is_set():
                 return
@@ -25969,12 +26289,17 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 if not emit(": ping\n\n"):
                     return
                 continue
-            version = changed
-            payload = json.dumps(
-                {"accountId": account_id, "version": version, "at": int(time.time() * 1000)}
-            )
-            if not emit(f"event: conversation_updated\ndata: {payload}\n\n"):
-                return
+            at = int(time.time() * 1000)
+            if changed[0] != version:
+                version = changed[0]
+                payload = json.dumps({"accountId": account_id, "version": version, "at": at})
+                if not emit(f"event: conversation_updated\ndata: {payload}\n\n"):
+                    return
+            if changed[1] != crm_version:
+                crm_version = changed[1]
+                payload = json.dumps({"accountId": account_id, "version": crm_version, "at": at})
+                if not emit(f"event: crm_updated\ndata: {payload}\n\n"):
+                    return
 
     def _contacts(self, api: OkLine, query: dict[str, list[str]]) -> dict[str, Any]:
         search = _query_one(query, "search", "").lower()
@@ -28658,6 +28983,15 @@ def _knowledge_sections_from_markdown(markdown: str) -> list[dict[str, str]]:
             lines.append(line)
     flush()
     return sections
+
+
+def _crm_sender(by: str) -> tuple[str, str]:
+    """CRM sender kind and id for an outgoing message attributed by ``note_outgoing``."""
+    if not by or by in {"line_app", "telegram_app"}:
+        return "app", ""
+    if by in {"ai", "schedule", "api", "broadcast"}:
+        return by, ""
+    return "staff", by
 
 
 def _room_tracked(chat_mid: str) -> bool:
