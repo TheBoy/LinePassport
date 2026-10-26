@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import time
 from typing import Any
 
@@ -64,10 +65,31 @@ class FakeContext:
         self.changed.extend(account_ids)
 
 
-@pytest.fixture
-def crm():
+PG_URL = os.getenv("OKLINE_TEST_DATABASE_URL", "")
+
+
+def reset_postgres(url: str) -> None:
+    """Drop every table so each PostgreSQL-backed test starts empty."""
+    import psycopg
+
+    with psycopg.connect(url, autocommit=True) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+        ).fetchall()
+        for (name,) in rows:
+            conn.execute(f'DROP TABLE IF EXISTS "{name}" CASCADE')
+
+
+# Every rule runs on SQLite; set OKLINE_TEST_DATABASE_URL to also run on PostgreSQL.
+@pytest.fixture(params=["sqlite", *(["postgres"] if PG_URL else [])])
+def crm(request):
     ctx = FakeContext()
-    service = CrmService(CrmDatabase(), ctx)
+    if request.param == "postgres":
+        reset_postgres(PG_URL)
+        db = CrmDatabase(database_url=PG_URL)
+    else:
+        db = CrmDatabase()
+    service = CrmService(db, ctx)
     try:
         yield service, ctx
     finally:
