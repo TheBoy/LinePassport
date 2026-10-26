@@ -945,6 +945,33 @@ INDEX_HTML = r"""<!doctype html>
       padding: 28px;
     }
 
+    .gate-accounts { display: grid; gap: 6px; margin-top: 18px; text-align: left; }
+    .gate-accounts:empty { display: none; }
+    .gate-accounts button {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 52px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+      text-align: left;
+    }
+    .gate-accounts button:hover { background: var(--surface-2); }
+    .gate-accounts .avatar { width: 34px; height: 34px; flex: 0 0 auto; color: #fff; font-size: 15px; }
+    .gate-accounts .gate-account-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--ink);
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .login-panel {
       width: min(840px, calc(100% - 32px));
       min-height: 0;
@@ -4271,8 +4298,9 @@ INDEX_HTML = r"""<!doctype html>
     <main class="main-stage">
       <section class="account-gate" id="accountGate">
         <div class="brand" id="accountGateDefault">
-          <h1 data-i18n="gate.title">Select a LINE account</h1>
-          <span data-i18n="gate.body">Choose an account from the dropdown above before using Contacts, Chat, Send, or Scheduler.</span>
+          <h1 data-i18n="gate.title">Select an account</h1>
+          <span data-i18n="gate.body">Pick the account to work with. This browser opens it for you next time.</span>
+          <div class="gate-accounts" id="accountGateList"></div>
         </div>
         <div class="brand hidden" id="accountGateNoAccess">
           <h1 data-i18n="gate.none_shared_title">No LINE account shared with you</h1>
@@ -6328,8 +6356,8 @@ INDEX_HTML = r"""<!doctype html>
       "role.viewer": {th: "ผู้ชม", en: "Viewer"},
       "role.locked": {th: "ล็อกอยู่", en: "Locked"},
       "perm.denied": {th: "คุณไม่มีสิทธิ์ทำรายการนี้", en: "You do not have permission for this action."},
-      "gate.title": {th: "เลือกบัญชี LINE", en: "Select a LINE account"},
-      "gate.body": {th: "เลือกบัญชีจากเมนูด้านบนก่อนใช้งาน รายชื่อ แชท ส่งข้อความ หรือตัวตั้งเวลาส่ง", en: "Choose an account from the dropdown above before using Contacts, Chat, Send, or Scheduler."},
+      "gate.title": {th: "เลือกบัญชี", en: "Select an account"},
+      "gate.body": {th: "เลือกบัญชีที่จะใช้งาน ครั้งต่อไปเบราว์เซอร์นี้จะเปิดบัญชีนี้ให้เลย", en: "Pick the account to work with. This browser opens it for you next time."},
       "gate.none_shared_title": {th: "ยังไม่มีบัญชี LINE ที่แชร์ให้คุณ", en: "No LINE account shared with you"},
       "gate.none_shared_body": {th: "ขอสิทธิ์เข้าถึงบัญชี LINE จากแอดมิน", en: "Ask an administrator to grant you access to a LINE account."},
       "settings.title": {th: "ตั้งค่า", en: "Settings"},
@@ -7298,7 +7326,41 @@ INDEX_HTML = r"""<!doctype html>
     function showGate(noAccess) {
       $("accountGateDefault").classList.toggle("hidden", !!noAccess);
       $("accountGateNoAccess").classList.toggle("hidden", !noAccess);
+      if (!noAccess) renderGateAccounts();
       setView("gate");
+    }
+
+    // The account picker lives in the sidebar, which the gate hides, so the gate
+    // lists the accounts itself.
+    function renderGateAccounts() {
+      const list = $("accountGateList");
+      list.replaceChildren();
+      for (const account of state.accounts || []) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.dataset.accountId = account.id;
+        const avatar = document.createElement("span");
+        avatar.className = "avatar";
+        avatar.textContent = initialsOf(account.label || account.id);
+        const dot = document.createElement("span");
+        dot.className = "status-dot " + (account.sessionState === "reauth_required" || !account.tokenFileExists ? "bad" : "ok");
+        btn.append(avatar, textSpan(account.label || account.id, "gate-account-name"), dot);
+        btn.addEventListener("click", () => {
+          $("accountSelect").value = account.id;
+          selectAccount().catch(toastError);
+        });
+        list.appendChild(btn);
+      }
+    }
+
+    const LAST_ACCOUNT_KEY = "okline.lastAccount";
+
+    function rememberedAccountId() {
+      try { return localStorage.getItem(LAST_ACCOUNT_KEY) || ""; } catch (_) { return ""; }
+    }
+
+    function rememberAccount(accountId) {
+      try { localStorage.setItem(LAST_ACCOUNT_KEY, accountId); } catch (_) { /* optional */ }
     }
 
     async function goHome() {
@@ -8161,6 +8223,7 @@ INDEX_HTML = r"""<!doctype html>
         setAccountControls(false);
         return;
       }
+      rememberAccount(accountId);
       setView("workspace");
       setAccountControls(false);
       setAccountSwitchLoading(true);
@@ -8193,9 +8256,12 @@ INDEX_HTML = r"""<!doctype html>
           else showGate(true);
           return;
         }
-        // Item 2: a solo account skips the picker gate entirely.
-        if (!accountId && state.accounts.length === 1) {
-          state.activeAccountId = state.accounts[0].id;
+        // Item 2: a solo account skips the picker gate entirely, and so does the
+        // account this browser used last.
+        const remembered = state.accounts.find((item) => item.id === rememberedAccountId());
+        const preset = state.accounts.length === 1 ? state.accounts[0] : remembered;
+        if (!accountId && preset) {
+          state.activeAccountId = preset.id;
           renderAccounts();
           await selectAccount();
           return;

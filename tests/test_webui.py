@@ -25,6 +25,26 @@ def test_all_chats_comes_first_in_the_menu():
     assert INDEX_HTML.index('id="tabInbox"') < INDEX_HTML.index('id="tabLine"')
 
 
+def _block(start: str, end: str) -> str:
+    begin = INDEX_HTML.index(start)
+    return INDEX_HTML[begin:INDEX_HTML.index(end, begin)]
+
+
+def test_account_gate_lists_accounts_and_remembers_the_last_one():
+    # The header has no account picker on desktop, so the gate must offer the accounts.
+    assert INDEX_HTML.count('id="accountGateList"') == 1
+    assert "if (!noAccess) renderGateAccounts();" in _block("function showGate", "function renderGateAccounts")
+    gate = _block("function renderGateAccounts", "const LAST_ACCOUNT_KEY")
+    assert '$("accountSelect").value = account.id;' in gate and "selectAccount()" in gate
+    # A returning browser goes straight to the account it used last.
+    assert "rememberAccount(accountId);" in _block("async function selectAccount", "async function refreshStatus")
+    status = _block("async function refreshStatus", "setView(\"workspace\");")
+    assert "rememberedAccountId()" in status and "if (!accountId && preset)" in status
+    # Extensions decorate the same list: Telegram labels and the All chats entry.
+    assert "baseRenderGateAccountsForTg = renderGateAccounts" in INDEX_HTML
+    assert "baseRenderGateAccountsForInbox = renderGateAccounts" in INDEX_HTML
+
+
 def test_compose_refuses_a_page_without_markers():
     with pytest.raises(RuntimeError):
         webui.compose_index("<html></html>")

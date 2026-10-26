@@ -88,6 +88,12 @@
     .inbox-convo.no-chat .line-composer { visibility: hidden; }
     .inbox-convo.no-chat .convo-actions { visibility: hidden; }
     #inboxBack { display: none; }
+    .gate-accounts .gate-all-chats { border-color: var(--accent); background: rgba(6, 199, 85, .06); }
+    .gate-accounts .gate-all-chats:hover { background: rgba(6, 199, 85, .12); }
+    .gate-all-chats > svg { flex: 0 0 auto; width: 22px; height: 22px; margin: 0 6px; color: var(--accent-ink); }
+    .gate-all-chats .gate-account-name { display: grid; gap: 1px; white-space: normal; }
+    .gate-all-chats .gate-account-name > span:first-child { color: var(--ink); }
+    .gate-all-chats .gate-all-chats-sub { color: var(--muted); font-size: 12px; font-weight: 400; }
     #inboxPanelToggle[aria-pressed="true"] { color: var(--accent-ink); background: rgba(6, 199, 85, .1); }
 
     @media (max-width: 1200px) {

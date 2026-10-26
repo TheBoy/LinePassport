@@ -505,6 +505,35 @@
       baseApplyPermissionsForInbox();
       $("tabInbox").classList.toggle("hidden", !hasPermission("read"));
     };
+    // With several accounts the account gate also offers All chats.
+    const baseRenderGateAccountsForInbox = renderGateAccounts;
+    renderGateAccounts = function () {
+      baseRenderGateAccountsForInbox();
+      if ((state.accounts || []).length < 2 || !hasPermission("read")) return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "gate-all-chats";
+      const text = document.createElement("span");
+      text.className = "gate-account-name";
+      text.append(textSpan(t("tabs.inbox")), textSpan(t("inbox.subtitle"), "gate-all-chats-sub"));
+      button.append($("tabInbox").querySelector("svg").cloneNode(true), text);
+      button.addEventListener("click", openInboxFromGate);
+      $("accountGateList").prepend(button);
+    };
+
+    // The workspace needs an active account: open the last used (or a connected)
+    // one underneath, then show every account's chats.
+    function openInboxFromGate() {
+      const accounts = state.accounts || [];
+      const connected = (account) => account.sessionState === "connected";
+      const pick = accounts.find((item) => item.id === rememberedAccountId() && connected(item))
+        || accounts.find(connected) || accounts[0];
+      if (!pick) return;
+      $("accountSelect").value = pick.id;
+      const switching = selectAccount();
+      setTab("inbox");
+      switching.catch(toastError);
+    }
     document.addEventListener("crm:changed", () => scheduleInboxReload([]));
 
     document.querySelectorAll("[data-inbox-channel]").forEach((chip) => {

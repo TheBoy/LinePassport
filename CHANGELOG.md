@@ -141,6 +141,9 @@ All notable changes to OkLine are documented here. The format follows
   verify. It now signs with no token, and if rejected retries with the stale
   token in X-Line-Access and a matching signature.
 - The reconnect page title names the account ("Reconnect LINE account: <name>").
+- **Stuck on "Select an account" with several accounts.** Since the sidebar
+  redesign, desktop had no account picker on that screen. It now lists the
+  accounts (and All chats), and each browser reopens the account it used last.
 
 ## [2.8.0] - 2026-07-08
 

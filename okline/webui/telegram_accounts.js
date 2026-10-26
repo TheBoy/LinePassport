@@ -127,6 +127,16 @@
       }
     };
 
+    const baseRenderGateAccountsForTg = renderGateAccounts;
+    renderGateAccounts = function () {
+      baseRenderGateAccountsForTg();
+      $("accountGateList").querySelectorAll("[data-account-id]").forEach((button) => {
+        if (isTelegramAccount(button.dataset.accountId)) {
+          button.insertBefore(textSpan("Telegram", "badge telegram"), button.querySelector(".status-dot"));
+        }
+      });
+    };
+
     const baseRenderAccountCardForTg = renderAccountCard;
     renderAccountCard = function () {
       baseRenderAccountCardForTg();
