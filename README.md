@@ -41,7 +41,9 @@ Prefer Python? Jump to [Quick start](#quick-start) below.
 - **Response recording** — capture, redact and export every request/response.
 - **CLI** — `python -m okline …` to call any endpoint from the shell.
 - **LinePassport web app** — team inbox with KPI, AI auto-reply and scheduled
-  sends, plus **Customers (CRM)**: customer cards across accounts, chat
+  sends, an **All chats** page with every LINE and Telegram account in one list
+  (each chat labelled with its channel and account), plus
+  **Customers (CRM)**: customer cards across accounts, chat
   assignment and status, tags, notes, follow-ups, segments and paced segment
   messages.
 - **Telegram** — staff alerts you can reply to from Telegram, and Telegram bots

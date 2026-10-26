@@ -7,6 +7,16 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **All chats.** One page for every LINE and Telegram account the person can
+  open: customer chats and LINE groups newest first, each labelled with its
+  channel and account, with unread counts, status and handler. Filter by
+  channel, account or status (unread / mine / nobody yet / waiting / closed),
+  search by name, message or account, and reply, send images and files, or
+  use the customer panel without switching accounts. The list updates live
+  and is built from data the server already keeps, so LINE is not polled any
+  faster (group names are looked up at most every 10 minutes); a
+  disconnected account's chats stay listed with a notice.
+
 - **Customers (CRM).** A new "Customers" section keeps one card per person
   across every account of a shop: contact details, tags, team notes, each
   chat with its status (new / in progress / waiting on customer / closed) and
