@@ -18,6 +18,7 @@ SLOTS: dict[str, list[str]] = {
     "<!--ext:chat-filters-->": ["crm_chat_filters.html"],
     "<!--ext:convo-actions-->": ["crm_convo_button.html"],
     "<!--ext:chat-side-->": ["crm_chat_side.html"],
+    "<!--ext:account-groups-->": ["telegram_accounts_section.html"],
     "<!--ext:settings-tabs-->": ["telegram_settings_tab.html"],
     "<!--ext:settings-panes-->": ["telegram_settings_pane.html"],
     "/*ext:script*/": [

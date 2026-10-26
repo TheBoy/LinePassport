@@ -136,7 +136,24 @@ All notable changes to OkLine are documented here. The format follows
   30-second wait when the AI may answer, and nothing outside the person's shift.
   Only known browser push services are accepted as endpoints.
 
+### Changed
+- **LINE and Telegram accounts are managed apart.** Settings → Account
+  Management has a LINE section (QR sign-in, proxy, reconnect by QR) and a
+  Telegram section (add a bot or a personal account, new token or sign in
+  again, rename); Telegram rows show "Bot · @name" instead of an internal id.
+  The account switcher, the "Select an account" screen and team access group
+  accounts under LINE and Telegram, the sidebar card and the phone header name
+  the channel, and lost-connection prompts, auto reply and errors use the
+  account's own words. The Settings tab for staff alerts is now "Telegram
+  alerts".
+
 ### Fixed
+- **Deleting a user left their Telegram accounts running.** Their bots kept
+  polling and the saved Telegram sign-in stayed on disk; customer records and
+  auto-reply settings of all their accounts stayed too. A user's accounts are
+  now removed exactly like a single deleted account.
+- **KPI missed replies sent from the Telegram app.** They now count in the
+  phone-app row, which names the account's channel.
 - **Token refresh never succeeded.** The refresh call sent no access header
   but signed X-Hmac with the stale access token, so the signature could not
   verify. It now signs with no token, and if rejected retries with the stale

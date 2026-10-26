@@ -42,9 +42,29 @@ def test_account_gate_lists_accounts_and_remembers_the_last_one():
     assert "rememberAccount(accountId);" in _block("async function selectAccount", "async function refreshStatus")
     status = _block("async function refreshStatus", "setView(\"workspace\");")
     assert "rememberedAccountId()" in status and "if (!accountId && preset)" in status
-    # Extensions decorate the same list: Telegram labels and the All chats entry.
-    assert "baseRenderGateAccountsForTg = renderGateAccounts" in INDEX_HTML
+    # LINE and Telegram are listed apart; the All chats script adds its entry on top.
+    assert "accountsByChannel(state.accounts)" in gate
     assert "baseRenderGateAccountsForInbox = renderGateAccounts" in INDEX_HTML
+
+
+def test_account_management_keeps_line_and_telegram_apart():
+    # Settings has a LINE section and a Telegram section, each with its own add buttons.
+    assert INDEX_HTML.count('id="lineAccountGroup"') == 1
+    assert INDEX_HTML.count('id="telegramAccountGroup"') == 1
+    assert INDEX_HTML.index('id="lineAccountList"') < INDEX_HTML.index('id="telegramAccountList"')
+    assert "(accounts || []).filter(accountIsLine)" in _block(
+        "function renderLineAccountList", "async function editLineAccount"
+    )
+    assert "renderTelegramAccountList(accounts);" in INDEX_HTML
+    # The switcher and team access lists group accounts by channel too.
+    assert "accountsByChannel(state.accounts)" in _block(
+        "function renderAccountPopover", "function closeAccountPopover"
+    )
+    assert INDEX_HTML.count('ACCOUNT_ADD_ACTIONS.push({\n      channel: "telegram"') == 2
+    assert "accountChecklist(data.accounts" in _block("function renderTeam", "async function createStaff")
+    # Lost connections use the account's own words (QR for LINE, token or sign-in for Telegram).
+    assert "const fix = reconnectKeys(account);" in INDEX_HTML
+    assert "baseReconnectKeysForTg = reconnectKeys" in INDEX_HTML
 
 
 def test_compose_refuses_a_page_without_markers():

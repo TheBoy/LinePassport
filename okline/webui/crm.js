@@ -157,7 +157,7 @@
       "crm.history_none": {th: "ยังไม่มีประวัติ", en: "Nothing here yet"},
       "crm.notes_none": {th: "ยังไม่มีโน้ต", en: "No notes yet"},
       "crm.delete_customer": {th: "ลบการ์ดลูกค้า", en: "Delete customer card"},
-      "crm.delete_confirm": {th: "ลบการ์ดของ {name}? แท็ก โน้ต งาน และประวัติในระบบนี้จะหายทั้งหมด (แชทใน LINE ไม่หาย)", en: "Delete {name}'s card? Tags, notes, follow-ups and history here are removed. Chats in the app itself stay."},
+      "crm.delete_confirm": {th: "ลบการ์ดของ {name}? แท็ก โน้ต งาน และประวัติในระบบนี้จะหายทั้งหมด (แชทในแอป LINE ยังอยู่ แต่ประวัติแชท Telegram ที่เก็บในระบบนี้จะหายด้วย)", en: "Delete {name}'s card? Tags, notes, follow-ups and history here are removed. LINE chats stay in the LINE app; Telegram chat history kept here is removed too."},
       "crm.merge_title": {th: "รวมลูกค้าเป็นคนเดียวกัน", en: "Merge customers"},
       "crm.merge_pick": {th: "เลือกการ์ดหลักที่จะเก็บไว้", en: "Choose the card to keep"},
       "crm.merge_need_two": {th: "เลือกอย่างน้อย 2 คนก่อน", en: "Select at least two customers first."},

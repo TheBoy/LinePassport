@@ -3,6 +3,8 @@
       "tgu.add_menu": {th: "+ เพิ่ม Telegram ส่วนตัว", en: "+ Add a personal Telegram"},
       "tgu.title": {th: "เชื่อมบัญชี Telegram ส่วนตัว", en: "Connect a personal Telegram account"},
       "tgu.reconnect_title": {th: "เข้าสู่ระบบ Telegram ของ {name} อีกครั้ง", en: "Sign {name} in to Telegram again"},
+      "tgu.reconnect_button": {th: "เข้าสู่ระบบ Telegram ใหม่", en: "Sign in to Telegram again"},
+      "tgu.banner_body": {th: "อ่านและส่งข้อความไม่ได้ จนกว่าจะเข้าสู่ระบบ Telegram ใหม่", en: "Messages can't be read or sent until you sign in to Telegram again."},
       "tgu.warning": {th: "ใช้บัญชีส่วนตัวทักลูกค้าได้ทุกคนที่มีแชทอยู่แล้ว แต่ถ้าส่งถี่หรือส่งหาคนแปลกหน้ามาก ๆ Telegram อาจระงับบัญชีได้", en: "A personal account can chat with anyone you already talk to, but sending too fast or to many strangers can get the account limited by Telegram."},
       "tgu.step1": {th: "เปิด my.telegram.org แล้วเข้าสู่ระบบด้วยเบอร์โทรของบัญชีนี้", en: "Open my.telegram.org and sign in with this account's phone number."},
       "tgu.step2": {th: "เลือก API development tools สร้างแอป แล้วคัดลอก api_id และ api_hash", en: "Choose API development tools, create an app, and copy api_id and api_hash."},
@@ -134,28 +136,19 @@
       const accountId = account ? account.id : (state.activeAccountId || selectedAccountId());
       const target = account || tgAccount(accountId);
       if (target && target.channel === "telegram_user") {
-        if (!hasPermission("manage_accounts")) return toast(t("reconnect.ask_owner"), true);
+        if (!hasPermission("manage_accounts")) return toast(t("tg.ask_owner"), true);
         addTelegramPersonal(target).catch(toastError);
         return;
       }
       baseOpenReconnectForTgu(account);
     };
 
-    const baseRenderAccountPopoverForTgu = renderAccountPopover;
-    renderAccountPopover = function () {
-      baseRenderAccountPopoverForTgu();
-      const owner = hasPermission("manage_accounts") && !(state.currentUser && state.currentUser.teamOwnerId);
-      if (!owner) return;
-      const add = document.createElement("button");
-      add.type = "button";
-      add.className = "add-account";
-      add.textContent = t("tgu.add_menu");
-      add.addEventListener("click", () => {
-        closeAccountPopover();
-        addTelegramPersonal().catch(toastError);
-      });
-      $("accountPopover").appendChild(add);
-    };
+    ACCOUNT_ADD_ACTIONS.push({
+      channel: "telegram",
+      labelKey: "tgu.add_menu",
+      visible: tgCanAdd,
+      run: () => addTelegramPersonal().catch(toastError)
+    });
 
     (function addPersonalEntryPoint() {
       const botButton = $("addTelegramAccountButton");

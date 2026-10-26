@@ -972,6 +972,62 @@ INDEX_HTML = r"""<!doctype html>
       white-space: nowrap;
     }
 
+    /* LINE and Telegram accounts are always shown apart. */
+    .channel-heading {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 10px 4px 2px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .03em;
+    }
+    .channel-heading:first-child { margin-top: 0; }
+    .channel-heading > span:last-child { color: var(--muted); }
+    .channel-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; }
+    .channel-dot.line { background: #06c755; }
+    .channel-dot.telegram { background: #229ed9; }
+    .badge.line { background: #e7f8ee; color: #067647; }
+    .account-kind { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .account-group {
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    .account-group.line { border-top: 3px solid #06c755; }
+    .account-group.telegram { border-top: 3px solid #229ed9; }
+    .account-group-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .account-group-head > div:first-child { display: grid; gap: 2px; min-width: 0; }
+    .account-group-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 16px; }
+    .account-group-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .account-group .management-row > div:first-child { display: grid; gap: 2px; min-width: 0; }
+    @media (max-width: 640px) {
+      .management-row { grid-template-columns: minmax(0, 1fr); }
+      .management-row-actions { justify-content: flex-start; }
+      .management-row-actions button { width: auto; }
+      .account-group-actions button { width: auto; }
+    }
+    .account-group .management-row .mono {
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .account-checklist { display: flex; flex-wrap: wrap; gap: 6px 28px; }
+    .account-checklist-group { display: grid; gap: 2px; min-width: 160px; }
+    .account-checklist-group .channel-heading { margin: 6px 0 2px; }
+    .kpi-account { display: block; }
+    .mobile-account-channel { flex: 0 0 auto; padding: 0 5px; border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 16px; }
+    .mobile-account-channel.line { background: #e7f8ee; color: #067647; }
+    .mobile-account-channel.telegram { background: #e6f4fb; color: #0b6ea8; }
+    .mobile-account-channel:empty { display: none; }
+
     .login-panel {
       width: min(840px, calc(100% - 32px));
       min-height: 0;
@@ -4278,7 +4334,7 @@ INDEX_HTML = r"""<!doctype html>
         <select id="accountSelect"></select>
       </label>
       <div class="top-actions">
-        <button class="mobile-account-button" id="mobileAccountButton" type="button" aria-haspopup="listbox"><span class="status-dot" id="mobileAccountDot"></span><span id="mobileAccountName">LINE</span></button>
+        <button class="mobile-account-button" id="mobileAccountButton" type="button" aria-haspopup="listbox"><span class="status-dot" id="mobileAccountDot"></span><span class="mobile-account-channel" id="mobileAccountChannel"></span><span id="mobileAccountName">LINE</span></button>
         <button class="icon-ghost" id="notificationButton" type="button" aria-pressed="false" data-sound-status="idle" data-i18n-title="notifications.enable" title="Enable notifications" aria-label="Enable notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg></button>
         <button id="refreshAllButton" data-i18n="topbar.refresh">Refresh</button>
         <div class="settings-wrap">
@@ -4287,7 +4343,7 @@ INDEX_HTML = r"""<!doctype html>
             <button id="langToggle" type="button" role="menuitem" title="ภาษา / Language">EN</button>
             <div class="menu-sep" role="separator"></div>
             <button id="changePasswordMenuButton" role="menuitem" data-i18n="topbar.change_password">Change Password</button>
-            <button id="accountManagementMenuButton" role="menuitem" data-i18n="topbar.line_account_management">LINE Account Management</button>
+            <button id="accountManagementMenuButton" role="menuitem" data-i18n="topbar.account_management">Account Management</button>
             <button id="userManagementMenuButton" role="menuitem" data-i18n="topbar.user_management">User Management</button>
             <button id="webLogoutButton" role="menuitem" data-i18n="topbar.logout">Log out</button>
           </div>
@@ -4303,8 +4359,8 @@ INDEX_HTML = r"""<!doctype html>
           <div class="gate-accounts" id="accountGateList"></div>
         </div>
         <div class="brand hidden" id="accountGateNoAccess">
-          <h1 data-i18n="gate.none_shared_title">No LINE account shared with you</h1>
-          <span data-i18n="gate.none_shared_body">Ask an administrator to grant you access to a LINE account.</span>
+          <h1 data-i18n="gate.none_shared_title">No account yet</h1>
+          <span data-i18n="gate.none_shared_body">Add your own LINE or Telegram account from Settings.</span>
         </div>
       </section>
 
@@ -4431,7 +4487,7 @@ INDEX_HTML = r"""<!doctype html>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
             </button>
             <button class="account-reconnect hidden" id="accountReconnectButton" type="button" data-i18n="reconnect.button">Reconnect (scan QR)</button>
-            <div class="account-popover hidden" id="accountPopover" role="listbox" aria-label="LINE"></div>
+            <div class="account-popover hidden" id="accountPopover" role="listbox" aria-label="Accounts"></div>
           </div>
           <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span data-i18n="tabs.line">Chat</span><span class="nav-badge hidden" id="navChatBadge"></span></button>
 <!--ext:nav-->
@@ -4451,7 +4507,7 @@ INDEX_HTML = r"""<!doctype html>
         <aside class="line-list" id="lineListPanel">
           <div class="reconnect-banner hidden" id="reconnectBanner" role="alert">
             <div>
-              <strong data-i18n="reconnect.banner_title">This LINE account is disconnected</strong>
+              <strong id="reconnectBannerTitle" data-i18n="reconnect.banner_title">This LINE account is disconnected</strong>
               <span id="reconnectBannerBody" data-i18n="reconnect.banner_body">Messages can't be read or sent until you scan a new QR.</span>
             </div>
             <button class="primary" id="reconnectBannerButton" type="button" data-i18n="reconnect.button">Reconnect (scan QR)</button>
@@ -4688,7 +4744,7 @@ INDEX_HTML = r"""<!doctype html>
                   <div class="section-body">
                     <div class="assistant-auto-reply-overview">
                       <div class="assistant-auto-reply-account">
-                        <span class="muted" data-i18n="assistant.auto_reply_account">บัญชี LINE</span>
+                        <span class="muted" data-i18n="assistant.auto_reply_account">บัญชี</span>
                         <strong id="assistantAutoReplyAccount">-</strong>
                       </div>
                       <span class="pill" id="assistantAutoReplyAiStatus" data-i18n="assistant.checking">กำลังตรวจสอบ</span>
@@ -4716,7 +4772,7 @@ INDEX_HTML = r"""<!doctype html>
                           <span class="assistant-auto-reply-state" id="assistantAutoReplyContactsState">เปิด</span>
                         </span>
                       </label>
-                      <label class="assistant-auto-reply-row">
+                      <label class="assistant-auto-reply-row" id="assistantAutoReplyGroupsRow">
                         <span class="assistant-auto-reply-copy">
                           <strong data-i18n="assistant.auto_reply_groups">Group</strong>
                           <span class="muted" data-i18n="assistant.auto_reply_groups_hint">ตอบข้อความใหม่ภายในกลุ่ม LINE</span>
@@ -5161,7 +5217,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="settings-layout">
           <nav class="settings-tabs" aria-label="Settings">
             <button id="passwordTabButton" data-settings-pane="password" data-i18n="topbar.change_password">Change Password</button>
-            <button id="accountsTabButton" data-settings-pane="accounts" data-i18n="topbar.line_account_management">LINE Account Management</button>
+            <button id="accountsTabButton" data-settings-pane="accounts" data-i18n="topbar.account_management">Account Management</button>
             <button id="usersTabButton" data-settings-pane="users" data-i18n="topbar.user_management">User Management</button>
             <button id="teamTabButton" data-settings-pane="team" data-i18n="settings.nav_team">Team</button>
             <button id="aiTabButton" data-settings-pane="ai" data-i18n="settings.nav_ai">AI</button>
@@ -5176,7 +5232,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="section-head">
               <div>
                 <h3 data-i18n="team.title">Team</h3>
-                <span class="muted" data-i18n="team.subtitle">Staff sign in with their own email and reply from your LINE account. Each reply is credited to them in KPI.</span>
+                <span class="muted" data-i18n="team.subtitle">Staff sign in with their own email and reply from your LINE and Telegram accounts. Each reply is credited to them in KPI.</span>
               </div>
             </div>
             <div class="wizard-card">
@@ -5186,7 +5242,7 @@ INDEX_HTML = r"""<!doctype html>
                 <label><span data-i18n="users.displayname">Display name</span><input id="teamNewName" autocomplete="off" maxlength="80"></label>
               </div>
               <label><span data-i18n="users.password">Password</span><input id="teamNewPassword" type="password" autocomplete="new-password"></label>
-              <div><span class="ux-muted" data-i18n="team.accounts">LINE accounts they can use</span><div class="ux-row" id="teamNewAccounts"></div></div>
+              <div><span class="ux-muted" data-i18n="team.accounts">Accounts they can use</span><div id="teamNewAccounts"></div></div>
               <button id="teamCreateButton" class="primary" type="button" data-i18n="team.add">Add staff member</button>
             </div>
             <div class="management-list" id="teamList"></div>
@@ -5268,12 +5324,23 @@ INDEX_HTML = r"""<!doctype html>
           <div class="settings-pane" id="accountsPane">
             <div class="section-head">
               <div>
-                <h3 data-i18n="accounts.title">LINE Accounts</h3>
-                <span class="muted" data-i18n="accounts.subtitle">Add, edit, or delete local LINE sessions.</span>
+                <h3 data-i18n="accounts.title">Chat accounts</h3>
+                <span class="muted" data-i18n="accounts.subtitle">LINE and Telegram accounts are added and reconnected differently, so each has its own section.</span>
               </div>
-              <button id="addAccountButton" class="primary" data-i18n="accounts.add">Add Account</button>
             </div>
-            <div class="management-list" id="lineAccountList"></div>
+            <section class="account-group line" id="lineAccountGroup">
+              <div class="account-group-head">
+                <div>
+                  <h4 class="account-group-title"><span class="channel-dot line"></span><span data-i18n="accounts.line_title">LINE accounts</span></h4>
+                  <span class="muted" data-i18n="accounts.line_subtitle">Signed in by scanning a QR code with the LINE app on a phone.</span>
+                </div>
+                <div class="account-group-actions">
+                  <button id="addAccountButton" class="primary" data-i18n="account.add">+ Add LINE account</button>
+                </div>
+              </div>
+              <div class="management-list" id="lineAccountList"></div>
+            </section>
+<!--ext:account-groups-->
           </div>
 
           <div class="settings-pane" id="usersPane">
@@ -5286,7 +5353,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="section-head" id="userManagementHead">
               <div>
                 <h3 data-i18n="users.title">Users &amp; Access</h3>
-                <span class="muted" data-i18n="users.subtitle">Assign roles and choose which LINE accounts each user can access.</span>
+                <span class="muted" data-i18n="users.subtitle">Each member has a private workspace and adds their own LINE or Telegram accounts.</span>
               </div>
             </div>
             <div class="wizard-card" id="createUserCard">
@@ -5358,6 +5425,7 @@ INDEX_HTML = r"""<!doctype html>
                 <div>
                   <h2 data-i18n="kpi.title">Staff response KPI</h2>
                   <span class="ux-muted" data-i18n="kpi.subtitle">Customer chats only. Groups and scheduled sends are not counted.</span>
+                  <span class="ux-muted kpi-account" id="kpiAccount"></span>
                 </div>
                 <div class="ux-row">
                   <select id="kpiRange" aria-label="Range">
@@ -6203,12 +6271,12 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.not_configured": {th: "ยังไม่ได้ตั้งค่า", en: "Not configured"},
       "assistant.asking": {th: "กำลังถาม Ollama...", en: "Asking Ollama..."},
       "assistant.nav_chat": {th: "แชท", en: "Chat"},
-      "assistant.nav_auto_reply": {th: "ตอบอัตโนมัติ", en: "LINE Auto Reply"},
+      "assistant.nav_auto_reply": {th: "ตอบอัตโนมัติ", en: "Auto Reply"},
       "assistant.nav_knowledge": {th: "ข้อมูลร้าน", en: "Knowledge / RAG"},
       "assistant.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
       "assistant.auto_reply_title": {th: "ตอบอัตโนมัติ", en: "Automatic LINE replies"},
       "assistant.auto_reply_hint": {th: "ทำงานบนเซิร์ฟเวอร์ตลอดเวลาแม้ปิดหน้าเว็บ โดยใช้ AI และ ข้อมูลร้าน ตอบเฉพาะข้อความใหม่", en: "Runs continuously on the server even when the web page is closed, using AI and Knowledge / RAG for new messages."},
-      "assistant.auto_reply_account": {th: "บัญชี LINE", en: "LINE account"},
+      "assistant.auto_reply_account": {th: "บัญชี", en: "Account"},
       "assistant.auto_reply_master": {th: "เปิดระบบตอบอัตโนมัติ", en: "Enable automatic replies"},
       "assistant.auto_reply_master_hint": {th: "เมื่อปิด ระบบจะไม่อ่านข้อความเพื่อส่งคำตอบ AI", en: "When off, incoming messages are not processed for AI replies."},
       "assistant.auto_reply_contacts": {th: "เพื่อน", en: "Contacts"},
@@ -6237,16 +6305,16 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.auto_reply_running": {th: "กำลังทำงาน", en: "Running"},
       "assistant.auto_reply_idle": {th: "รอเปิด เพื่อน หรือ กลุ่ม", en: "Waiting for Contacts or Groups"},
       "assistant.auto_reply_error_state": {th: "ทำงานผิดพลาด", en: "Error"},
-      "assistant.auto_reply_login_required": {th: "รอเชื่อมต่อ LINE ใหม่", en: "Waiting for LINE reconnect"},
+      "assistant.auto_reply_login_required": {th: "รอเชื่อมต่อบัญชีใหม่", en: "Waiting for the account to reconnect"},
       "assistant.auto_reply_ai_ready": {th: "AI พร้อม", en: "AI ready"},
       "assistant.auto_reply_ai_missing": {th: "ยังไม่ได้ตั้งค่า AI", en: "AI not configured"},
       "assistant.auto_reply_last_poll": {th: "ตรวจข้อความล่าสุด", en: "Last checked"},
       "assistant.auto_reply_last_reply": {th: "ตอบล่าสุด", en: "Last reply"},
       "assistant.auto_reply_error": {th: "ข้อผิดพลาด", en: "Error"},
-      "assistant.auto_reply_saved": {th: "บันทึกการตั้งค่าตอบอัตโนมัติแล้ว", en: "Automatic LINE reply settings saved."},
+      "assistant.auto_reply_saved": {th: "บันทึกการตั้งค่าตอบอัตโนมัติแล้ว", en: "Auto reply settings saved."},
       "assistant.guide_open_knowledge": {th: "ไปที่ ข้อมูลร้าน", en: "Open Knowledge / RAG"},
       "assistant.guide_open_chat": {th: "เริ่มถาม AI", en: "Start asking AI"},
-      "assistant.guide_open_auto_reply": {th: "ตั้งค่าตอบอัตโนมัติ", en: "Configure LINE Auto Reply"},
+      "assistant.guide_open_auto_reply": {th: "ตั้งค่าตอบอัตโนมัติ", en: "Configure Auto Reply"},
       "assistant.guide_open_logs": {th: "เปิด บันทึกการทำงาน", en: "Open logs"},
       "assistant.guide_example": {th: "# ข้อมูลร้าน\n\n- เปิดทุกวัน 09:00-20:00 น.\n- ส่งฟรีเมื่อยอดสั่งซื้อครบ 500 บาท\n- เปลี่ยนสินค้าได้ภายใน 7 วัน พร้อมใบเสร็จ", en: "# Store information\n\n- Open daily from 09:00 to 20:00\n- Free delivery for orders of 500 THB or more\n- Returns accepted within 7 days with a receipt"},
       "assistant.knowledge_title": {th: "ข้อมูลร้าน", en: "My Knowledge / RAG"},
@@ -6358,13 +6426,13 @@ INDEX_HTML = r"""<!doctype html>
       "perm.denied": {th: "คุณไม่มีสิทธิ์ทำรายการนี้", en: "You do not have permission for this action."},
       "gate.title": {th: "เลือกบัญชี", en: "Select an account"},
       "gate.body": {th: "เลือกบัญชีที่จะใช้งาน ครั้งต่อไปเบราว์เซอร์นี้จะเปิดบัญชีนี้ให้เลย", en: "Pick the account to work with. This browser opens it for you next time."},
-      "gate.none_shared_title": {th: "ยังไม่มีบัญชี LINE ที่แชร์ให้คุณ", en: "No LINE account shared with you"},
-      "gate.none_shared_body": {th: "ขอสิทธิ์เข้าถึงบัญชี LINE จากแอดมิน", en: "Ask an administrator to grant you access to a LINE account."},
+      "gate.none_shared_title": {th: "ยังไม่มีบัญชีที่แชร์ให้คุณ", en: "No account shared with you yet"},
+      "gate.none_shared_body": {th: "ขอสิทธิ์เข้าถึงบัญชี LINE หรือ Telegram จากแอดมิน", en: "Ask an administrator to give you access to a LINE or Telegram account."},
       "settings.title": {th: "ตั้งค่า", en: "Settings"},
-      "settings.subtitle": {th: "จัดการการเข้าถึงและบัญชี LINE", en: "Manage access and LINE accounts."},
+      "settings.subtitle": {th: "จัดการการเข้าถึงและบัญชีของร้าน", en: "Manage access and the shop's accounts."},
       "settings.subtitle_password": {th: "เปลี่ยนรหัสผ่าน", en: "Change Password"},
       "settings.subtitle_accounts": {th: "จัดการบัญชี", en: "Account Management"},
-      "settings.subtitle_line_accounts": {th: "เพิ่ม แก้ไข หรือลบบัญชี LINE", en: "Add, edit, or delete LINE accounts."},
+      "settings.subtitle_line_accounts": {th: "เพิ่ม แก้ไข หรือลบบัญชี LINE และ Telegram", en: "Add, edit, or remove LINE and Telegram accounts."},
       "settings.subtitle_users": {th: "จัดการผู้ใช้ บทบาท และบัญชี LINE ที่เข้าถึงได้", en: "Manage users, roles, and LINE account access."},
       "settings.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
       "settings.subtitle_guide": {th: "วิธีใช้รหัสผ่าน บัญชี LINE และสิทธิ์ผู้ใช้", en: "How to manage passwords, LINE accounts, and user access."},
@@ -6373,21 +6441,28 @@ INDEX_HTML = r"""<!doctype html>
       "password.current": {th: "รหัสผ่านปัจจุบัน", en: "Current password"},
       "password.new": {th: "รหัสผ่านใหม่", en: "New password"},
       "password.update": {th: "อัปเดตรหัสผ่าน", en: "Update Password"},
-      "accounts.title": {th: "บัญชี LINE", en: "LINE Accounts"},
-      "accounts.subtitle": {th: "เพิ่ม แก้ไข หรือลบเซสชัน LINE ในเครื่อง", en: "Add, edit, or delete local LINE sessions."},
+      "accounts.title": {th: "บัญชีที่ใช้คุยกับลูกค้า", en: "Chat accounts"},
+      "accounts.subtitle": {th: "บัญชี LINE และ Telegram เพิ่มและเชื่อมต่อคนละวิธี จึงแยกไว้คนละส่วน", en: "LINE and Telegram accounts are added and reconnected differently, so each has its own section."},
       "accounts.add": {th: "เพิ่มบัญชี", en: "Add Account"},
       "accounts.select": {th: "เลือกบัญชี LINE", en: "Select LINE account"},
-      "accounts.switching": {th: "กำลังสลับบัญชี LINE...", en: "Switching LINE account..."},
+      "accounts.line_title": {th: "บัญชี LINE", en: "LINE accounts"},
+      "accounts.line_subtitle": {th: "เข้าสู่ระบบด้วยการสแกน QR จากแอป LINE บนมือถือ", en: "Signed in by scanning a QR code with the LINE app on a phone."},
+      "channel.telegram_bot": {th: "Bot", en: "Bot"},
+      "channel.telegram_user": {th: "ส่วนตัว", en: "Personal"},
+      "kpi.account": {th: "บัญชี {name} · {channel}", en: "Account {name} · {channel}"},
+      "errors.account_quota": {th: "มีบัญชีครบจำนวนสูงสุดแล้ว (นับรวม LINE และ Telegram)", en: "You have the most accounts allowed (LINE and Telegram together)."},
+      "errors.staff_account_not_owned": {th: "ให้พนักงานใช้ได้เฉพาะบัญชีที่คุณเป็นเจ้าของ", en: "Staff can only be given accounts you own."},
+      "accounts.switching": {th: "กำลังสลับบัญชี...", en: "Switching account..."},
       "accounts.none_yet": {th: "ยังไม่มีบัญชี", en: "No accounts yet"},
-      "accounts.none": {th: "ไม่มีบัญชี LINE", en: "No LINE accounts"},
+      "accounts.none": {th: "ยังไม่มีบัญชี LINE", en: "No LINE accounts yet"},
       "accounts.missing": {th: "เซสชันหาย", en: "missing"},
       "accounts.session_ready": {th: "เซสชันพร้อม", en: "Session ready"},
       "accounts.session_missing": {th: "เซสชันหาย", en: "Session missing"},
-      "accounts.reconnect_required": {th: "ต้องเชื่อมต่อ LINE ใหม่", en: "Reconnect LINE"},
+      "accounts.reconnect_required": {th: "ต้องเชื่อมต่อใหม่", en: "Needs reconnecting"},
       "accounts.reconnect": {th: "เชื่อมต่อใหม่", en: "Reconnect"},
       "accounts.use": {th: "ใช้บัญชีนี้", en: "Use"},
       "accounts.edit_title": {th: "เปลี่ยนชื่อบัญชี", en: "Rename account"},
-      "accounts.name": {th: "ชื่อบัญชี LINE", en: "LINE account name"},
+      "accounts.name": {th: "ชื่อบัญชี", en: "Account name"},
       "accounts.delete": {th: "ลบ", en: "Delete"},
       "accounts.delete_title": {th: "ลบ {name}?", en: "Delete {name}?"},
       "accounts.delete_note": {th: "งานตั้งเวลาส่งของบัญชีนี้จะถูกหยุดชั่วคราว", en: "This account's scheduled jobs will be paused."},
@@ -6399,21 +6474,21 @@ INDEX_HTML = r"""<!doctype html>
       "proxy.keep_existing": {th: "เว้นว่างเพื่อใช้ พร็อกซี เดิม", en: "Leave blank to keep the current proxy"},
       "proxy.required": {th: "กรุณากรอก พร็อกซี URL", en: "Enter a proxy URL."},
       "users.title": {th: "ผู้ใช้และสิทธิ์", en: "Users & Access"},
-      "users.subtitle": {th: "กำหนดบทบาทและเลือกบัญชี LINE ที่ผู้ใช้แต่ละคนเข้าถึงได้", en: "Assign roles and choose which LINE accounts each user can access."},
+      "users.subtitle": {th: "กำหนดบทบาทและเลือกบัญชีที่ผู้ใช้แต่ละคนเข้าถึงได้", en: "Assign roles and choose which accounts each user can access."},
       "users.create": {th: "สร้างผู้ใช้", en: "Create User"},
       "users.email": {th: "อีเมล", en: "Email"},
       "users.displayname": {th: "ชื่อที่แสดง", en: "Display name"},
       "users.password": {th: "รหัสผ่าน", en: "Password"},
       "users.new_password_optional": {th: "รหัสผ่านใหม่ (เว้นว่างหากไม่เปลี่ยน)", en: "New password (leave blank to keep)"},
       "users.role": {th: "บทบาท", en: "Role"},
-      "users.accounts": {th: "บัญชี LINE ที่เข้าถึงได้", en: "Accessible LINE accounts"},
-      "users.all_accounts": {th: "ทุกบัญชี LINE", en: "All LINE accounts"},
-      "users.no_accounts": {th: "ไม่มีบัญชี LINE", en: "No LINE accounts"},
+      "users.accounts": {th: "บัญชีที่เข้าถึงได้", en: "Accessible accounts"},
+      "users.all_accounts": {th: "ทุกบัญชี", en: "All accounts"},
+      "users.no_accounts": {th: "ไม่มีบัญชี", en: "No accounts"},
       "users.admin_all_note": {th: "เฉพาะ ผู้ดูแลระบบ เท่านั้นที่เข้าถึงทุกบัญชี ผู้ใช้อื่นเห็นเฉพาะบัญชีของตนเอง", en: "Only God can access every account; other users see only their own accounts."},
       "users.disabled": {th: "ปิดใช้งาน", en: "disabled"},
       "users.god_protected": {th: "บัญชี ผู้ดูแลระบบ จัดการได้โดย ผู้ดูแลระบบ เท่านั้น", en: "Only God can manage this account"},
       "users.details": {th: "รายละเอียด", en: "Details"},
-      "users.detail_line": {th: "บัญชี LINE", en: "LINE accounts"},
+      "users.detail_line": {th: "บัญชี LINE และ Telegram", en: "LINE and Telegram accounts"},
       "users.detail_patterns": {th: "ข้อความสำเร็จรูป", en: "Patterns"},
       "users.detail_schedules": {th: "งานส่งตามเวลา", en: "Bot schedules"},
       "users.detail_ai": {th: "AI ที่ใช้งาน", en: "AI configuration"},
@@ -6752,7 +6827,7 @@ INDEX_HTML = r"""<!doctype html>
       "common.copied": {th: "คัดลอกแล้ว", en: "Copied"},
       "errors.auth_required": {th: "โปรดเข้าสู่ระบบอีกครั้ง", en: "Please sign in again."},
       "errors.forbidden": {th: "คุณไม่มีสิทธิ์ทำรายการนี้", en: "You do not have permission for this."},
-      "errors.no_account": {th: "เลือกบัญชี LINE ก่อน", en: "Select a LINE account first."},
+      "errors.no_account": {th: "เลือกบัญชีก่อน", en: "Select an account first."},
       "errors.no_session": {th: "บัญชีนี้ยังไม่ได้เข้าสู่ระบบ LINE", en: "This account is not signed in to LINE yet."},
       "errors.not_found": {th: "ไม่พบข้อมูลที่ต้องการ", en: "Not found."},
       "errors.conflict": {th: "รายการนี้กำลังทำงานอยู่แล้ว", en: "That is already in progress."},
@@ -6765,12 +6840,12 @@ INDEX_HTML = r"""<!doctype html>
       "errors.fal_quota": {th: "เครดิตหรือโควต้า fal.ai ไม่เพียงพอ โปรดตรวจสอบ Billing และยอดคงเหลือของบัญชี fal.ai", en: "fal.ai credit or quota is insufficient. Check billing and the available balance on your fal.ai account."},
       "errors.ai_key_rejected": {th: "API Key ถูกปฏิเสธหรือไม่มีสิทธิ์ใช้งาน — ตรวจสอบคีย์และสิทธิ์การใช้งานของผู้ให้บริการ", en: "The API key was rejected or lacks access — check the key and your provider access."},
       "errors.assistant_not_configured": {th: "ยังไม่ได้ตั้งค่า Ollama และโมเดล AI ที่หน้าผู้ดูแลระบบ", en: "Ollama and an AI model have not been configured on the God page."},
-      "errors.invalid_auto_reply_setting": {th: "ค่าตั้งตอบอัตโนมัติไม่ถูกต้อง", en: "Automatic LINE reply settings are invalid."},
+      "errors.invalid_auto_reply_setting": {th: "ค่าตั้งตอบอัตโนมัติไม่ถูกต้อง", en: "Auto reply settings are invalid."},
       "errors.auto_reply_group_required": {th: "เลือกอย่างน้อย 1 กลุ่ม หรือเปลี่ยนเป็นทุกกลุ่ม", en: "Select at least one group or choose All groups."},
       "errors.email_invalid": {th: "กรอกอีเมลให้ถูกต้อง", en: "Enter a valid email address."},
       "errors.email_exists": {th: "อีเมลนี้มีบัญชีอยู่แล้ว", en: "An account with this email already exists."},
       "errors.account_already_owned": {th: "บัญชี LINE นี้มีเจ้าของแล้วและไม่สามารถแชร์ข้ามสมาชิกได้", en: "This LINE account already belongs to another user and cannot be shared."},
-      "errors.account_self_service_only": {th: "สมาชิกต้องเพิ่มและจัดการบัญชี LINE ของตนเอง", en: "Each user must add and manage their own LINE accounts."},
+      "errors.account_self_service_only": {th: "สมาชิกต้องเพิ่มและจัดการบัญชีของตนเอง", en: "Each user must add and manage their own accounts."},
       "errors.password_too_short": {th: "รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร", en: "Password must be at least 8 characters."},
       "errors.password_too_long": {th: "รหัสผ่านต้องไม่เกิน 128 ตัวอักษร", en: "Password must not exceed 128 characters."},
       "errors.server_error": {th: "เกิดข้อผิดพลาดในระบบ ลองใหม่อีกครั้ง", en: "Something went wrong. Please try again."},
@@ -6795,7 +6870,7 @@ INDEX_HTML = r"""<!doctype html>
       "toast.no_stuck_jobs": {th: "ไม่มีงานค้างให้เคลียร์", en: "No stuck jobs to clear"},
       "toast.select_target_first": {th: "เลือกแชทหรือกรอกปลายทางก่อน", en: "Select a chat or enter a target first"},
       "toast.target_message_required": {th: "ต้องมีปลายทางและข้อความ", en: "Target and message are required"},
-      "toast.no_session_hint": {th: "บัญชีนี้ไม่มีเซสชันที่ใช้ได้ ไปที่จัดการบัญชี LINE แล้วกดเชื่อมต่อใหม่", en: "This account has no usable session. Open LINE Account Management and reconnect it."},
+      "toast.no_session_hint": {th: "บัญชีนี้ไม่มีเซสชันที่ใช้ได้ ไปที่ ตั้งค่า → จัดการบัญชี แล้วกดเชื่อมต่อใหม่", en: "This account has no usable session. Open Settings → Account Management and reconnect it."},
       "toast.args_json": {th: "อาร์กิวเมนต์ Endpoint ต้องเป็น JSON", en: "Endpoint args must be JSON"},
       "toast.image_required": {th: "ต้องระบุแหล่งรูปภาพ", en: "Image source is required"},
       "toast.api_url_required": {th: "ต้องระบุ URL ของ API", en: "API URL is required"},
@@ -6812,7 +6887,7 @@ INDEX_HTML = r"""<!doctype html>
       "confirm.delete_user": {th: "ลบผู้ใช้ {name}?", en: "Delete user {name}?"},
       "confirm.clear_bot_logs": {th: "ล้าง บันทึกการทำงาน ทั้งหมดของบัญชีนี้?", en: "Clear all logs for this account?"},
       "botlog.title": {th: "บันทึกการทำงาน ทั้งหมด", en: "Activity Log"},
-      "botlog.subtitle": {th: "รวมทุก action จากระบบ API AI และการตอบกลับอัตโนมัติของบัญชี LINE ที่เลือก", en: "All Bot, API, AI, and automatic reply activity for the selected LINE account."},
+      "botlog.subtitle": {th: "รวมทุก action จากระบบ API AI และการตอบกลับอัตโนมัติของบัญชีที่เลือก", en: "All Bot, API, AI, and automatic reply activity for the selected account."},
       "botlog.nav_logs": {th: "รายการ บันทึกการทำงาน", en: "Log entries"},
       "botlog.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
       "botlog.guide_open": {th: "เปิดรายการ บันทึกการทำงาน", en: "Open log entries"},
@@ -6997,10 +7072,10 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.pattern.category.delete": {th: "ลบหมวดหมู่ข้อความสำเร็จรูป", en: "Pattern category deleted"},
       "botlog.action.pattern.category.update": {th: "แก้ไขหมวดหมู่ข้อความสำเร็จรูป", en: "Pattern category updated"},
       "botlog.action.pattern.update": {th: "แก้ไขข้อความสำเร็จรูป", en: "Pattern updated"},
-      "gate.none_shared_title": {th: "ยังไม่มีบัญชี LINE", en: "No LINE account yet"},
-      "gate.none_shared_body": {th: "เพิ่มบัญชี LINE ของคุณได้จากเมนูตั้งค่า", en: "Add your own LINE account from Settings."},
+      "gate.none_shared_title": {th: "ยังไม่มีบัญชี", en: "No account yet"},
+      "gate.none_shared_body": {th: "เพิ่มบัญชี LINE หรือ Telegram ของคุณได้จากเมนูตั้งค่า", en: "Add your own LINE or Telegram account from Settings."},
       "settings.subtitle_users": {th: "จัดการสมาชิก บทบาท และตรวจดูพื้นที่ใช้งานของแต่ละคน", en: "Manage members, roles, and inspect each private workspace."},
-      "users.subtitle": {th: "สมาชิกแต่ละคนมีพื้นที่ส่วนตัวและเพิ่มบัญชี LINE ของตนเอง", en: "Each member has a private workspace and adds their own LINE accounts."}
+      "users.subtitle": {th: "สมาชิกแต่ละคนมีพื้นที่ส่วนตัวและเพิ่มบัญชี LINE หรือ Telegram ของตนเอง", en: "Each member has a private workspace and adds their own LINE or Telegram accounts."}
     });
 
     function t(key, vars) {
@@ -7335,21 +7410,27 @@ INDEX_HTML = r"""<!doctype html>
     function renderGateAccounts() {
       const list = $("accountGateList");
       list.replaceChildren();
-      for (const account of state.accounts || []) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.dataset.accountId = account.id;
-        const avatar = document.createElement("span");
-        avatar.className = "avatar";
-        avatar.textContent = initialsOf(account.label || account.id);
-        const dot = document.createElement("span");
-        dot.className = "status-dot " + (account.sessionState === "reauth_required" || !account.tokenFileExists ? "bad" : "ok");
-        btn.append(avatar, textSpan(account.label || account.id, "gate-account-name"), dot);
-        btn.addEventListener("click", () => {
-          $("accountSelect").value = account.id;
-          selectAccount().catch(toastError);
-        });
-        list.appendChild(btn);
+      for (const group of accountsByChannel(state.accounts)) {
+        if (!group.accounts.length) continue;
+        list.appendChild(channelHeading(group));
+        for (const account of group.accounts) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.dataset.accountId = account.id;
+          const avatar = document.createElement("span");
+          avatar.className = "avatar";
+          avatar.textContent = initialsOf(account.label || account.id);
+          const dot = document.createElement("span");
+          dot.className = "status-dot " + (account.sessionState === "reauth_required" || !account.tokenFileExists ? "bad" : "ok");
+          btn.append(avatar, textSpan(account.label || account.id, "gate-account-name"));
+          if (accountKindLabel(account)) btn.appendChild(textSpan(accountKindLabel(account), "account-kind"));
+          btn.appendChild(dot);
+          btn.addEventListener("click", () => {
+            $("accountSelect").value = account.id;
+            selectAccount().catch(toastError);
+          });
+          list.appendChild(btn);
+        }
       }
     }
 
@@ -7361,6 +7442,84 @@ INDEX_HTML = r"""<!doctype html>
 
     function rememberAccount(accountId) {
       try { localStorage.setItem(LAST_ACCOUNT_KEY, accountId); } catch (_) { /* optional */ }
+    }
+
+    // ---- account channels ---------------------------------------------------
+    // Every account is LINE or Telegram (a bot or a personal account). Lists keep
+    // the two apart: each under its own heading, or named next to the account.
+    function accountChannel(account) {
+      const channel = account && account.channel;
+      return channel === "telegram_bot" || channel === "telegram_user" ? channel : "line";
+    }
+
+    function accountIsLine(account) {
+      return accountChannel(account) === "line";
+    }
+
+    function channelName(account) {
+      return accountIsLine(account) ? "LINE" : "Telegram";
+    }
+
+    // "Bot" or "Personal" for Telegram accounts; nothing for LINE.
+    function accountKindLabel(account) {
+      return accountIsLine(account) ? "" : t("channel." + accountChannel(account));
+    }
+
+    function accountsByChannel(accounts) {
+      const list = accounts || [];
+      return [
+        {key: "line", label: "LINE", accounts: list.filter(accountIsLine)},
+        {key: "telegram", label: "Telegram", accounts: list.filter((item) => !accountIsLine(item))}
+      ];
+    }
+
+    function channelHeading(group) {
+      const head = document.createElement("div");
+      head.className = "channel-heading " + group.key;
+      head.append(textSpan("", "channel-dot " + group.key), textSpan(group.label));
+      return head;
+    }
+
+    // Ways to add an account, per channel; the Telegram script adds its own.
+    const ACCOUNT_ADD_ACTIONS = [
+      {channel: "line", labelKey: "account.add", visible: () => hasPermission("manage_accounts"), run: () => openAddAccount()}
+    ];
+
+    // Text for a lost connection; Telegram accounts supply their own.
+    function reconnectKeys(account) {
+      return {button: "reconnect.button", title: "reconnect.banner_title", body: "reconnect.banner_body", ask: "reconnect.ask_owner"};
+    }
+
+    function setI18nText(el, key) {
+      el.dataset.i18n = key;
+      el.textContent = t(key);
+    }
+
+    // Account checkboxes (team access), LINE and Telegram under their own heading.
+    function accountChecklist(accounts, isChecked) {
+      const box = document.createElement("div");
+      box.className = "account-checklist";
+      const inputs = [];
+      for (const group of accountsByChannel(accounts)) {
+        if (!group.accounts.length) continue;
+        const column = document.createElement("div");
+        column.className = "account-checklist-group";
+        column.appendChild(channelHeading(group));
+        for (const account of group.accounts) {
+          const label = document.createElement("label");
+          label.className = "checkbox-row";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.value = account.id;
+          input.checked = isChecked(account);
+          inputs.push(input);
+          const name = [account.label || account.id, accountKindLabel(account)].filter(Boolean).join(" · ");
+          label.append(input, textSpan(name));
+          column.appendChild(label);
+        }
+        box.appendChild(column);
+      }
+      return {box, inputs};
     }
 
     async function goHome() {
@@ -7758,11 +7917,12 @@ INDEX_HTML = r"""<!doctype html>
       applyPermissions();
     }
 
+    // Settings → accounts, LINE section (the Telegram script fills its own).
     function renderLineAccountList(accounts) {
       const list = $("lineAccountList");
       if (!list) return;
       list.replaceChildren();
-      for (const account of accounts || []) {
+      for (const account of (accounts || []).filter(accountIsLine)) {
         const row = document.createElement("div");
         row.className = "management-row";
         const info = document.createElement("div");
@@ -8028,7 +8188,7 @@ INDEX_HTML = r"""<!doctype html>
       };
 
       addSection(t("users.detail_line"), (data.accounts || []).map((account) =>
-        `${account.label || account.id} · ${account.tokenFileExists ? t("accounts.session_ready") : t("accounts.session_missing")}`
+        `${channelName(account)} · ${account.label || account.id} · ${account.tokenFileExists ? t("accounts.session_ready") : t("accounts.session_missing")}`
       ));
       addSection(t("users.detail_patterns"), (data.patterns || []).map((pattern) =>
         `${pattern.name || "-"}: ${pattern.text || ""}`
@@ -8099,7 +8259,7 @@ INDEX_HTML = r"""<!doctype html>
 
     function accountLabelFromManagement(accountId) {
       const account = (state.managementAccounts || []).find((a) => a.id === accountId);
-      return account ? (account.label || account.id) : accountId;
+      return account ? `${account.label || account.id} (${channelName(account)})` : accountId;
     }
 
     async function updateUser(userId, patch) {
@@ -11126,7 +11286,11 @@ INDEX_HTML = r"""<!doctype html>
       syncAssistantAutoReplySwitch("assistantAutoReplyEnabled", "assistantAutoReplyEnabledState");
       syncAssistantAutoReplySwitch("assistantAutoReplyContacts", "assistantAutoReplyContactsState");
       syncAssistantAutoReplySwitch("assistantAutoReplyGroups", "assistantAutoReplyGroupsState");
-      $("assistantAutoReplyAccount").textContent = (data && data.accountLabel) || accountLabel(selectedAccountId()) || "-";
+      const replyAccount = (state.accounts || []).find((item) => item.id === selectedAccountId());
+      const replyLabel = (data && data.accountLabel) || accountLabel(selectedAccountId());
+      $("assistantAutoReplyAccount").textContent = replyLabel
+        ? (replyAccount ? `${replyLabel} · ${channelName(replyAccount)}` : replyLabel)
+        : "-";
       const runtime = (data && data.runtime) || {state: "off"};
       const runtimeState = String(runtime.state || (enabled ? "starting" : "off"));
       setPill(
@@ -12341,13 +12505,21 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       for (const dot of [$("accountCardDot"), $("mobileAccountDot")]) {
         dot.className = "status-dot" + (kind ? " " + kind : "");
       }
-      $("accountCardStatus").textContent = label;
+      const account = (state.accounts || []).find((item) => item.id === accountId);
+      $("accountCardStatus").textContent = account ? `${channelName(account)} · ${label}` : label;
+      const channelTag = $("mobileAccountChannel");
+      channelTag.textContent = account ? channelName(account) : "";
+      channelTag.className = "mobile-account-channel" + (account ? (accountIsLine(account) ? " line" : " telegram") : "");
       const lost = Boolean(accountId && accountIsDisconnected(accountId));
       const canFix = hasPermission("manage_accounts");
+      const fix = reconnectKeys(account);
       $("accountReconnectButton").classList.toggle("hidden", !lost || !canFix);
       $("reconnectBanner").classList.toggle("hidden", !lost);
       $("reconnectBannerButton").classList.toggle("hidden", !canFix);
-      $("reconnectBannerBody").textContent = t(canFix ? "reconnect.banner_body" : "reconnect.ask_owner");
+      setI18nText($("accountReconnectButton"), fix.button);
+      setI18nText($("reconnectBannerButton"), fix.button);
+      setI18nText($("reconnectBannerTitle"), fix.title);
+      setI18nText($("reconnectBannerBody"), canFix ? fix.body : fix.ask);
       renderAccountPopover();
     }
 
@@ -12432,32 +12604,39 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const pop = $("accountPopover");
       pop.replaceChildren();
       const current = state.activeAccountId || selectedAccountId();
-      for (const account of state.accounts || []) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.setAttribute("role", "option");
-        btn.setAttribute("aria-selected", String(account.id === current));
-        const avatar = document.createElement("span");
-        avatar.className = "avatar";
-        avatar.textContent = initialsOf(account.label || account.id);
-        const dot = document.createElement("span");
-        dot.className = "status-dot " + (account.sessionState === "reauth_required" || !account.tokenFileExists ? "bad" : "ok");
-        btn.append(avatar, textSpan(account.label || account.id), dot);
-        btn.addEventListener("click", () => {
-          closeAccountPopover();
-          if (account.id === current) return;
-          $("accountSelect").value = account.id;
-          selectAccount().catch(toastError);
-        });
-        pop.appendChild(btn);
-      }
-      if (hasPermission("manage_accounts")) {
-        const add = document.createElement("button");
-        add.type = "button";
-        add.className = "add-account";
-        add.textContent = t("account.add");
-        add.addEventListener("click", () => { closeAccountPopover(); openAddAccount(); });
-        pop.appendChild(add);
+      for (const group of accountsByChannel(state.accounts)) {
+        const adds = ACCOUNT_ADD_ACTIONS.filter((action) => action.channel === group.key && action.visible());
+        if (!group.accounts.length && !adds.length) continue;
+        pop.appendChild(channelHeading(group));
+        for (const account of group.accounts) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.setAttribute("role", "option");
+          btn.setAttribute("aria-selected", String(account.id === current));
+          const avatar = document.createElement("span");
+          avatar.className = "avatar";
+          avatar.textContent = initialsOf(account.label || account.id);
+          const dot = document.createElement("span");
+          dot.className = "status-dot " + (account.sessionState === "reauth_required" || !account.tokenFileExists ? "bad" : "ok");
+          btn.append(avatar, textSpan(account.label || account.id));
+          if (accountKindLabel(account)) btn.appendChild(textSpan(accountKindLabel(account), "account-kind"));
+          btn.appendChild(dot);
+          btn.addEventListener("click", () => {
+            closeAccountPopover();
+            if (account.id === current) return;
+            $("accountSelect").value = account.id;
+            selectAccount().catch(toastError);
+          });
+          pop.appendChild(btn);
+        }
+        for (const action of adds) {
+          const add = document.createElement("button");
+          add.type = "button";
+          add.className = "add-account";
+          add.textContent = t(action.labelKey);
+          add.addEventListener("click", () => { closeAccountPopover(); action.run(); });
+          pop.appendChild(add);
+        }
       }
     }
 
@@ -12944,6 +13123,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     }
 
     function renderKpi(data) {
+      const kpiAccount = (state.accounts || []).find((item) => item.id === selectedAccountId());
+      $("kpiAccount").textContent = kpiAccount
+        ? t("kpi.account", {name: kpiAccount.label || kpiAccount.id, channel: channelName(kpiAccount)})
+        : "";
       const tiles = $("kpiTiles");
       tiles.replaceChildren();
       const sum = data.tiles || {};
@@ -12976,7 +13159,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const rows = [...(data.perUser || [])];
       rows.push({name: t("kpi.row_ai"), chats: (data.ai || {}).chats, avgResponseSeconds: (data.ai || {}).avgResponseSeconds, slaPercent: (data.ai || {}).slaPercent, isAi: true});
       if ((data.lineApp || {}).chats) {
-        rows.push({name: t("kpi.row_phone"), chats: data.lineApp.chats, avgResponseSeconds: data.lineApp.avgResponseSeconds, slaPercent: data.lineApp.slaPercent, isAi: true});
+        rows.push({name: t("kpi.row_phone", {channel: kpiAccount ? channelName(kpiAccount) : "LINE"}), chats: data.lineApp.chats, avgResponseSeconds: data.lineApp.avgResponseSeconds, slaPercent: data.lineApp.slaPercent, isAi: true});
       }
       for (const row of rows) {
         const tr = document.createElement("tr");
@@ -13175,18 +13358,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
 
     function renderTeam() {
       const data = state.team || {staff: [], accounts: []};
-      const box = $("teamNewAccounts");
-      box.replaceChildren();
-      for (const account of data.accounts || []) {
-        const label = document.createElement("label");
-        label.className = "checkbox-row";
-        const input = document.createElement("input");
-        input.type = "checkbox";
-        input.value = account.id;
-        input.checked = account.id === selectedAccountId();
-        label.append(input, textSpan(account.label || account.id));
-        box.appendChild(label);
-      }
+      $("teamNewAccounts").replaceChildren(
+        accountChecklist(data.accounts, (account) => account.id === selectedAccountId()).box
+      );
       const list = $("teamList");
       list.replaceChildren();
       if (!(data.staff || []).length) {
@@ -13199,20 +13373,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         const head = document.createElement("div");
         head.className = "ux-row space";
         head.append(textSpan(`${person.displayName || person.email} · ${person.email}`), textSpan(person.active ? t("team.active") : t("team.disabled"), "badge " + (person.active ? "ok" : "")));
-        const accounts = document.createElement("div");
-        accounts.className = "ux-row";
-        const checks = [];
-        for (const account of data.accounts || []) {
-          const label = document.createElement("label");
-          label.className = "checkbox-row";
-          const input = document.createElement("input");
-          input.type = "checkbox";
-          input.value = account.id;
-          input.checked = (person.staffAccountIds || []).includes(account.id);
-          checks.push(input);
-          label.append(input, textSpan(account.label || account.id));
-          accounts.appendChild(label);
-        }
+        const {box: accounts, inputs: checks} = accountChecklist(
+          data.accounts, (account) => (person.staffAccountIds || []).includes(account.id)
+        );
         const actions = document.createElement("div");
         actions.className = "ux-row";
         const save = document.createElement("button");
@@ -14860,7 +15023,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "kpi.col_away": {th: "สลับไปหน้าอื่น", en: "Switched away"},
       "kpi.col_offline": {th: "ไม่ได้เปิด (ในกะ)", en: "Offline (in shift)"},
       "kpi.row_ai": {th: "AI ตอบอัตโนมัติ", en: "AI auto reply"},
-      "kpi.row_phone": {th: "ตอบจากแอป LINE บนมือถือ", en: "Replied from the LINE app"},
+      "kpi.row_phone": {th: "ตอบจากแอป {channel} บนมือถือ", en: "Replied from the {channel} app"},
       "kpi.role_owner": {th: "เจ้าของ", en: "Owner"},
       "kpi.role_staff": {th: "พนักงาน", en: "Staff"},
       "kpi.target_line": {th: "เป้า {m} นาที", en: "Target {m} min"},
@@ -14882,9 +15045,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "day.sat": {th: "ส", en: "Sa"},
       "day.sun": {th: "อา", en: "Su"},
       "team.title": {th: "ทีมงาน", en: "Team"},
-      "team.subtitle": {th: "พนักงานเข้าระบบด้วยอีเมลของตัวเองและตอบลูกค้าจากบัญชี LINE ของคุณ ทุกข้อความที่ตอบจะนับเป็น KPI ของคนนั้น", en: "Staff sign in with their own email and reply from your LINE account. Each reply is credited to them in KPI."},
+      "team.subtitle": {th: "พนักงานเข้าระบบด้วยอีเมลของตัวเองและตอบลูกค้าจากบัญชี LINE และ Telegram ของคุณ ทุกข้อความที่ตอบจะนับเป็น KPI ของคนนั้น", en: "Staff sign in with their own email and reply from your LINE and Telegram accounts. Each reply is credited to them in KPI."},
       "team.add": {th: "เพิ่มพนักงาน", en: "Add staff member"},
-      "team.accounts": {th: "บัญชี LINE ที่ใช้ได้", en: "LINE accounts they can use"},
+      "team.accounts": {th: "บัญชีที่ใช้ได้", en: "Accounts they can use"},
       "team.none": {th: "ยังไม่มีพนักงาน", en: "No staff yet"},
       "team.active": {th: "ใช้งานอยู่", en: "Active"},
       "team.disabled": {th: "ปิดใช้งาน", en: "Disabled"},
@@ -14907,7 +15070,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "settings.subtitle_kpi": {th: "เป้าเวลาตอบ เวลาทำการ และกะของพนักงาน", en: "Reply target, business hours and staff shifts."},
       "settings.subtitle_notify": {th: "ตั้งค่าการแจ้งเตือนของเบราว์เซอร์นี้", en: "Notification settings for this browser."},
       "brain.title": {th: "AI ที่ใช้ตอบลูกค้า", en: "AI for auto reply"},
-      "brain.subtitle": {th: "เลือกว่าใครเป็นคนคิดคำตอบ ใช้ร่วมกันทุกคนที่ดูแลบัญชี LINE ของคุณ", en: "Choose what answers your customers. Shared by everyone on your LINE accounts."},
+      "brain.subtitle": {th: "เลือกว่าใครเป็นคนคิดคำตอบ ใช้ร่วมกันทุกคนที่ดูแลบัญชีของคุณ", en: "Choose what answers your customers. Shared by everyone on your accounts."},
       "brain.none": {th: "ยังไม่ได้เลือก AI", en: "No AI chosen yet"},
       "brain.summary_gemini": {th: "Gemini ({model}) ด้วย API key ของร้าน", en: "Gemini ({model}) with the shop's API key"},
       "brain.summary_global": {th: "AI ส่วนกลางที่ผู้ดูแลระบบตั้งไว้ ({model})", en: "Shared AI set up by the administrator ({model})"},
@@ -15013,8 +15176,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "help.common.faq": {th: "เจอปัญหา?", en: "Something not working?"},
       "help.common.dev_examples": {th: "ตัวอย่างคำขอสำหรับนักพัฒนา", en: "Request examples for developers"},
       "help.line.title": {th: "วิธีใช้หน้าแชท", en: "Using Chat"},
-      "help.line.intro": {th: "อ่านและตอบข้อความลูกค้าจากบัญชี LINE ของร้านได้ในหน้าจอเดียว", en: "Read and answer customer messages from the shop's LINE account in one screen."},
-      "help.line.s1_title": {th: "เลือกบัญชี LINE", en: "Pick the LINE account"},
+      "help.line.intro": {th: "อ่านและตอบข้อความลูกค้าจากบัญชี LINE หรือ Telegram ของร้านได้ในหน้าจอเดียว", en: "Read and answer customer messages from the shop's LINE or Telegram account in one screen."},
+      "help.line.s1_title": {th: "เลือกบัญชี", en: "Pick the account"},
       "help.line.s1_body": {th: "กดการ์ดชื่อร้านมุมซ้ายบน (บนมือถืออยู่แถบบนสุด) จุดสีเขียวแปลว่าเชื่อมต่อแล้ว", en: "Tap the shop card at the top left (top bar on phones). A green dot means it is connected."},
       "help.line.s2_title": {th: "หาแชทที่ต้องการ", en: "Find the chat"},
       "help.line.s2_body": {th: "ใช้แท็บ ทั้งหมด / เพื่อน / กลุ่ม หรือพิมพ์ชื่อในช่องค้นหา แชทที่มีข้อความใหม่จะมีตัวเลขสีเขียว", en: "Use the All / Friends / Groups tabs or type a name. Chats with new messages show a green number."},
@@ -15028,7 +15191,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "help.line.tip2": {th: "ทุกคนในทีมเห็นแชทเดียวกัน และระบบนับว่าใครเป็นคนตอบในหน้า KPI พนักงาน", en: "Everyone on the team sees the same chats, and Staff KPI records who answered."},
       "help.line.tip3": {th: "รูป วิดีโอ หรือไฟล์บางชนิดที่ LINE เข้ารหัสไว้ อาจต้องเปิดดูในแอป LINE บนมือถือ", en: "Some pictures, videos or files that LINE encrypts can only be opened in the LINE app."},
       "help.line.q1": {th: "ไม่เห็นรายชื่อ หรือข้อความไม่อัปเดต", en: "No contacts, or messages don't update"},
-      "help.line.a1": {th: "ตรวจว่าเลือกบัญชีถูกและจุดสถานะเป็นสีเขียว กดปุ่มรีเฟรชหนึ่งครั้ง ถ้ายังไม่ได้ให้ไปที่ ตั้งค่า → จัดการบัญชี LINE แล้วกด “เชื่อมต่อใหม่”", en: "Check the right account is picked and its dot is green, then refresh once. If that fails, go to Settings → LINE accounts and reconnect."},
+      "help.line.a1": {th: "ตรวจว่าเลือกบัญชีถูกและจุดสถานะเป็นสีเขียว กดปุ่มรีเฟรชหนึ่งครั้ง ถ้ายังไม่ได้ให้ไปที่ ตั้งค่า → จัดการบัญชี แล้วกด “เชื่อมต่อใหม่” ที่บัญชีนั้น", en: "Check the right account is picked and its dot is green, then refresh once. If that does not help, go to Settings → Account Management and press Reconnect on that account."},
       "help.line.q2": {th: "ส่งข้อความไม่ได้", en: "Can't send"},
       "help.line.a2": {th: "บัญชีอาจหลุดการเชื่อมต่อ หรือคุณยังไม่ได้รับสิทธิ์ใช้บัญชีนี้ ให้เจ้าของร้านตรวจที่ ตั้งค่า → ทีมงาน", en: "The account may be disconnected, or you don't have access to it yet. Ask the owner to check Settings → Team."},
       "help.line.q3": {th: "ไม่มีการแจ้งเตือน", en: "No notifications"},
@@ -15110,10 +15273,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "help.logs.s4_body": {th: "งานหนึ่งครั้งมีหลายบรรทัด เช่น รับงาน → เตรียมข้อความ → ส่ง → ผลลัพธ์", en: "One run has several lines: received → prepared → sent → result."},
       "help.logs.s5_title": {th: "แก้ที่ต้นเหตุแล้วค่อยลองใหม่", en: "Fix the cause, then retry"},
       "help.logs.s5_body": {th: "ดูคำอธิบายข้อผิดพลาดที่พบบ่อยด้านล่าง", en: "See the common errors below."},
-      "help.logs.tip1": {th: "บันทึกแยกตามบัญชี LINE ที่เลือกอยู่", en: "The log follows the selected LINE account."},
+      "help.logs.tip1": {th: "บันทึกแยกตามบัญชีที่เลือกอยู่", en: "The log follows the selected account."},
       "help.logs.tip2": {th: "“ล้างบันทึก” ลบแค่ประวัติ ไม่ได้แก้ปัญหา", en: "Clearing the log only deletes history; it doesn't fix anything."},
       "help.logs.q1": {th: "เจอคำว่า session / login / เชื่อมต่อใหม่", en: "It mentions session, login or reconnect"},
-      "help.logs.a1": {th: "บัญชี LINE หลุด ไปที่ ตั้งค่า → จัดการบัญชี LINE กด “เชื่อมต่อใหม่” แล้วสแกน QR ด้วยบัญชีเดิม", en: "The LINE account was signed out. Go to Settings → LINE accounts, press Reconnect and scan with the same account."},
+      "help.logs.a1": {th: "บัญชี LINE หลุด ไปที่ ตั้งค่า → จัดการบัญชี กด “เชื่อมต่อใหม่” ในส่วนบัญชี LINE แล้วสแกน QR ด้วยบัญชีเดิม", en: "The LINE account was signed out. Go to Settings → Account Management, press Reconnect in the LINE section and scan with the same account."},
       "help.logs.q2": {th: "เจอ 401 / 403 / API key", en: "It shows 401, 403 or API key"},
       "help.logs.a2": {th: "คีย์ของบริการภายนอกผิด หมดอายุ หรือเครดิตหมด ตรวจที่ ตั้งค่า → AI", en: "An outside service's key is wrong, expired or out of credit. Check Settings → AI."},
       "help.logs.q3": {th: "เจอ 429 / rate limit", en: "It shows 429 or rate limit"},
@@ -15138,11 +15301,11 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "help.tools.q3": {th: "ปุ่มกดไม่ได้", en: "Buttons are disabled"},
       "help.tools.a3": {th: "ต้องเลือกบัญชี LINE ก่อน และผู้ใช้ต้องมีสิทธิ์ใช้เครื่องมือ", en: "Pick a LINE account first; your role also needs access to Tools."},
       "help.settings.title": {th: "วิธีใช้หน้าตั้งค่า", en: "Using Settings"},
-      "help.settings.intro": {th: "จัดการบัญชี LINE ทีมงาน AI และการแจ้งเตือนของร้าน", en: "Manage the shop's LINE accounts, team, AI and notifications."},
-      "help.settings.s1_title": {th: "จัดการบัญชี LINE", en: "LINE accounts"},
-      "help.settings.s1_body": {th: "กด “เพิ่มบัญชี” → เริ่ม → สแกน QR ด้วยแอป LINE → ยืนยัน PIN บนมือถือถ้ามีการขอ ถ้าบัญชีหลุดให้กด “เชื่อมต่อใหม่” แล้วสแกนบัญชีเดิม", en: "Press Add account → Start → scan the QR with the LINE app → confirm the PIN if asked. If it signs out, press Reconnect and scan the same account."},
+      "help.settings.intro": {th: "จัดการบัญชี LINE และ Telegram ทีมงาน AI และการแจ้งเตือนของร้าน", en: "Manage the shop's LINE and Telegram accounts, team, AI and notifications."},
+      "help.settings.s1_title": {th: "จัดการบัญชี", en: "Account Management"},
+      "help.settings.s1_body": {th: "บัญชี LINE: กด “+ เพิ่มบัญชี LINE” → เริ่ม → สแกน QR ด้วยแอป LINE → ยืนยัน PIN บนมือถือถ้ามีการขอ ถ้าหลุดให้กด “เชื่อมต่อใหม่” แล้วสแกนบัญชีเดิม · บัญชี Telegram: กด “+ เพิ่ม Telegram Bot” แล้ววาง token จาก @BotFather หรือ “+ เพิ่ม Telegram ส่วนตัว” แล้วเข้าสู่ระบบด้วยเบอร์โทร", en: "LINE: press + Add LINE account → Start → scan the QR with the LINE app → confirm the PIN if asked; if it signs out, press Reconnect and scan the same account. Telegram: press + Add a Telegram bot and paste the token from @BotFather, or + Add a personal Telegram and sign in with its phone number."},
       "help.settings.s2_title": {th: "ทีมงาน", en: "Team"},
-      "help.settings.s2_body": {th: "เพิ่มพนักงานด้วยอีเมลและรหัสผ่าน พนักงานตอบลูกค้าจากบัญชี LINE ของร้านได้ และนับผลงานใน KPI", en: "Add staff with an email and password. They reply from the shop's LINE account and their replies count in KPI."},
+      "help.settings.s2_body": {th: "เพิ่มพนักงานด้วยอีเมลและรหัสผ่าน พนักงานตอบลูกค้าจากบัญชี LINE และ Telegram ของร้านได้ และนับผลงานใน KPI", en: "Add staff with an email and password. They reply from the shop's LINE and Telegram accounts and their replies count in KPI."},
       "help.settings.s3_title": {th: "AI", en: "AI"},
       "help.settings.s3_body": {th: "เลือก AI ที่ใช้ตอบลูกค้าอัตโนมัติและ AI ที่ใช้สร้างรูป", en: "Choose the AI for auto replies and the AI for pictures."},
       "help.settings.s4_title": {th: "KPI และกะงาน", en: "KPI & shifts"},
@@ -15152,7 +15315,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "help.settings.s6_title": {th: "เปลี่ยนรหัสผ่าน", en: "Change password"},
       "help.settings.s6_body": {th: "รหัสที่ใช้เข้า LinePassport ไม่ใช่รหัสผ่าน LINE", en: "This is your LinePassport password, not your LINE password."},
       "help.settings.tip1": {th: "เมนูทีมงานเห็นเฉพาะเจ้าของร้าน", en: "Only the shop owner sees the Team menu."},
-      "help.settings.tip2": {th: "ข้อมูลของแต่ละร้านแยกจากกัน พนักงานเห็นเฉพาะบัญชี LINE ที่ได้รับสิทธิ์", en: "Each shop's data is separate; staff only see the LINE accounts they were given."},
+      "help.settings.tip2": {th: "ข้อมูลของแต่ละร้านแยกจากกัน พนักงานเห็นเฉพาะบัญชีที่ได้รับสิทธิ์", en: "Each shop's data is separate; staff only see the accounts they were given."},
       "help.settings.tip3": {th: "ใช้ Proxy เฉพาะเมื่อผู้ให้บริการบอกให้ใช้ กรอกผิดจะสแกน QR หรือส่งข้อความไม่ได้", en: "Only use a proxy if your provider tells you to; a wrong one breaks QR login and sending."},
       "help.settings.q1": {th: "ไม่เห็นเมนู หรือปุ่มกดไม่ได้", en: "A menu is missing or a button is disabled"},
       "help.settings.a1": {th: "บทบาทของคุณอาจไม่มีสิทธิ์ ให้เจ้าของร้านหรือผู้ดูแลปรับให้", en: "Your role may not allow it. Ask the owner or an admin."},
@@ -16107,7 +16270,7 @@ GOD_HTML = r"""<!doctype html>
             <div class="god-guide-note"><strong>God แยกจาก Login สมาชิก</strong><span>ใช้หน้า /god สำหรับจัดการระบบเท่านั้น อย่าแชร์รหัส God และอย่าใช้บัญชีนี้ทำงานประจำวันแทนสมาชิก</span></div>
             <div class="god-guide-note"><strong>Global Knowledge กับ Knowledge สมาชิกไม่เหมือนกัน</strong><span>Global Knowledge ใช้ร่วมกันทุกคน ส่วน Knowledge ใน AI Chat Bot เป็นข้อมูลส่วนตัวของผู้ใช้นั้น เลือกตำแหน่งเก็บข้อมูลให้ตรงกับผู้ที่ควรเห็น</span></div>
             <div class="god-guide-note"><strong>Strict Knowledge</strong><span>เมื่อเปิด AI จะตอบเฉพาะข้อมูลที่ค้นพบใน Knowledge และส่งคำถามที่ตอบไม่ได้เข้าคิว เหมาะกับข้อมูลธุรกิจที่ต้องการลดการเดา</span></div>
-            <div class="god-guide-note"><strong>ก่อนลบสมาชิก</strong><span>การลบจะลบบัญชี LINE, Pattern, งานบอท, Log และค่า AI ของสมาชิกทั้งหมด ควรตรวจรายละเอียดและสำรองข้อมูลที่จำเป็นก่อนยืนยัน</span></div>
+            <div class="god-guide-note"><strong>ก่อนลบสมาชิก</strong><span>การลบจะลบบัญชี LINE และ Telegram, Pattern, งานบอท, Log และค่า AI ของสมาชิกทั้งหมด ควรตรวจรายละเอียดและสำรองข้อมูลที่จำเป็นก่อนยืนยัน</span></div>
           </div>
         </div>
       </section>
@@ -16138,7 +16301,7 @@ GOD_HTML = r"""<!doctype html>
   </dialog>
 
   <dialog id="deleteDialog">
-    <div class="dialog-body"><h2>ลบสมาชิก</h2><p id="deleteMessage"></p><p class="muted">LINE Account, Pattern, งานบอท, Log และค่า AI ของสมาชิกจะถูกลบทั้งหมด</p></div>
+    <div class="dialog-body"><h2>ลบสมาชิก</h2><p id="deleteMessage"></p><p class="muted">บัญชี LINE และ Telegram, Pattern, งานบอท, Log และค่า AI ของสมาชิกจะถูกลบทั้งหมด</p></div>
     <div class="dialog-actions"><button class="secondary" data-close="deleteDialog">ยกเลิก</button><button class="danger-button" id="confirmDeleteButton">ลบสมาชิก</button></div>
   </dialog>
   <div class="toast hidden" id="toast" role="status"></div>
@@ -16617,7 +16780,9 @@ GOD_HTML = r"""<!doctype html>
         const data = await api(`/api/god/users/detail?userId=${encodeURIComponent(user.id)}`);
         const root = $("detailContent");
         root.replaceChildren();
-        addDetailSection(root, "LINE Account", data.accounts || [], (item) => detailItem(item.label || item.id, item.mid || item.id));
+        const isLine = (item) => !item.channel || item.channel === "line";
+        addDetailSection(root, "บัญชี LINE", (data.accounts || []).filter(isLine), (item) => detailItem(item.label || item.id, item.userid || item.mid || item.id));
+        addDetailSection(root, "บัญชี Telegram", (data.accounts || []).filter((item) => !isLine(item)), (item) => detailItem(item.label || item.id, `${item.channel === "telegram_user" ? "ส่วนตัว" : "Bot"} · ${item.userid || item.id}`));
         addDetailSection(root, "Pattern", data.patterns || [], (item) => detailItem(item.name, item.categoryName || "General", item.text));
         addDetailSection(root, "งานบอท", data.schedules || [], (item) => detailItem(item.name, `${item.status || "-"} · ส่งแล้ว ${item.sentCount || 0} ครั้ง`));
         const ai = data.ai || {};
@@ -18027,7 +18192,7 @@ class WebAuth:
         if any(item not in owned for item in requested):
             raise WebError(
                 HTTPStatus.FORBIDDEN,
-                "Staff can only be given LINE accounts you own.",
+                "Staff can only be given accounts you own.",
                 "staff_account_not_owned",
             )
         return requested
@@ -18151,7 +18316,7 @@ class WebAuth:
         if account_ids:
             raise WebError(
                 HTTPStatus.BAD_REQUEST,
-                "Users must add their own LINE accounts.",
+                "Users must add their own accounts.",
                 "account_self_service_only",
             )
         if role == "god" and not self._is_god(actor):
@@ -18725,7 +18890,7 @@ class AccountStore:
             if owned >= MAX_ACCOUNTS_PER_USER:
                 raise WebError(
                     HTTPStatus.CONFLICT,
-                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} accounts.",
+                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} accounts (LINE and Telegram together).",
                     "account_quota",
                 )
             existing = {
@@ -18879,7 +19044,7 @@ class AccountStore:
             if owned >= MAX_ACCOUNTS_PER_USER:
                 raise WebError(
                     HTTPStatus.CONFLICT,
-                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} LINE accounts.",
+                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} accounts (LINE and Telegram together).",
                     "account_quota",
                 )
             existing = {
@@ -19867,7 +20032,7 @@ class WebState:
                 raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
             if not self.web_auth.can_access_account(user, account_id):
                 raise WebError(
-                    HTTPStatus.FORBIDDEN, "Permission denied for this LINE account."
+                    HTTPStatus.FORBIDDEN, "Permission denied for this account."
                 )
             if _account_channel(account) != "line":
                 return self._telegram_status(account, allowed_ids)
@@ -19922,7 +20087,7 @@ class WebState:
         self, account_id: str, user: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         if not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         account = self.account_store.set_active(account_id)
         return {"ok": True, "account": account, "status": self.status(account_id, user)}
 
@@ -19944,7 +20109,7 @@ class WebState:
             if not self.web_auth.can_access_account(user, reconnect_account_id):
                 raise WebError(
                     HTTPStatus.FORBIDDEN,
-                    "Permission denied for this LINE account.",
+                    "Permission denied for this account.",
                 )
             if _account_channel(account) != "line":
                 raise _line_only()
@@ -20335,6 +20500,12 @@ class WebState:
             self.ai_auto_reply_inflight = {
                 key for key in self.ai_auto_reply_inflight if key[0] != account_id
             }
+        self._release_removed_account(account_id, removed)
+        removed.pop("credentialFile", None)
+        return removed
+
+    def _release_removed_account(self, account_id: str, removed: dict[str, Any]) -> None:
+        """Let go of what a removed account used outside the account list."""
         token_file = str(removed.get("tokenFile") or "")
         if token_file and os.path.exists(token_file):
             try:
@@ -20358,8 +20529,6 @@ class WebState:
             self.store.set(f"telegram_runtime:{account_id}", {"offset": 0})
         with self.room_state_lock:
             self.room_states_cache.pop(account_id, None)
-        removed.pop("credentialFile", None)
-        return removed
 
     def update_account(
         self,
@@ -20434,6 +20603,7 @@ class WebState:
                 {
                     "id": account.get("id"),
                     "label": account.get("label"),
+                    "channel": account.get("channel"),
                     "mid": account.get("mid"),
                     "userid": account.get("userid"),
                     "tokenFileExists": account.get("tokenFileExists"),
@@ -20555,7 +20725,7 @@ class WebState:
     ) -> dict[str, Any]:
         account_id = (account_id or "").strip()
         if account_id and not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         allowed_ids = self.web_auth.allowed_account_ids(user)
         raw = self.store.get("bot_logs", {"logs": []})
         logs = raw.get("logs", []) if isinstance(raw, dict) else []
@@ -20582,7 +20752,7 @@ class WebState:
     ) -> dict[str, Any]:
         account_id = _required_account_id(account_id)
         if not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         with self.schedule_lock:
             raw = self.store.get("bot_logs", {"logs": []})
             logs = raw.get("logs", []) if isinstance(raw, dict) else []
@@ -20619,7 +20789,11 @@ class WebState:
         return {
             "staff": self.web_auth.list_staff(owner),
             "accounts": [
-                {"id": account.get("id"), "label": account.get("label")}
+                {
+                    "id": account.get("id"),
+                    "label": account.get("label"),
+                    "channel": account.get("channel"),
+                }
                 for account in self.account_store.list_accounts(owned)
             ],
         }
@@ -21788,7 +21962,7 @@ class WebState:
                 "telegram_reauth",
             )
         if exc.network:
-            return WebError(HTTPStatus.BAD_GATEWAY, exc.message, "upstream_error")
+            return WebError(HTTPStatus.BAD_GATEWAY, exc.message, "telegram_unavailable")
         return WebError(HTTPStatus.BAD_REQUEST, exc.message, "telegram_send_failed")
 
     def _telegram_record_outgoing(
@@ -22962,7 +23136,7 @@ class WebState:
     def kpi_settings(self, account_id: str, user: dict[str, Any] | None) -> dict[str, Any]:
         account_id = _required_account_id(account_id)
         if not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         settings = self._kpi_settings_for_owner(self._account_owner_id(account_id))
         user_id = str((user or {}).get("id") or "")
         return {
@@ -23115,10 +23289,12 @@ class WebState:
             if isinstance(account, dict) and str(account.get("ownerId") or "") == user_id
         )
         account_ids.discard("")
+        for account_id in account_ids:
+            self.stop_ops_watcher(account_id)
         api_locks = [self.api_lock_for(account_id) for account_id in sorted(account_ids)]
         for api_lock in api_locks:
             api_lock.acquire()
-        token_files: list[str] = []
+        removed_accounts: list[dict[str, Any]] = []
         try:
             with (
                 self.lock,
@@ -23126,6 +23302,7 @@ class WebState:
                 self.account_store.lock,
                 self.schedule_lock,
                 self.incoming_api_lock,
+                self.ai_auto_reply_lock,
             ):
                 auth_data = self.web_auth.data_after_user_delete(
                     user_id,
@@ -23144,9 +23321,7 @@ class WebState:
                 kept_accounts = []
                 for account in account_data.get("accounts", []):
                     if isinstance(account, dict) and account.get("id") in account_ids:
-                        token_file = str(account.get("tokenFile") or "")
-                        if token_file:
-                            token_files.append(token_file)
+                        removed_accounts.append(account)
                     else:
                         kept_accounts.append(account)
                 account_data["accounts"] = kept_accounts
@@ -23224,6 +23399,17 @@ class WebState:
                     )
                 ]
 
+                raw_auto_reply = self.store.get("ai_auto_reply", {"accounts": {}})
+                auto_reply_data = (
+                    copy.deepcopy(raw_auto_reply)
+                    if isinstance(raw_auto_reply, dict)
+                    else {"accounts": {}}
+                )
+                auto_reply_accounts = auto_reply_data.get("accounts")
+                if isinstance(auto_reply_accounts, dict):
+                    for account_id in account_ids:
+                        auto_reply_accounts.pop(account_id, None)
+
                 self.store.set_many(
                     {
                         "auth": auth_data,
@@ -23234,6 +23420,7 @@ class WebState:
                         "global_ai": global_ai,
                         "bot_logs": log_data,
                         "incoming_api": incoming_data,
+                        "ai_auto_reply": auto_reply_data,
                     }
                 )
                 self.web_auth.data = auth_data
@@ -23241,15 +23428,15 @@ class WebState:
                 self.schedules = schedules
                 for account_id in account_ids:
                     self.close_api(account_id)
+                    self.ai_auto_reply_runtime.pop(account_id, None)
+                self.ai_auto_reply_inflight = {
+                    key for key in self.ai_auto_reply_inflight if key[0] not in account_ids
+                }
         finally:
             for api_lock in reversed(api_locks):
                 api_lock.release()
-        for token_file in token_files:
-            try:
-                if os.path.exists(token_file):
-                    os.remove(token_file)
-            except OSError:
-                traceback.print_exc()
+        for account in removed_accounts:
+            self._release_removed_account(str(account.get("id") or ""), account)
         return {"ok": True, **self.users_payload()}
 
     # -- incoming API links ----------------------------------------------
@@ -23372,7 +23559,7 @@ class WebState:
     ) -> dict[str, Any]:
         account_id = _required_account_id(account_id)
         if not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         owner_id = str((user or {}).get("id") or "")
         with self.incoming_api_lock:
             links = [
@@ -23393,7 +23580,7 @@ class WebState:
     ) -> dict[str, Any]:
         account_id = _required_account_id(str(body.get("accountId") or ""))
         if not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         owner_id = str((user or {}).get("id") or "")
         name = self._validated_incoming_api_name(body.get("name"))
         targets = self._validated_incoming_api_targets(api, body.get("targets"))
@@ -23710,7 +23897,7 @@ class WebState:
             if account_id:
                 if not self.web_auth.can_access_account(user, account_id):
                     raise WebError(
-                        HTTPStatus.FORBIDDEN, "Permission denied for this LINE account."
+                        HTTPStatus.FORBIDDEN, "Permission denied for this account."
                     )
                 schedules = [job for job in schedules if job.get("accountId") == account_id]
             elif allowed_ids is not None:
@@ -23810,7 +23997,7 @@ class WebState:
     ) -> dict[str, Any]:
         account_id = _required_account_id(account_id)
         if not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         cleared = 0
         with self.schedule_lock:
             for job in self.schedules:
@@ -25453,7 +25640,7 @@ class WebState:
         account_id = _required_account_id(account_id)
         if not self.web_auth.can_access_account(user, account_id):
             raise WebError(
-                HTTPStatus.FORBIDDEN, "Permission denied for this LINE account."
+                HTTPStatus.FORBIDDEN, "Permission denied for this account."
             )
         account = self.account_store.get(account_id)
         if account is None:
@@ -25525,7 +25712,7 @@ class WebState:
         account_id = _required_account_id(account_id)
         if not self.web_auth.can_access_account(user, account_id):
             raise WebError(
-                HTTPStatus.FORBIDDEN, "Permission denied for this LINE account."
+                HTTPStatus.FORBIDDEN, "Permission denied for this account."
             )
         account = self.account_store.get(account_id)
         if account is None:
@@ -25976,7 +26163,7 @@ class WebState:
             raise RuntimeError("LINE account no longer exists")
         owner = self.web_auth.user_for_account(account_id)
         if owner is None or not owner.get("active", True):
-            raise RuntimeError("LINE account owner is unavailable")
+            raise RuntimeError("Account owner is unavailable")
         enabled_at_ms = _coerce_int(record.get("enabledAtMs"))
         api = self.get_api(account_id)
         with self.api_lock_for(account_id):
@@ -26120,7 +26307,7 @@ class WebState:
                 or str(owner.get("id") or "") != str(candidate.get("ownerId") or "")
                 or not owner.get("active", True)
             ):
-                raise RuntimeError("LINE account owner is unavailable")
+                raise RuntimeError("Account owner is unavailable")
             self.append_bot_log(
                 "ai.auto_reply.received",
                 account_id=account_id,
@@ -26588,7 +26775,7 @@ class WebState:
     ) -> dict[str, Any]:
         account_id = _required_account_id(account_id)
         if not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         return {
             "ok": True,
             "accountId": account_id,
@@ -26630,7 +26817,7 @@ class WebState:
     ) -> dict[str, Any]:
         account_id = _required_account_id(str(body.get("accountId") or ""))
         if not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         paused = bool(body.get("paused"))
         self._save_schedule_settings(
             account_id, {"paused": paused, "pausedAt": _now_iso() if paused else ""}
@@ -26661,7 +26848,7 @@ class WebState:
     ) -> dict[str, Any]:
         account_id = _required_account_id(account_id)
         if not self.web_auth.can_access_account(user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         horizon = time.time() + days * 86_400
         events: list[dict[str, Any]] = []
         with self.schedule_lock:
@@ -27853,7 +28040,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
     def _require_account_access(self, account_id: str) -> None:
         account_id = _required_account_id(account_id)
         if not self.state.web_auth.can_access_account(self.current_user, account_id):
-            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this LINE account.")
+            raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
 
     def _with_api(
         self,
@@ -28593,7 +28780,7 @@ def _query_one(query: dict[str, list[str]], key: str, default: str = "") -> str:
 def _required_account_id(account_id: str) -> str:
     account_id = (account_id or "").strip()
     if not account_id:
-        raise WebError(HTTPStatus.BAD_REQUEST, "Select a LINE account first.", "no_account")
+        raise WebError(HTTPStatus.BAD_REQUEST, "Select an account first.", "no_account")
     return account_id
 
 
@@ -30976,7 +31163,9 @@ def _build_kpi_report(
         ]
         timeline.append({"userId": member["id"], "name": member["name"], "segments": clipped[-500:]})
     ai_items = [item for item in responses if item.get("answeredBy") == "ai"]
-    app_items = [item for item in responses if item.get("answeredBy") == "line_app"]
+    app_items = [
+        item for item in responses if item.get("answeredBy") in {"line_app", "telegram_app"}
+    ]
     human_items = [item for item in responses if item.get("answeredBy") in member_ids]
     daily_map: dict[str, list[dict[str, Any]]] = {}
     for item in responses:

@@ -12,7 +12,14 @@ import requests
 
 from okline.telegram.bot_api import TelegramApiError
 from okline.telegram.channels import normalize_message
-from okline.webapp import OkLineWebHandler, OkLineWebServer, WebConfig, WebError, WebState
+from okline.webapp import (
+    OkLineWebHandler,
+    OkLineWebServer,
+    WebAuth,
+    WebConfig,
+    WebError,
+    WebState,
+)
 
 TOKEN = "555555555:" + "C" * 35
 CUSTOMER_ID = 4242
@@ -222,6 +229,59 @@ def test_removing_the_account_cleans_up(state):
     assert not os.path.exists(credential_file)
     assert not state.telegram.running(account_id)
     assert state.crm.conversation_for_chat(account_id, CHAT) is None
+
+
+def test_deleting_a_member_removes_their_telegram_bot_too(state):
+    auth = state.web_auth
+    auth.setup("owner@example.com", "owner-pass")
+    god = auth.ensure_god("god", "god-password")
+    token = auth.register("member@example.com", "member-pass", "Member")
+    member = auth.current_user(WebAuth.cookie_header(token))
+    account_id = _add_bot(state, member)
+    state.tg_receive(account_id, _incoming())
+    credential_file = state.account_store.get(account_id)["credentialFile"]
+    assert state.telegram.running(account_id)
+
+    state.delete_user({"id": member["id"]}, god)
+    assert state.account_store.get(account_id) is None
+    assert not state.telegram.running(account_id)
+    assert not os.path.exists(credential_file)
+    assert state.crm.conversation_for_chat(account_id, CHAT) is None
+
+
+def test_account_lists_say_which_accounts_are_telegram(state):
+    owner = _owner(state)
+    account_id = _add_bot(state, owner)
+    owner = state.web_auth._find_user(owner["id"])
+    team = state.team_payload(owner)
+    assert [(item["id"], item["channel"]) for item in team["accounts"]] == [(account_id, "telegram_bot")]
+
+
+def test_telegram_network_failures_are_not_called_line_errors(state, monkeypatch):
+    owner = _owner(state)
+    account_id = _add_bot(state, owner)
+    state.tg_receive(account_id, _incoming())
+
+    def offline(self, chat_id, text, **kwargs):
+        raise TelegramApiError("Could not reach Telegram.", network=True)
+
+    monkeypatch.setattr(FakeTg, "send_message", offline)
+    with pytest.raises(WebError) as exc:
+        state.tg_send(account_id, {"to": CHAT, "text": "hi"}, state.web_auth._find_user(owner["id"]))
+    assert exc.value.code == "telegram_unavailable"
+
+
+def test_kpi_counts_replies_sent_from_the_telegram_app(state):
+    owner = _owner(state)
+    account_id = _add_bot(state, owner)
+    owner = state.web_auth._find_user(owner["id"])
+    now = int(time.time() * 1000)
+    state.store.set(f"kpi_responses:{account_id}", {"responses": [
+        {"chatMid": CHAT, "askedAt": now - 120_000, "answeredAt": now - 60_000,
+         "responseSeconds": 60, "answeredBy": "telegram_app"},
+    ]})
+    report = state.kpi_report(account_id, owner, from_ms=now - 3_600_000, to_ms=now)
+    assert report["lineApp"]["chats"] == 1
 
 
 @pytest.fixture

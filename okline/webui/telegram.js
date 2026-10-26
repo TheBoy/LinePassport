@@ -1,7 +1,7 @@
     // ---- Telegram: staff alerts ----------------------------------------
     Object.assign(state, {tgNotify: null, tgLinkTimer: 0, tgLinkUntil: 0});
     Object.assign(I18N, {
-      "settings.nav_telegram": {th: "Telegram", en: "Telegram"},
+      "settings.nav_telegram": {th: "แจ้งเตือนทาง Telegram", en: "Telegram alerts"},
       "settings.subtitle_telegram": {th: "รับแจ้งเตือนและตอบลูกค้าผ่าน Telegram", en: "Get alerts and answer customers from Telegram."},
       "tg.me_title": {th: "Telegram ของฉัน", en: "My Telegram"},
       "tg.me_linked": {th: "เชื่อมแล้วกับ {name} — แจ้งเตือนจะส่งไปที่ Telegram นี้", en: "Linked to {name}. Alerts go to this Telegram."},

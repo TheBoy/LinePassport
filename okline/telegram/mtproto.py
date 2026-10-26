@@ -69,7 +69,7 @@ def _translate(exc: BaseException) -> TelegramError:
         status, message, code = known[name]
         return TelegramError(status, message, code)
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError)):
-        return TelegramError(502, "Could not reach Telegram.", "upstream_error")
+        return TelegramError(502, "Could not reach Telegram.", "telegram_unavailable")
     return TelegramError(400, (str(exc) or name)[:300], "telegram_failed")
 
 
