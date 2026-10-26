@@ -7,8 +7,9 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- **All chats.** One page for every LINE and Telegram account the person can
-  open: customer chats and LINE groups newest first, each labelled with its
+- **All chats.** One page, at the top of the menu above the account switcher,
+  for every LINE and Telegram account the person can open: customer chats
+  and LINE groups newest first, each labelled with its
   channel and account, with unread counts, status and handler. Filter by
   channel, account or status (unread / mine / nobody yet / waiting / closed),
   search by name, message or account, and reply, send images and files, or

@@ -22,6 +22,8 @@ def test_every_marker_is_filled_once():
 
 
 def test_all_chats_comes_first_in_the_menu():
+    # Above the account switcher: it covers every account, not the selected one.
+    assert INDEX_HTML.index('id="tabInbox"') < INDEX_HTML.index('id="accountCard"')
     assert INDEX_HTML.index('id="tabInbox"') < INDEX_HTML.index('id="tabLine"')
 
 

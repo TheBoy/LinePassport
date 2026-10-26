@@ -4420,6 +4420,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <div class="workspace hidden" id="workspace">
         <nav class="tabbar sidenav" role="tablist" aria-label="LinePassport sections" aria-orientation="vertical">
+<!--ext:nav-first-->
           <div class="account-card-wrap">
             <button class="account-card" id="accountCard" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="accountPopover">
               <span class="avatar" id="accountCardAvatar" aria-hidden="true">?</span>
@@ -4432,7 +4433,6 @@ INDEX_HTML = r"""<!doctype html>
             <button class="account-reconnect hidden" id="accountReconnectButton" type="button" data-i18n="reconnect.button">Reconnect (scan QR)</button>
             <div class="account-popover hidden" id="accountPopover" role="listbox" aria-label="LINE"></div>
           </div>
-<!--ext:nav-first-->
           <button class="tab" id="tabLine" type="button" role="tab" aria-selected="true" aria-controls="tabPanelLine" data-tab="line"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span data-i18n="tabs.line">Chat</span><span class="nav-badge hidden" id="navChatBadge"></span></button>
 <!--ext:nav-->
           <button class="tab" id="tabAssistant" type="button" role="tab" aria-selected="false" aria-controls="tabPanelAssistant" data-tab="assistant" data-requires-permission="ask_ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 14h.01M15 14h.01"/></svg><span data-i18n="tabs.assistant">Auto reply</span></button>

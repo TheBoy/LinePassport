@@ -124,3 +124,72 @@
         height: calc(100dvh - 44px - 64px - env(safe-area-inset-bottom));
       }
     }
+
+    /* Menu: All chats sits above the account switcher and looks different, since
+       it spans every account while the items below belong to the selected one. */
+    .sidenav .tab.nav-all-chats {
+      flex: 0 0 auto;
+      min-height: 58px;
+      padding: 8px 10px;
+      border: 1px solid rgba(6, 199, 85, .3);
+      border-radius: 12px;
+      background: linear-gradient(135deg, rgba(6, 199, 85, .12), rgba(34, 158, 217, .12));
+      color: var(--ink);
+    }
+    .sidenav .tab.nav-all-chats:hover {
+      background: linear-gradient(135deg, rgba(6, 199, 85, .2), rgba(34, 158, 217, .2));
+      color: var(--ink);
+    }
+    .sidenav .tab.nav-all-chats[aria-selected="true"] {
+      border-color: transparent;
+      background: linear-gradient(135deg, #06c755, #229ed9);
+      color: #fff;
+      box-shadow: 0 6px 16px rgba(6, 199, 85, .25);
+    }
+    .nav-all-chats-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #06c755, #229ed9);
+      color: #fff;
+    }
+    .sidenav .tab.nav-all-chats[aria-selected="true"] .nav-all-chats-icon { background: rgba(255, 255, 255, .22); }
+    .nav-all-chats-text { display: grid; gap: 1px; min-width: 0; line-height: 1.25; }
+    .nav-all-chats-text > span { font-size: 15px; font-weight: 800; }
+    .nav-all-chats-text small {
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sidenav .tab.nav-all-chats[aria-selected="true"] small { color: rgba(255, 255, 255, .88); }
+    .sidenav .tab.nav-all-chats[aria-selected="true"] .nav-badge { background: #fff; color: var(--danger); }
+    .sidenav .tab.nav-all-chats + .account-card-wrap { margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+
+    /* Phone bottom bar: same slot as the others, set apart by its icon. */
+    @media (max-width: 640px) {
+      .sidenav .tab.nav-all-chats {
+        flex: 1 1 0;
+        min-height: 52px;
+        padding: 0 2px;
+        border: 0;
+        border-radius: 10px;
+        background: none;
+        color: var(--accent-ink);
+        box-shadow: none;
+      }
+      .sidenav .tab.nav-all-chats:hover { background: none; color: var(--accent-ink); }
+      .sidenav .tab.nav-all-chats[aria-selected="true"] { background: rgba(6, 199, 85, .1); color: var(--accent-ink); box-shadow: none; }
+      .nav-all-chats-icon { width: 32px; height: 24px; border-radius: 8px; }
+      .sidenav .tab.nav-all-chats[aria-selected="true"] .nav-all-chats-icon { background: linear-gradient(135deg, #06c755, #229ed9); }
+      .sidenav .tab.nav-all-chats .nav-all-chats-icon svg { width: 16px; height: 16px; }
+      .nav-all-chats-text { line-height: 1.2; }
+      .nav-all-chats-text > span { font-size: 11px; }
+      .nav-all-chats-text small { display: none; }
+      .sidenav .tab.nav-all-chats[aria-selected="true"] .nav-badge { background: var(--danger); color: #fff; }
+    }

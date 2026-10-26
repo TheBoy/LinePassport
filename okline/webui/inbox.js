@@ -30,6 +30,7 @@
 
     Object.assign(I18N, {
       "tabs.inbox": {th: "แชทรวม", en: "All chats"},
+      "tabs.inbox_sub": {th: "ทุกบัญชี ทุกช่องทาง", en: "Every account and channel"},
       "inbox.title": {th: "แชทรวม", en: "All chats"},
       "inbox.subtitle": {th: "ทุกบัญชี ทุกช่องทาง ในที่เดียว", en: "Every account and channel in one place"},
       "inbox.search_ph": {th: "ค้นหาชื่อ ข้อความ หรือบัญชี…", en: "Search name, message or account…"},
