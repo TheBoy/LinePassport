@@ -7,6 +7,27 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **LINE OA accounts (through LINE Official Account Manager).** Settings →
+  Account Management has a LINE OA section: "+ Add a LINE OA" shows a QR code
+  to scan with LINE on the phone of an account that is a member of the OA,
+  then the 4-digit code LINE asks for, then which of its OAs to add. Each OA's
+  one-to-one chats arrive live from OA Manager's event stream (recent chats
+  are copied in on first connect without alerts) and show in Chat and All
+  chats with the customer panel, alerts and KPI. Replies, images and files go
+  out through OA Manager; opening a chat marks it read there too; replies the
+  team types in OA Manager or the LINE OA app appear in LinePassport and count
+  as phone-app replies, while the OA's own auto replies do not. The OA Manager
+  cookies are stored encrypted like LINE sessions; when OA Manager signs an OA
+  out, LINE is first asked to sign it in again quietly, then the account asks
+  for a new scan. A LINE account with no LINE Business ID is told how to
+  become a member first (LinePassport never creates one). An OA whose
+  response mode is not chat (OA Manager then refuses its chats) is marked
+  "chat is off" in the picker and in the account list, and is retried every
+  10 minutes until chat is turned on. Email sign-in is
+  not offered: that page needs reCAPTCHA and an emailed code. Unofficial: this
+  uses the endpoints of the OA Manager web page and may break if LINE changes
+  them. Groups, segment sends and scheduled sends are not available for LINE
+  OA yet.
 - **All chats.** One page, at the top of the menu above the account switcher,
   for every LINE and Telegram account the person can open: customer chats
   and LINE groups newest first, each labelled with its

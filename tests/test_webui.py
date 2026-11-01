@@ -77,6 +77,30 @@ def test_account_management_keeps_line_and_telegram_apart():
     assert "baseReconnectKeysForTg = reconnectKeys" in INDEX_HTML
 
 
+def test_line_oa_accounts_have_their_own_section_and_labels():
+    # LINE, LINE OA, Telegram: three sections in that order.
+    assert INDEX_HTML.count('id="lineOaAccountGroup"') == 1
+    assert (
+        INDEX_HTML.index('id="lineAccountList"')
+        < INDEX_HTML.index('id="lineOaAccountList"')
+        < INDEX_HTML.index('id="telegramAccountList"')
+    )
+    helpers = _block("function accountChannel", "function channelHeading")
+    assert '"line_oa"' in helpers and "{key: \"line_oa\", label: \"LINE OA\"" in helpers
+    # The Telegram screens leave LINE OA accounts alone...
+    assert "(accounts || []).filter(accountIsTelegram)" in INDEX_HTML
+    assert "if (target && accountIsTelegram(target)) {" in INDEX_HTML
+    # ...and the LINE OA script wraps after them, so it sees its accounts first.
+    assert INDEX_HTML.index("baseReconnectKeysForTg = reconnectKeys") < INDEX_HTML.index(
+        "baseReconnectKeysForOa = reconnectKeys"
+    )
+    assert 'ACCOUNT_ADD_ACTIONS.push({\n      channel: "line_oa"' in INDEX_HTML
+    assert '"/api/lineoa/login/state"' in INDEX_HTML and '"/api/lineoa/login/pick"' in INDEX_HTML
+    # All chats and the segment sender name the channel the shared way.
+    assert "channelName(account) : (chat.channel" in INDEX_HTML
+    assert 'a.channel !== "line_oa"' in INDEX_HTML
+
+
 def test_compose_refuses_a_page_without_markers():
     with pytest.raises(RuntimeError):
         webui.compose_index("<html></html>")

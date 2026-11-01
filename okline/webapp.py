@@ -62,6 +62,13 @@ from .crm.engine import CrmEngine
 from .entities import Group
 from .exceptions import LineAuthError, LineLoginRequired
 from .hmac_signer import LtsmBridge
+from .lineoa import (
+    LineOAChannels,
+    OAManagerError,
+    OAManagerLoginError,
+    OAManagerQrLogin,
+    is_user_chat,
+)
 from .obs import encode_message_talk_meta
 from .telegram import StaffNotifier, TelegramError
 from .telegram import routes as telegram_routes
@@ -972,7 +979,7 @@ INDEX_HTML = r"""<!doctype html>
       white-space: nowrap;
     }
 
-    /* LINE and Telegram accounts are always shown apart. */
+    /* LINE, LINE OA and Telegram accounts are always shown apart. */
     .channel-heading {
       display: flex;
       align-items: center;
@@ -988,6 +995,7 @@ INDEX_HTML = r"""<!doctype html>
     .channel-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; }
     .channel-dot.line { background: #06c755; }
     .channel-dot.telegram { background: #229ed9; }
+    .channel-dot.line_oa { background: #fff; box-shadow: inset 0 0 0 2.5px #06c755; }
     .badge.line { background: #e7f8ee; color: #067647; }
     .account-kind { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
     .account-group {
@@ -1001,6 +1009,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     .account-group.line { border-top: 3px solid #06c755; }
     .account-group.telegram { border-top: 3px solid #229ed9; }
+    .account-group.line_oa { border-top: 3px double #06c755; }
     .account-group-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px; }
     .account-group-head > div:first-child { display: grid; gap: 2px; min-width: 0; }
     .account-group-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 16px; }
@@ -1026,6 +1035,7 @@ INDEX_HTML = r"""<!doctype html>
     .mobile-account-channel { flex: 0 0 auto; padding: 0 5px; border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 16px; }
     .mobile-account-channel.line { background: #e7f8ee; color: #067647; }
     .mobile-account-channel.telegram { background: #e6f4fb; color: #0b6ea8; }
+    .mobile-account-channel.line_oa { background: #fff; color: #067647; box-shadow: inset 0 0 0 1px #06c755; }
     .mobile-account-channel:empty { display: none; }
 
     .login-panel {
@@ -5232,7 +5242,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="section-head">
               <div>
                 <h3 data-i18n="team.title">Team</h3>
-                <span class="muted" data-i18n="team.subtitle">Staff sign in with their own email and reply from your LINE and Telegram accounts. Each reply is credited to them in KPI.</span>
+                <span class="muted" data-i18n="team.subtitle">Staff sign in with their own email and reply from your LINE, LINE OA and Telegram accounts. Each reply is credited to them in KPI.</span>
               </div>
             </div>
             <div class="wizard-card">
@@ -5325,7 +5335,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="section-head">
               <div>
                 <h3 data-i18n="accounts.title">Chat accounts</h3>
-                <span class="muted" data-i18n="accounts.subtitle">LINE and Telegram accounts are added and reconnected differently, so each has its own section.</span>
+                <span class="muted" data-i18n="accounts.subtitle">LINE, LINE OA and Telegram accounts are added and reconnected differently, so each has its own section.</span>
               </div>
             </div>
             <section class="account-group line" id="lineAccountGroup">
@@ -6432,7 +6442,7 @@ INDEX_HTML = r"""<!doctype html>
       "settings.subtitle": {th: "จัดการการเข้าถึงและบัญชีของร้าน", en: "Manage access and the shop's accounts."},
       "settings.subtitle_password": {th: "เปลี่ยนรหัสผ่าน", en: "Change Password"},
       "settings.subtitle_accounts": {th: "จัดการบัญชี", en: "Account Management"},
-      "settings.subtitle_line_accounts": {th: "เพิ่ม แก้ไข หรือลบบัญชี LINE และ Telegram", en: "Add, edit, or remove LINE and Telegram accounts."},
+      "settings.subtitle_line_accounts": {th: "เพิ่ม แก้ไข หรือลบบัญชี LINE, LINE OA และ Telegram", en: "Add, edit, or remove LINE, LINE OA and Telegram accounts."},
       "settings.subtitle_users": {th: "จัดการผู้ใช้ บทบาท และบัญชี LINE ที่เข้าถึงได้", en: "Manage users, roles, and LINE account access."},
       "settings.nav_guide": {th: "วิธีใช้", en: "Usage guide"},
       "settings.subtitle_guide": {th: "วิธีใช้รหัสผ่าน บัญชี LINE และสิทธิ์ผู้ใช้", en: "How to manage passwords, LINE accounts, and user access."},
@@ -6442,7 +6452,7 @@ INDEX_HTML = r"""<!doctype html>
       "password.new": {th: "รหัสผ่านใหม่", en: "New password"},
       "password.update": {th: "อัปเดตรหัสผ่าน", en: "Update Password"},
       "accounts.title": {th: "บัญชีที่ใช้คุยกับลูกค้า", en: "Chat accounts"},
-      "accounts.subtitle": {th: "บัญชี LINE และ Telegram เพิ่มและเชื่อมต่อคนละวิธี จึงแยกไว้คนละส่วน", en: "LINE and Telegram accounts are added and reconnected differently, so each has its own section."},
+      "accounts.subtitle": {th: "บัญชี LINE, LINE OA และ Telegram เพิ่มและเชื่อมต่อคนละวิธี จึงแยกไว้คนละส่วน", en: "LINE, LINE OA and Telegram accounts are added and reconnected differently, so each has its own section."},
       "accounts.add": {th: "เพิ่มบัญชี", en: "Add Account"},
       "accounts.select": {th: "เลือกบัญชี LINE", en: "Select LINE account"},
       "accounts.line_title": {th: "บัญชี LINE", en: "LINE accounts"},
@@ -6450,7 +6460,7 @@ INDEX_HTML = r"""<!doctype html>
       "channel.telegram_bot": {th: "Bot", en: "Bot"},
       "channel.telegram_user": {th: "ส่วนตัว", en: "Personal"},
       "kpi.account": {th: "บัญชี {name} · {channel}", en: "Account {name} · {channel}"},
-      "errors.account_quota": {th: "มีบัญชีครบจำนวนสูงสุดแล้ว (นับรวม LINE และ Telegram)", en: "You have the most accounts allowed (LINE and Telegram together)."},
+      "errors.account_quota": {th: "มีบัญชีครบจำนวนสูงสุดแล้ว (นับรวม LINE, LINE OA และ Telegram)", en: "You have the most accounts allowed (LINE, LINE OA and Telegram together)."},
       "errors.staff_account_not_owned": {th: "ให้พนักงานใช้ได้เฉพาะบัญชีที่คุณเป็นเจ้าของ", en: "Staff can only be given accounts you own."},
       "accounts.switching": {th: "กำลังสลับบัญชี...", en: "Switching account..."},
       "accounts.none_yet": {th: "ยังไม่มีบัญชี", en: "No accounts yet"},
@@ -6488,7 +6498,7 @@ INDEX_HTML = r"""<!doctype html>
       "users.disabled": {th: "ปิดใช้งาน", en: "disabled"},
       "users.god_protected": {th: "บัญชี ผู้ดูแลระบบ จัดการได้โดย ผู้ดูแลระบบ เท่านั้น", en: "Only God can manage this account"},
       "users.details": {th: "รายละเอียด", en: "Details"},
-      "users.detail_line": {th: "บัญชี LINE และ Telegram", en: "LINE and Telegram accounts"},
+      "users.detail_line": {th: "บัญชี LINE, LINE OA และ Telegram", en: "LINE, LINE OA and Telegram accounts"},
       "users.detail_patterns": {th: "ข้อความสำเร็จรูป", en: "Patterns"},
       "users.detail_schedules": {th: "งานส่งตามเวลา", en: "Bot schedules"},
       "users.detail_ai": {th: "AI ที่ใช้งาน", en: "AI configuration"},
@@ -7451,27 +7461,37 @@ INDEX_HTML = r"""<!doctype html>
     // the two apart: each under its own heading, or named next to the account.
     function accountChannel(account) {
       const channel = account && account.channel;
-      return channel === "telegram_bot" || channel === "telegram_user" ? channel : "line";
+      return ["telegram_bot", "telegram_user", "line_oa"].includes(channel) ? channel : "line";
     }
 
     function accountIsLine(account) {
       return accountChannel(account) === "line";
     }
 
-    function channelName(account) {
-      return accountIsLine(account) ? "LINE" : "Telegram";
+    function accountIsTelegram(account) {
+      return accountChannel(account).startsWith("telegram");
     }
 
-    // "Bot" or "Personal" for Telegram accounts; nothing for LINE.
+    // The channel group an account belongs to: "line", "line_oa" or "telegram".
+    function channelKey(account) {
+      return accountIsTelegram(account) ? "telegram" : accountChannel(account);
+    }
+
+    function channelName(account) {
+      return {line: "LINE", line_oa: "LINE OA", telegram: "Telegram"}[channelKey(account)];
+    }
+
+    // "Bot" or "Personal" for Telegram accounts; nothing for LINE or LINE OA.
     function accountKindLabel(account) {
-      return accountIsLine(account) ? "" : t("channel." + accountChannel(account));
+      return accountIsTelegram(account) ? t("channel." + accountChannel(account)) : "";
     }
 
     function accountsByChannel(accounts) {
       const list = accounts || [];
       return [
         {key: "line", label: "LINE", accounts: list.filter(accountIsLine)},
-        {key: "telegram", label: "Telegram", accounts: list.filter((item) => !accountIsLine(item))}
+        {key: "line_oa", label: "LINE OA", accounts: list.filter((item) => channelKey(item) === "line_oa")},
+        {key: "telegram", label: "Telegram", accounts: list.filter(accountIsTelegram)}
       ];
     }
 
@@ -7497,7 +7517,7 @@ INDEX_HTML = r"""<!doctype html>
       el.textContent = t(key);
     }
 
-    // Account checkboxes (team access), LINE and Telegram under their own heading.
+    // Account checkboxes (team access), LINE, LINE OA and Telegram under their own heading.
     function accountChecklist(accounts, isChecked) {
       const box = document.createElement("div");
       box.className = "account-checklist";
@@ -12514,7 +12534,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       $("accountCardStatus").textContent = account ? `${channelName(account)} · ${label}` : label;
       const channelTag = $("mobileAccountChannel");
       channelTag.textContent = account ? channelName(account) : "";
-      channelTag.className = "mobile-account-channel" + (account ? (accountIsLine(account) ? " line" : " telegram") : "");
+      channelTag.className = "mobile-account-channel" + (account ? " " + channelKey(account) : "");
       const lost = Boolean(accountId && accountIsDisconnected(accountId));
       const canFix = hasPermission("manage_accounts");
       const fix = reconnectKeys(account);
@@ -15050,7 +15070,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "day.sat": {th: "ส", en: "Sa"},
       "day.sun": {th: "อา", en: "Su"},
       "team.title": {th: "ทีมงาน", en: "Team"},
-      "team.subtitle": {th: "พนักงานเข้าระบบด้วยอีเมลของตัวเองและตอบลูกค้าจากบัญชี LINE และ Telegram ของคุณ ทุกข้อความที่ตอบจะนับเป็น KPI ของคนนั้น", en: "Staff sign in with their own email and reply from your LINE and Telegram accounts. Each reply is credited to them in KPI."},
+      "team.subtitle": {th: "พนักงานเข้าระบบด้วยอีเมลของตัวเองและตอบลูกค้าจากบัญชี LINE, LINE OA และ Telegram ของคุณ ทุกข้อความที่ตอบจะนับเป็น KPI ของคนนั้น", en: "Staff sign in with their own email and reply from your LINE, LINE OA and Telegram accounts. Each reply is credited to them in KPI."},
       "team.add": {th: "เพิ่มพนักงาน", en: "Add staff member"},
       "team.accounts": {th: "บัญชีที่ใช้ได้", en: "Accounts they can use"},
       "team.none": {th: "ยังไม่มีพนักงาน", en: "No staff yet"},
@@ -15306,11 +15326,11 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "help.tools.q3": {th: "ปุ่มกดไม่ได้", en: "Buttons are disabled"},
       "help.tools.a3": {th: "ต้องเลือกบัญชี LINE ก่อน และผู้ใช้ต้องมีสิทธิ์ใช้เครื่องมือ", en: "Pick a LINE account first; your role also needs access to Tools."},
       "help.settings.title": {th: "วิธีใช้หน้าตั้งค่า", en: "Using Settings"},
-      "help.settings.intro": {th: "จัดการบัญชี LINE และ Telegram ทีมงาน AI และการแจ้งเตือนของร้าน", en: "Manage the shop's LINE and Telegram accounts, team, AI and notifications."},
+      "help.settings.intro": {th: "จัดการบัญชี LINE, LINE OA และ Telegram ทีมงาน AI และการแจ้งเตือนของร้าน", en: "Manage the shop's LINE, LINE OA and Telegram accounts, team, AI and notifications."},
       "help.settings.s1_title": {th: "จัดการบัญชี", en: "Account Management"},
       "help.settings.s1_body": {th: "บัญชี LINE: กด “+ เพิ่มบัญชี LINE” → เริ่ม → สแกน QR ด้วยแอป LINE → ยืนยัน PIN บนมือถือถ้ามีการขอ ถ้าหลุดให้กด “เชื่อมต่อใหม่” แล้วสแกนบัญชีเดิม · บัญชี Telegram: กด “+ เพิ่ม Telegram Bot” แล้ววาง token จาก @BotFather หรือ “+ เพิ่ม Telegram ส่วนตัว” แล้วเข้าสู่ระบบด้วยเบอร์โทร", en: "LINE: press + Add LINE account → Start → scan the QR with the LINE app → confirm the PIN if asked; if it signs out, press Reconnect and scan the same account. Telegram: press + Add a Telegram bot and paste the token from @BotFather, or + Add a personal Telegram and sign in with its phone number."},
       "help.settings.s2_title": {th: "ทีมงาน", en: "Team"},
-      "help.settings.s2_body": {th: "เพิ่มพนักงานด้วยอีเมลและรหัสผ่าน พนักงานตอบลูกค้าจากบัญชี LINE และ Telegram ของร้านได้ และนับผลงานใน KPI", en: "Add staff with an email and password. They reply from the shop's LINE and Telegram accounts and their replies count in KPI."},
+      "help.settings.s2_body": {th: "เพิ่มพนักงานด้วยอีเมลและรหัสผ่าน พนักงานตอบลูกค้าจากบัญชี LINE, LINE OA และ Telegram ของร้านได้ และนับผลงานใน KPI", en: "Add staff with an email and password. They reply from the shop's LINE, LINE OA and Telegram accounts and their replies count in KPI."},
       "help.settings.s3_title": {th: "AI", en: "AI"},
       "help.settings.s3_body": {th: "เลือก AI ที่ใช้ตอบลูกค้าอัตโนมัติและ AI ที่ใช้สร้างรูป", en: "Choose the AI for auto replies and the AI for pictures."},
       "help.settings.s4_title": {th: "KPI และกะงาน", en: "KPI & shifts"},
@@ -16275,7 +16295,7 @@ GOD_HTML = r"""<!doctype html>
             <div class="god-guide-note"><strong>God แยกจาก Login สมาชิก</strong><span>ใช้หน้า /god สำหรับจัดการระบบเท่านั้น อย่าแชร์รหัส God และอย่าใช้บัญชีนี้ทำงานประจำวันแทนสมาชิก</span></div>
             <div class="god-guide-note"><strong>Global Knowledge กับ Knowledge สมาชิกไม่เหมือนกัน</strong><span>Global Knowledge ใช้ร่วมกันทุกคน ส่วน Knowledge ใน AI Chat Bot เป็นข้อมูลส่วนตัวของผู้ใช้นั้น เลือกตำแหน่งเก็บข้อมูลให้ตรงกับผู้ที่ควรเห็น</span></div>
             <div class="god-guide-note"><strong>Strict Knowledge</strong><span>เมื่อเปิด AI จะตอบเฉพาะข้อมูลที่ค้นพบใน Knowledge และส่งคำถามที่ตอบไม่ได้เข้าคิว เหมาะกับข้อมูลธุรกิจที่ต้องการลดการเดา</span></div>
-            <div class="god-guide-note"><strong>ก่อนลบสมาชิก</strong><span>การลบจะลบบัญชี LINE และ Telegram, Pattern, งานบอท, Log และค่า AI ของสมาชิกทั้งหมด ควรตรวจรายละเอียดและสำรองข้อมูลที่จำเป็นก่อนยืนยัน</span></div>
+            <div class="god-guide-note"><strong>ก่อนลบสมาชิก</strong><span>การลบจะลบบัญชี LINE, LINE OA และ Telegram, Pattern, งานบอท, Log และค่า AI ของสมาชิกทั้งหมด ควรตรวจรายละเอียดและสำรองข้อมูลที่จำเป็นก่อนยืนยัน</span></div>
           </div>
         </div>
       </section>
@@ -16306,7 +16326,7 @@ GOD_HTML = r"""<!doctype html>
   </dialog>
 
   <dialog id="deleteDialog">
-    <div class="dialog-body"><h2>ลบสมาชิก</h2><p id="deleteMessage"></p><p class="muted">บัญชี LINE และ Telegram, Pattern, งานบอท, Log และค่า AI ของสมาชิกจะถูกลบทั้งหมด</p></div>
+    <div class="dialog-body"><h2>ลบสมาชิก</h2><p id="deleteMessage"></p><p class="muted">บัญชี LINE, LINE OA และ Telegram, Pattern, งานบอท, Log และค่า AI ของสมาชิกจะถูกลบทั้งหมด</p></div>
     <div class="dialog-actions"><button class="secondary" data-close="deleteDialog">ยกเลิก</button><button class="danger-button" id="confirmDeleteButton">ลบสมาชิก</button></div>
   </dialog>
   <div class="toast hidden" id="toast" role="status"></div>
@@ -16786,8 +16806,10 @@ GOD_HTML = r"""<!doctype html>
         const root = $("detailContent");
         root.replaceChildren();
         const isLine = (item) => !item.channel || item.channel === "line";
+        const isTelegram = (item) => String(item.channel || "").startsWith("telegram");
         addDetailSection(root, "บัญชี LINE", (data.accounts || []).filter(isLine), (item) => detailItem(item.label || item.id, item.userid || item.mid || item.id));
-        addDetailSection(root, "บัญชี Telegram", (data.accounts || []).filter((item) => !isLine(item)), (item) => detailItem(item.label || item.id, `${item.channel === "telegram_user" ? "ส่วนตัว" : "Bot"} · ${item.userid || item.id}`));
+        addDetailSection(root, "บัญชี LINE OA", (data.accounts || []).filter((item) => item.channel === "line_oa"), (item) => detailItem(item.label || item.id, item.userid || item.id));
+        addDetailSection(root, "บัญชี Telegram", (data.accounts || []).filter(isTelegram), (item) => detailItem(item.label || item.id, `${item.channel === "telegram_user" ? "ส่วนตัว" : "Bot"} · ${item.userid || item.id}`));
         addDetailSection(root, "Pattern", data.patterns || [], (item) => detailItem(item.name, item.categoryName || "General", item.text));
         addDetailSection(root, "งานบอท", data.schedules || [], (item) => detailItem(item.name, `${item.status || "-"} · ส่งแล้ว ${item.sentCount || 0} ครั้ง`));
         const ai = data.ai || {};
@@ -17016,6 +17038,9 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("POST", "/api/schedules/test"): (6, 60.0),
     **crm_routes.RATE_LIMITS,
     **telegram_routes.RATE_LIMITS,
+    ("POST", "/api/lineoa/login/start"): (6, 300.0),
+    ("GET", "/api/lineoa/login/state"): (240, 60.0),
+    ("POST", "/api/lineoa/login/pick"): (10, 60.0),
     ("GET", "/api/inbox"): (60, 60.0),
     ("GET", "/api/events/inbox"): (12, 60.0),
 }
@@ -17078,6 +17103,11 @@ MAX_TRACKED_ROOMS = 2000
 OUTGOING_ATTRIBUTION_TTL_SECONDS = 300.0
 # Outgoing messages that are not a human/AI reply to a waiting customer.
 NON_REPLY_SENDERS = frozenset({"schedule", "api", "broadcast"})
+# A LINE OA whose event stream was closed this long starts over with a sync,
+# since OA Manager may not replay that much.
+LINE_OA_RESYNC_AFTER_SECONDS = 30 * 60
+LINE_OA_LOGIN_SECONDS = 300.0
+MAX_LINE_OA_AVATAR_BYTES = 1024 * 1024
 # A chat first seen by the CRM keeps its full recent history only if it is this fresh.
 CRM_BACKFILL_RECENT_DAYS = 7
 BROADCAST_TICK_SECONDS = 2.0
@@ -18898,7 +18928,7 @@ class AccountStore:
             if owned >= MAX_ACCOUNTS_PER_USER:
                 raise WebError(
                     HTTPStatus.CONFLICT,
-                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} accounts (LINE and Telegram together).",
+                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} accounts (LINE, LINE OA and Telegram together).",
                     "account_quota",
                 )
             existing = {
@@ -18935,6 +18965,22 @@ class AccountStore:
                 self.save()
                 return changed
         return False
+
+    def set_channel_problem(self, account_id: str, problem: str) -> None:
+        """Note (or clear) why a non-LINE account gets no chats, e.g. "chat_off"."""
+        with self.lock:
+            for account in self.data.get("accounts", []):
+                if not isinstance(account, dict) or account.get("id") != account_id:
+                    continue
+                if str(account.get("channelProblem") or "") == problem:
+                    return
+                if problem:
+                    account["channelProblem"] = problem
+                else:
+                    account.pop("channelProblem", None)
+                account["updatedAt"] = _now_iso()
+                self.save()
+                return
 
     def mark_session_connected(self, account_id: str) -> None:
         with self.lock:
@@ -19052,7 +19098,7 @@ class AccountStore:
             if owned >= MAX_ACCOUNTS_PER_USER:
                 raise WebError(
                     HTTPStatus.CONFLICT,
-                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} accounts (LINE and Telegram together).",
+                    f"Each user can have at most {MAX_ACCOUNTS_PER_USER} accounts (LINE, LINE OA and Telegram together).",
                     "account_quota",
                 )
             existing = {
@@ -19356,6 +19402,11 @@ class WebState:
         self.telegram = TelegramChannels(self)
         # Personal Telegram accounts (MTProto), and their sign-ins in progress.
         self.telegram_users = TelegramUsers(self)
+        # LINE Official Accounts through OA Manager, and the QR sign-ins in progress
+        # (per owner; the signed-in session waits server-side until OAs are picked).
+        self.line_oa = LineOAChannels(self)
+        self.oa_logins: dict[str, dict[str, Any]] = {}
+        self.oa_login_results: dict[str, tuple[str, Any]] = {}
         for account in self.account_store.list_accounts():
             if account.get("sessionState") != "connected":
                 continue
@@ -19363,6 +19414,8 @@ class WebState:
                 self.telegram.start(str(account["id"]))
             elif account.get("channel") == "telegram_user":
                 self.telegram_users.start(str(account["id"]))
+            elif account.get("channel") == "line_oa":
+                self.line_oa.start(str(account["id"]))
         self.scheduler = ScheduleEngine(self)
         self.ai_auto_reply_engine = AiAutoReplyEngine(self)
         self.session_refresh_attempts: dict[str, float] = {}
@@ -19664,6 +19717,7 @@ class WebState:
         self.broadcast_runner.close()
         self.telegram_users.close()
         self.telegram.close()
+        self.line_oa.close()
         self.staff_notifier.close()
         self.crm_engine.stop()
         self.crm_executor.shutdown(wait=True, cancel_futures=True)
@@ -20534,6 +20588,7 @@ class WebState:
         if _account_channel(removed) != "line":
             self.telegram.stop(account_id)
             self.telegram_users.stop(account_id)
+            self.line_oa.stop(account_id)
             credential_file = str(removed.get("credentialFile") or "")
             if credential_file and os.path.exists(credential_file):
                 try:
@@ -20541,6 +20596,7 @@ class WebState:
                 except OSError:
                     traceback.print_exc()
             self.store.set(f"telegram_runtime:{account_id}", {"offset": 0})
+            self.store.set(f"lineoa_runtime:{account_id}", {})
         with self.room_state_lock:
             self.room_states_cache.pop(account_id, None)
 
@@ -21957,7 +22013,7 @@ class WebState:
                 except TelegramApiError as exc:
                     raise self._telegram_send_error(account_id, exc) from None
                 self.note_outgoing(account_id, chat_id, by)
-            self._telegram_record_outgoing(
+            self._record_crm_outgoing(
                 account_id, chat_id, sent, by=by, text=text, content_type=0, meta={}
             )
             return str(sent.get("message_id") or "")
@@ -21968,11 +22024,24 @@ class WebState:
                     account_id, lambda adapter: adapter.send_text(target, text)
                 )
                 self.note_outgoing(account_id, chat_id, by)
-            self._telegram_record_outgoing(
+            self._record_crm_outgoing(
                 account_id, chat_id, sent, by=by, text=text, content_type=0,
                 meta={"mtproto": True},
             )
             return str(sent.get("message_id") or "")
+        if channel == "line_oa":
+            bot_id = self._oa_target(account_id, chat_id)
+            with self.api_lock_for(account_id):
+                send_id = self._oa_call(
+                    account_id, lambda client: client.send_text(bot_id, chat_id, text)
+                )
+                self.note_outgoing(account_id, chat_id, by)
+            # Recorded under the id OA Manager echoes back, so the echo is not a second copy.
+            self._record_crm_outgoing(
+                account_id, chat_id, {"message_id": send_id}, by=by, text=text,
+                content_type=0, meta={"sendId": send_id},
+            )
+            return send_id
         if channel != "line":
             raise _line_only()
         api = self.get_api(account_id)
@@ -22026,7 +22095,7 @@ class WebState:
             return WebError(HTTPStatus.BAD_GATEWAY, exc.message, "telegram_unavailable")
         return WebError(HTTPStatus.BAD_REQUEST, exc.message, "telegram_send_failed")
 
-    def _telegram_record_outgoing(
+    def _record_crm_outgoing(
         self,
         account_id: str,
         chat_id: str,
@@ -22038,14 +22107,16 @@ class WebState:
         meta: dict[str, Any],
     ) -> None:
         kind, sender_id = _crm_sender(by)
+        channel = _account_channel(self.account_store.get(account_id))
         result: dict[str, Any] = {}
         try:
             result = self.crm.ingest(
                 owner_id=self._account_owner_id(account_id),
                 account_id=account_id,
-                channel=_account_channel(self.account_store.get(account_id)),
+                channel=channel,
                 chat_id=chat_id,
-                contact={"externalId": chat_id[3:]},
+                # Telegram chat ids carry a "tgu" prefix; OA chat ids are the person.
+                contact={"externalId": chat_id[3:] if channel.startswith("telegram") else chat_id},
                 messages=[
                     {
                         "externalId": str(sent.get("message_id") or uuid.uuid4().hex),
@@ -22067,7 +22138,7 @@ class WebState:
         if result and result.get("status") != result.get("previousStatus"):
             self._bump_crm_version(account_id)
 
-    def _telegram_secret(self, account_id: str) -> dict[str, Any]:
+    def _channel_secret(self, account_id: str) -> dict[str, Any]:
         account = self.account_store.get(account_id) or {}
         path = str(account.get("credentialFile") or "")
         if not path or not os.path.exists(path):
@@ -22082,16 +22153,16 @@ class WebState:
         return secret if isinstance(secret, dict) else {}
 
     def tg_token(self, account_id: str) -> str:
-        return str(self._telegram_secret(account_id).get("token") or "")
+        return str(self._channel_secret(account_id).get("token") or "")
 
     def tgu_credentials(self, account_id: str) -> dict[str, Any]:
-        return self._telegram_secret(account_id)
+        return self._channel_secret(account_id)
 
-    def _write_telegram_secret(self, path: str, secret: dict[str, Any]) -> None:
+    def _write_channel_secret(self, path: str, secret: dict[str, Any]) -> None:
         _write_json_file(path, {"secret": self._encrypt_secret(json.dumps(secret))})
 
     def _write_telegram_credentials(self, path: str, token: str) -> None:
-        self._write_telegram_secret(path, {"token": token})
+        self._write_channel_secret(path, {"token": token})
 
     def tg_backfill(self, account_id: str, messages: list[dict[str, Any]]) -> None:
         """Recent chats when a personal account connects: history only, no alerts."""
@@ -22280,14 +22351,15 @@ class WebState:
             "createdAt": _now_iso(),
             "updatedAt": _now_iso(),
         }
-        account = self._create_telegram_account(record, {"token": token}, owner_id)
+        account = self._create_channel_account(record, {"token": token}, owner_id)
         self.telegram.start(account["id"])
         return self._accounts_payload(owner_id, account["id"])
 
-    def _create_telegram_account(
+    def _create_channel_account(
         self, record: dict[str, Any], secret: dict[str, Any], owner_id: str
     ) -> dict[str, Any]:
-        """Save a Telegram account, its encrypted secret and its owner in one go."""
+        """Save a Telegram or LINE OA account, its encrypted secret and its owner in one go."""
+        line_oa = record.get("channel") == "line_oa"
         with self.lock, self.web_auth.lock, self.account_store.lock:
             previous_accounts = copy.deepcopy(self.account_store.data)
             previous_auth = copy.deepcopy(self.web_auth.data)
@@ -22296,9 +22368,10 @@ class WebState:
                 account = self.account_store.add_channel_account(record, owner_id)
                 os.makedirs(self.config.accounts_dir, exist_ok=True)
                 credential_file = str(
-                    Path(self.config.accounts_dir) / f"{account['id']}.telegram.json"
+                    Path(self.config.accounts_dir)
+                    / f"{account['id']}.{'lineoa' if line_oa else 'telegram'}.json"
                 )
-                self._write_telegram_secret(credential_file, secret)
+                self._write_channel_secret(credential_file, secret)
                 for stored in self.account_store.data["accounts"]:
                     if isinstance(stored, dict) and stored.get("id") == account["id"]:
                         stored["credentialFile"] = credential_file
@@ -22319,7 +22392,10 @@ class WebState:
                 if credential_file and os.path.exists(credential_file):
                     os.remove(credential_file)
                 raise
-        self.store.set(f"telegram_runtime:{account['id']}", {"offset": 0})
+        if line_oa:
+            self.store.set(f"lineoa_runtime:{account['id']}", {})
+        else:
+            self.store.set(f"telegram_runtime:{account['id']}", {"offset": 0})
         return account
 
     def _accounts_payload(self, owner_id: str, account_id: str) -> dict[str, Any]:
@@ -22406,7 +22482,7 @@ class WebState:
                     "You signed in to a different Telegram account.",
                     "telegram_account_mismatch",
                 )
-            self._write_telegram_secret(str(account.get("credentialFile") or ""), secret)
+            self._write_channel_secret(str(account.get("credentialFile") or ""), secret)
             self.account_store.mark_session_connected(reconnect_id)
             self.telegram_users.start(reconnect_id)
             return {**self._accounts_payload(owner_id, reconnect_id), "state": "done"}
@@ -22435,7 +22511,7 @@ class WebState:
             "createdAt": _now_iso(),
             "updatedAt": _now_iso(),
         }
-        account = self._create_telegram_account(record, secret, owner_id)
+        account = self._create_channel_account(record, secret, owner_id)
         self.telegram_users.start(account["id"])
         return {**self._accounts_payload(owner_id, account["id"]), "state": "done"}
 
@@ -22496,8 +22572,13 @@ class WebState:
         account_id = str(account.get("id") or "")
         session_state = self.account_store.session_state(account_id)
         authenticated = session_state == "connected"
-        personal = _account_channel(account) == "telegram_user"
-        runtime = self.telegram_users if personal else self.telegram
+        channel = _account_channel(account)
+        personal = channel == "telegram_user"
+        runtime: Any = (
+            self.telegram_users
+            if personal
+            else (self.line_oa if channel == "line_oa" else self.telegram)
+        )
         if authenticated and not runtime.running(account_id) and not personal:
             runtime.start(account_id)
         username = str(account.get("botUsername") or account.get("username") or "")
@@ -22515,7 +22596,7 @@ class WebState:
                 "userid": str(account.get("userid") or ""),
                 "statusMessage": (
                     str(account.get("userid") or "")
-                    if personal
+                    if personal or channel == "line_oa"
                     else (f"t.me/{username}" if username else "")
                 ),
                 "picturePath": "",
@@ -22544,7 +22625,7 @@ class WebState:
             "to": chat_id if outgoing else own_mid,
             "text": row.get("text") or "",
             "contentType": content_type,
-            "stickerId": None,
+            "stickerId": str(meta.get("stickerId") or "") or None,
             "fileName": meta.get("fileName") or None,
             "fileSize": str(meta.get("fileSize") or "") or None,
             "durationMs": int(duration) * 1000 if isinstance(duration, (int, float)) else None,
@@ -22646,6 +22727,11 @@ class WebState:
         if not chat_mid:
             raise WebError(HTTPStatus.BAD_REQUEST, "chatMid is required.")
         self.crm.mark_read(account_id, chat_mid)
+        if _account_channel(self.account_store.get(account_id)) == "line_oa":
+            # Like opening the chat in OA Manager: the customer sees it read.
+            threading.Thread(
+                target=self._oa_mark_read, args=(account_id, chat_mid), daemon=True
+            ).start()
         return {"ok": True, "chatMid": chat_mid, "lastMessageId": body.get("lastMessageId")}
 
     def tg_send(
@@ -22672,6 +22758,17 @@ class WebState:
         is_image: bool,
         user: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        if _account_channel(self.account_store.get(account_id)) == "line_oa":
+            bot_id = self._oa_target(account_id, to)
+            with self.api_lock_for(account_id):
+                send_id = self._oa_call(
+                    account_id, lambda client: client.send_file(bot_id, to, raw, name)
+                )
+                self.note_outgoing(account_id, to, str((user or {}).get("id") or ""))
+            # Not stored here: OA Manager echoes the file back with the content id
+            # needed to show it, and that echo is what the CRM keeps.
+            self.record_operator_send(account_id, user, to, "media")
+            return {"ok": True, "messageId": send_id}
         target = self._telegram_target(account_id, to)
         if _account_channel(self.account_store.get(account_id)) == "telegram_user":
             with self.api_lock_for(account_id):
@@ -22679,7 +22776,7 @@ class WebState:
                     account_id, lambda adapter: adapter.send_file(target, raw, name, is_image)
                 )
                 self.note_outgoing(account_id, to, str((user or {}).get("id") or ""))
-            self._telegram_record_outgoing(
+            self._record_crm_outgoing(
                 account_id,
                 to,
                 sent,
@@ -22708,7 +22805,7 @@ class WebState:
             if photos
             else document.get("file_id")
         )
-        self._telegram_record_outgoing(
+        self._record_crm_outgoing(
             account_id,
             to,
             sent,
@@ -22727,6 +22824,8 @@ class WebState:
         if not row:
             raise WebError(HTTPStatus.NOT_FOUND, "Media not available.")
         meta = json.loads(row.get("meta") or "{}")
+        if _account_channel(self.account_store.get(account_id)) == "line_oa":
+            return self._oa_media(account_id, row, meta)
         if meta.get("mtproto"):
             target = telegram_user_id(chat_mid)
             data, filename = self._telegram_user_call(
@@ -22749,6 +22848,8 @@ class WebState:
 
     def tg_avatar(self, account_id: str) -> bytes:
         account = self.account_store.get(account_id) or {}
+        if _account_channel(account) == "line_oa":
+            return self._oa_avatar(account)
         if _account_channel(account) != "telegram_bot":
             raise WebError(
                 HTTPStatus.NOT_FOUND, "No profile picture.", "profile_picture_not_found"
@@ -22766,6 +22867,462 @@ class WebState:
                 "The bot has no profile picture.",
                 "profile_picture_not_found",
             ) from exc
+
+    # -- LINE Official Accounts (through OA Manager) --------------------------
+    def oa_bot_id(self, account_id: str) -> str:
+        return str((self.account_store.get(account_id) or {}).get("botId") or "")
+
+    def oa_cookies(self, account_id: str) -> list[dict[str, Any]]:
+        cookies = self._channel_secret(account_id).get("cookies")
+        return [item for item in cookies if isinstance(item, dict)] if isinstance(cookies, list) else []
+
+    def oa_save_cookies(self, account_id: str, cookies: list[dict[str, Any]]) -> None:
+        path = str((self.account_store.get(account_id) or {}).get("credentialFile") or "")
+        if not path or not cookies:
+            return
+        secret = self._channel_secret(account_id)
+        secret["cookies"] = cookies
+        self._write_channel_secret(path, secret)
+
+    def oa_proxy(self, account_id: str) -> str | None:
+        return None
+
+    def oa_cursor(self, account_id: str) -> str:
+        raw = self.store.get(f"lineoa_runtime:{account_id}", {})
+        if not isinstance(raw, dict):
+            return ""
+        if time.time() - float(raw.get("savedAt") or 0) > LINE_OA_RESYNC_AFTER_SECONDS:
+            return ""
+        return str(raw.get("cursor") or "")
+
+    def oa_save_cursor(self, account_id: str, cursor: str) -> None:
+        self.store.set(
+            f"lineoa_runtime:{account_id}", {"cursor": str(cursor or ""), "savedAt": time.time()}
+        )
+
+    def _oa_ingest(
+        self, account_id: str, message: dict[str, Any], *, live: bool
+    ) -> dict[str, Any]:
+        if not self.account_store.get(account_id):
+            return {}
+        chat_id = str(message.get("chatId") or "")
+        if not message.get("outgoing"):
+            kind, sender_id = "customer", chat_id
+        elif message.get("autoResponse"):
+            # The OA's own greeting or keyword reply: nobody handled the chat.
+            kind, sender_id = "system", ""
+        elif live:
+            kind, sender_id = _crm_sender(
+                self._outgoing_attribution_for(account_id, chat_id) or "line_app"
+            )
+        else:
+            kind, sender_id = "app", ""
+        return self.crm.ingest(
+            owner_id=self._account_owner_id(account_id),
+            account_id=account_id,
+            channel="line_oa",
+            chat_id=chat_id,
+            contact={"externalId": chat_id, "name": message.get("name")},
+            messages=[
+                {
+                    "externalId": message.get("externalId"),
+                    "direction": "out" if message.get("outgoing") else "in",
+                    "senderKind": kind,
+                    "senderId": sender_id,
+                    "text": message.get("text"),
+                    "contentType": message.get("contentType"),
+                    "meta": message.get("meta") or {},
+                    "at": message.get("at"),
+                }
+            ],
+            track_unread=live,
+        ) or {}
+
+    def oa_receive(self, account_id: str, message: dict[str, Any]) -> None:
+        chat_id = str(message.get("chatId") or "")
+        result = self._oa_ingest(account_id, message, live=True)
+        if not result.get("inserted"):
+            return  # already stored: our own send echoed back, or a replay
+        if message.get("outgoing"):
+            # Sent from OA Manager or the LINE OA app counts like the LINE phone app.
+            if not message.get("autoResponse") and not self._outgoing_attribution_for(
+                account_id, chat_id
+            ):
+                self.note_outgoing(account_id, chat_id, "line_app")
+        else:
+            self.note_incoming(account_id, chat_id, _coerce_int(message.get("at")))
+        self._bump_inbox_version(account_id)
+        if result.get("created") or result.get("status") != result.get("previousStatus"):
+            self._bump_crm_version(account_id)
+        if not message.get("outgoing"):
+            self._telegram_auto_reply(
+                account_id, self._account_owner_id(account_id), chat_id, message
+            )
+
+    def oa_backfill(self, account_id: str, messages: list[dict[str, Any]]) -> None:
+        """Recent chats copied in when an OA connects: history only, no alerts."""
+        if not self.account_store.get(account_id):
+            return
+        for message in messages:
+            try:
+                self._oa_ingest(account_id, message, live=False)
+            except Exception:
+                traceback.print_exc()
+        self._bump_inbox_version(account_id)
+        self._bump_crm_version(account_id)
+
+    def oa_problem(self, account_id: str, problem: str) -> None:
+        self.account_store.set_channel_problem(account_id, problem)
+
+    def oa_auth_failed(self, account_id: str) -> None:
+        self.account_store.mark_session_reauth_required(
+            account_id, "LINE OA Manager signed this account out. Scan the QR code again."
+        )
+        self.line_oa.stop(account_id)
+
+    def _oa_target(self, account_id: str, chat_id: str) -> str:
+        if not is_user_chat(chat_id):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST, "Pick a LINE OA chat first.", "line_oa_chat_invalid"
+            )
+        bot_id = self.oa_bot_id(account_id)
+        if not bot_id:
+            raise WebError(HTTPStatus.NOT_FOUND, "LINE OA not found.")
+        return bot_id
+
+    def _oa_error(self, account_id: str, exc: OAManagerError) -> WebError:
+        if exc.unauthorized:
+            self.oa_auth_failed(account_id)
+            return WebError(
+                HTTPStatus.UNAUTHORIZED,
+                "LINE OA Manager signed this account out. Scan the QR code again.",
+                "line_oa_reauth",
+            )
+        if exc.network:
+            return WebError(HTTPStatus.BAD_GATEWAY, exc.message, "line_oa_unavailable")
+        return WebError(HTTPStatus.BAD_REQUEST, exc.message, "line_oa_send_failed")
+
+    def _oa_call(self, account_id: str, fn: Callable[[Any], Any]) -> Any:
+        """Run an OA Manager call; if the session ended, let LINE sign it in once quietly."""
+        try:
+            client = self.line_oa.client(account_id)
+        except OAManagerError as exc:
+            raise self._oa_error(account_id, exc) from None
+        try:
+            return fn(client)
+        except OAManagerError as exc:
+            if not exc.unauthorized or not client.refresh_session():
+                raise self._oa_error(account_id, exc) from None
+        self.oa_save_cookies(account_id, client.cookies())
+        try:
+            return fn(client)
+        except OAManagerError as exc:
+            raise self._oa_error(account_id, exc) from None
+
+    def _oa_mark_read(self, account_id: str, chat_id: str) -> None:
+        latest = next(
+            (
+                row
+                for row in reversed(self.crm.chat_messages(account_id, chat_id, limit=30))
+                if row.get("direction") == "in"
+            ),
+            None,
+        )
+        if latest is None:
+            return
+        meta = json.loads(latest.get("meta") or "{}")
+        message_id = str(meta.get("messageId") or "")
+        bot_id = self.oa_bot_id(account_id)
+        if not message_id or not bot_id:
+            return
+        try:
+            self._oa_call(
+                account_id,
+                lambda client: client.mark_read(
+                    bot_id, chat_id, message_id, _coerce_int(latest.get("at"))
+                ),
+            )
+        except WebError:
+            pass
+
+    def _oa_media(
+        self, account_id: str, row: dict[str, Any], meta: dict[str, Any]
+    ) -> tuple[bytes, str, int]:
+        content_hash = str(meta.get("contentHash") or "")
+        bot_id = self.oa_bot_id(account_id)
+        if not content_hash or not bot_id:
+            raise WebError(HTTPStatus.NOT_FOUND, "Media not available.")
+        try:
+            data, kind = self._oa_call(
+                account_id, lambda client: client.content(bot_id, content_hash)
+            )
+        except WebError as exc:
+            if exc.code == "line_oa_reauth":
+                raise
+            raise WebError(HTTPStatus.NOT_FOUND, "Media not available.") from None
+        extension = mimetypes.guess_extension(str(kind).split(";")[0].strip()) or ""
+        filename = str(meta.get("fileName") or "") or f"{row.get('external_id') or 'file'}{extension}"
+        return data, filename, _coerce_int(row.get("content_type"))
+
+    def _oa_avatar(self, account: dict[str, Any]) -> bytes:
+        url = str(account.get("iconUrl") or "")
+        host = urlparse(url).hostname or ""
+        if urlparse(url).scheme != "https" or not (
+            host == "line-scdn.net" or host.endswith(".line-scdn.net")
+        ):
+            raise WebError(HTTPStatus.NOT_FOUND, "No profile picture.", "profile_picture_not_found")
+        try:
+            response = requests.get(url, timeout=10, stream=True)
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_content(64 * 1024):
+                total += len(chunk)
+                if total > MAX_LINE_OA_AVATAR_BYTES:
+                    raise ValueError("too large")
+                chunks.append(chunk)
+            if response.status_code != 200:
+                raise ValueError(f"HTTP {response.status_code}")
+        except (requests.RequestException, ValueError):
+            raise WebError(
+                HTTPStatus.NOT_FOUND, "No profile picture.", "profile_picture_not_found"
+            ) from None
+        return b"".join(chunks)
+
+    def _connected_oa_bot_ids(self) -> set[str]:
+        return {
+            str(account.get("botId") or "")
+            for account in self.account_store.list_accounts()
+            if account.get("channel") == "line_oa"
+        }
+
+    @staticmethod
+    def _public_oa(bot: dict[str, Any], connected: set[str]) -> dict[str, Any]:
+        bot_id = str(bot.get("botId") or "")
+        return {
+            "botId": bot_id,
+            "name": str(bot.get("name") or ""),
+            "basicSearchId": str(bot.get("basicSearchId") or ""),
+            "iconUrl": str(bot.get("iconUrl") or ""),
+            "permission": str(bot.get("userPermissionType") or ""),
+            # OA Manager serves chats only to OAs whose response mode is chat.
+            "chatOff": str(bot.get("responseMode") or "CHAT").upper() != "CHAT",
+            "connected": bot_id in connected,
+        }
+
+    def oa_login_state(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        owner_id = str((user or {}).get("id") or "")
+        with self.lock:
+            return dict(self.oa_logins.get(owner_id) or {"state": "idle"})
+
+    def _oa_login_update(self, owner_id: str, login_id: str, **changes: Any) -> bool:
+        with self.lock:
+            login = self.oa_logins.get(owner_id)
+            if not login or login.get("id") != login_id:
+                return False
+            login.update(changes)
+            return True
+
+    def oa_login_start(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Start signing in to OA Manager by QR, to add OAs or to reconnect one."""
+        owner_id = self._require_account_adder(user)
+        reconnect_id = str(body.get("reconnectAccountId") or "").strip()
+        cookies: list[dict[str, Any]] = []
+        if reconnect_id:
+            account = self.account_store.get(reconnect_id)
+            if (
+                not account
+                or _account_channel(account) != "line_oa"
+                or self._account_owner_id(reconnect_id) != owner_id
+            ):
+                raise WebError(HTTPStatus.NOT_FOUND, "LINE OA not found.")
+            # LINE Business ID may still know this browser; then no QR is needed.
+            cookies = self.oa_cookies(reconnect_id)
+        with self.lock:
+            if (self.oa_logins.get(owner_id) or {}).get("state") in {"starting", "qr", "pin"}:
+                raise WebError(
+                    HTTPStatus.CONFLICT, "A LINE OA sign-in is already running.", "login_running"
+                )
+            login_id = uuid.uuid4().hex
+            self.oa_logins[owner_id] = {
+                "state": "starting",
+                "id": login_id,
+                "qrImage": None,
+                "pin": None,
+                "error": None,
+                "errorCode": None,
+                "bots": [],
+                "reconnectAccountId": reconnect_id,
+                "startedAt": time.time(),
+            }
+            self.oa_login_results.pop(owner_id, None)
+        threading.Thread(
+            target=self._oa_login_worker,
+            args=(owner_id, login_id, reconnect_id, cookies),
+            name=f"linepassport-oa-login-{owner_id[:12]}",
+            daemon=True,
+        ).start()
+        return self.oa_login_state(user)
+
+    def oa_login_cancel(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        owner_id = str((user or {}).get("id") or "")
+        with self.lock:
+            # A worker still running keeps the old id, so its results are dropped.
+            self.oa_logins[owner_id] = {"state": "idle", "id": uuid.uuid4().hex}
+            self.oa_login_results.pop(owner_id, None)
+        return {"ok": True, "state": "idle"}
+
+    def _oa_login_worker(
+        self, owner_id: str, login_id: str, reconnect_id: str, cookies: list[dict[str, Any]]
+    ) -> None:
+        def current() -> bool:
+            with self.lock:
+                return (self.oa_logins.get(owner_id) or {}).get("id") == login_id
+
+        def on_qr(data: bytes, kind: str) -> None:
+            image = base64.b64encode(data).decode("ascii")
+            self._oa_login_update(
+                owner_id, login_id, state="qr", pin=None,
+                qrImage=f"data:{kind or 'image/png'};base64,{image}",
+            )
+
+        def on_pin(pin: str) -> None:
+            self._oa_login_update(owner_id, login_id, state="pin", pin=pin)
+
+        login = OAManagerQrLogin(cookies=cookies or None)
+        try:
+            result = login.run(
+                on_qr, on_pin, wait_seconds=LINE_OA_LOGIN_SECONDS, should_stop=lambda: not current()
+            )
+        except OAManagerLoginError as exc:
+            if exc.code != "cancelled":
+                print(
+                    f"[lineoa] sign-in stopped ({exc.code}): {' > '.join(login.trace[-4:])}",
+                    flush=True,
+                )
+            self._oa_login_update(
+                owner_id, login_id, state="error", error=exc.message,
+                errorCode=f"line_oa_{exc.code}", qrImage=None, pin=None,
+            )
+            return
+        except Exception:
+            traceback.print_exc()
+            self._oa_login_update(
+                owner_id, login_id, state="error", error="LINE OA sign-in failed.",
+                errorCode="line_oa_login_failed", qrImage=None, pin=None,
+            )
+            return
+        finally:
+            login.client.close()
+        if not current():
+            return
+        connected = self._connected_oa_bot_ids()
+        bots = [self._public_oa(bot, connected) for bot in result.bots if bot.get("botId")]
+        try:
+            if reconnect_id:
+                self._oa_finish_reconnect(reconnect_id, result)
+                self._oa_login_update(
+                    owner_id, login_id, state="done", accountId=reconnect_id, bots=bots,
+                    qrImage=None, pin=None,
+                )
+                return
+            if not bots:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    "This LINE account does not manage any LINE OA.",
+                    "line_oa_none",
+                )
+            fresh = [bot for bot in bots if not bot["connected"]]
+            if len(bots) == 1 and fresh:
+                added = self._oa_add_bots(owner_id, result, [fresh[0]["botId"]])
+                self._oa_login_update(
+                    owner_id, login_id, state="done", accountId=added[0], bots=bots,
+                    qrImage=None, pin=None,
+                )
+                return
+        except WebError as exc:
+            self._oa_login_update(
+                owner_id, login_id, state="error", error=exc.message, errorCode=exc.code,
+                qrImage=None, pin=None,
+            )
+            return
+        with self.lock:
+            if (self.oa_logins.get(owner_id) or {}).get("id") != login_id:
+                return
+            self.oa_login_results[owner_id] = (login_id, result)
+            self.oa_logins[owner_id].update(state="pick", bots=bots, qrImage=None, pin=None)
+
+    def oa_login_pick(
+        self, body: dict[str, Any], user: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        owner_id = self._require_account_adder(user)
+        bot_ids = [str(item) for item in body.get("botIds") or [] if str(item or "").strip()]
+        with self.lock:
+            login = dict(self.oa_logins.get(owner_id) or {})
+            stored = self.oa_login_results.get(owner_id)
+        if login.get("state") != "pick" or not stored or stored[0] != login.get("id"):
+            raise WebError(HTTPStatus.CONFLICT, "Scan the QR code again.", "line_oa_login_expired")
+        added = self._oa_add_bots(owner_id, stored[1], bot_ids)
+        with self.lock:
+            if (self.oa_logins.get(owner_id) or {}).get("id") == login.get("id"):
+                self.oa_logins[owner_id].update(state="done", accountId=added[0])
+            self.oa_login_results.pop(owner_id, None)
+        return {**self._accounts_payload(owner_id, added[0]), "state": "done"}
+
+    def _oa_add_bots(self, owner_id: str, result: Any, bot_ids: list[str]) -> list[str]:
+        offered = {str(bot.get("botId") or ""): bot for bot in result.bots}
+        connected = self._connected_oa_bot_ids()
+        added: list[str] = []
+        for bot_id in bot_ids:
+            bot = offered.get(bot_id)
+            if bot is None:
+                continue
+            if bot_id in connected:
+                raise WebError(
+                    HTTPStatus.CONFLICT, "This LINE OA is already connected.", "line_oa_exists"
+                )
+            name = str(bot.get("name") or "").strip() or "LINE OA"
+            search_id = str(bot.get("basicSearchId") or "")
+            record = {
+                "id": f"oa-{_safe_slug(search_id.lstrip('@') or name, 'oa')}",
+                "label": name[:MAX_NAME_LENGTH],
+                "channel": "line_oa",
+                "mid": bot_id,
+                "userid": search_id,
+                "botId": bot_id,
+                "basicSearchId": search_id,
+                "iconUrl": str(bot.get("iconUrl") or ""),
+                "sessionState": "connected",
+                "createdAt": _now_iso(),
+                "updatedAt": _now_iso(),
+            }
+            if str(bot.get("responseMode") or "CHAT").upper() != "CHAT":
+                record["channelProblem"] = "chat_off"
+            account = self._create_channel_account(record, {"cookies": result.cookies}, owner_id)
+            self.line_oa.start(str(account["id"]))
+            connected.add(bot_id)
+            added.append(str(account["id"]))
+        if not added:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Pick a LINE OA to add.", "line_oa_pick")
+        return added
+
+    def _oa_finish_reconnect(self, account_id: str, result: Any) -> None:
+        account = self.account_store.get(account_id) or {}
+        if str(account.get("botId") or "") not in {
+            str(bot.get("botId") or "") for bot in result.bots
+        }:
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "This LINE account does not manage that LINE OA.",
+                "line_oa_mismatch",
+            )
+        self.line_oa.stop(account_id)
+        secret = self._channel_secret(account_id)
+        secret["cookies"] = result.cookies
+        self._write_channel_secret(str(account.get("credentialFile") or ""), secret)
+        self.account_store.mark_session_connected(account_id)
+        self.line_oa.start(account_id)
 
     def _bump_inbox_version(self, account_id: str) -> None:
         with self.inbox_events:
@@ -28050,6 +28607,14 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.tg_user_login_password(self._read_json(), self.current_user)
         if method == "POST" and path == "/api/telegram/user/cancel":
             return self.state.tg_user_login_cancel(self.current_user)
+        if method == "POST" and path == "/api/lineoa/login/start":
+            return self.state.oa_login_start(self._read_json(), self.current_user)
+        if method == "GET" and path == "/api/lineoa/login/state":
+            return self.state.oa_login_state(self.current_user)
+        if method == "POST" and path == "/api/lineoa/login/pick":
+            return self.state.oa_login_pick(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/lineoa/login/cancel":
+            return self.state.oa_login_cancel(self.current_user)
         if method == "POST" and path == "/api/call":
             self._require_permission("tools")
             body = self._read_json()
@@ -30963,6 +31528,7 @@ ACCOUNT_CAPABILITIES: dict[str, list[str]] = {
     "line": ["groups", "e2ee", "schedules", "incoming_api", "tools", "stickers"],
     "telegram_bot": [],
     "telegram_user": [],
+    "line_oa": [],
 }
 TELEGRAM_PREVIEW_TYPES = {
     "[image]": 1,

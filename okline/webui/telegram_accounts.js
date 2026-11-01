@@ -110,7 +110,7 @@
     openReconnect = function (account) {
       const accountId = account ? account.id : (state.activeAccountId || selectedAccountId());
       const target = account || tgAccount(accountId);
-      if (target && target.channel && target.channel !== "line") {
+      if (target && accountIsTelegram(target)) {
         reconnectTelegramBot(target).catch(toastError);
         return;
       }
@@ -126,7 +126,7 @@
 
     const baseReconnectKeysForTg = reconnectKeys;
     reconnectKeys = function (account) {
-      if (!account || accountIsLine(account)) return baseReconnectKeysForTg(account);
+      if (!account || !accountIsTelegram(account)) return baseReconnectKeysForTg(account);
       const personal = account.channel === "telegram_user";
       return {
         button: personal ? "tgu.reconnect_button" : "tg.reconnect_button",
@@ -149,7 +149,7 @@
       if (!list) return;
       list.replaceChildren();
       const canManage = hasPermission("manage_accounts");
-      for (const account of (accounts || []).filter((item) => !accountIsLine(item))) {
+      for (const account of (accounts || []).filter(accountIsTelegram)) {
         const personal = account.channel === "telegram_user";
         const row = document.createElement("div");
         row.className = "management-row";
@@ -248,14 +248,15 @@
     const baseRenderProfileForTg = renderProfile;
     renderProfile = function (status) {
       baseRenderProfileForTg(status);
-      const telegram = Boolean(status && status.channel && status.channel !== "line");
-      document.body.classList.toggle("account-telegram", telegram);
+      // LINE OA and Telegram accounts both lack what only a LINE account has.
+      const notLine = Boolean(status && status.channel && status.channel !== "line");
+      document.body.classList.toggle("account-telegram", notLine && String(status.channel).startsWith("telegram"));
       for (const id of LINE_ONLY_CONTROLS) {
         const el = $(id);
-        if (el) el.classList.toggle("tg-hidden", telegram);
+        if (el) el.classList.toggle("tg-hidden", notLine);
       }
-      if (telegram && ["bot", "incoming-api", "tools"].includes(state.tab)) setTab("line");
-      if (telegram && state.contactsSubtab === "groups") setContactsSubtab("all");
+      if (notLine && ["bot", "incoming-api", "tools"].includes(state.tab)) setTab("line");
+      if (notLine && state.contactsSubtab === "groups") setContactsSubtab("all");
     };
 
     (function addTelegramEntryPoints() {

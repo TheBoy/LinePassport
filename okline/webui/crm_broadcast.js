@@ -48,7 +48,8 @@
     }
 
     async function crmBroadcastWizard(segment) {
-      const accounts = (state.accounts || []).filter((a) => a.sessionState !== "reauth_required");
+      // LINE OA chats go through OA Manager one by one; sending to a whole segment there is not offered.
+      const accounts = (state.accounts || []).filter((a) => a.sessionState !== "reauth_required" && a.channel !== "line_oa");
       if (!accounts.length) return toast(t("errors.no_account"), true);
       let preview = null;
       const values = await openModal({
@@ -58,8 +59,7 @@
           accountLabel.append(textSpan(t("crm.bc_account")));
           const account = document.createElement("select");
           for (const item of accounts) {
-            const kind = item.channel && item.channel !== "line" ? " · Telegram" : " · LINE";
-            account.appendChild(crmOption(item.id, (item.label || item.id) + kind, item.id === selectedAccountId()));
+            account.appendChild(crmOption(item.id, `${item.label || item.id} · ${channelName(item)}`, item.id === selectedAccountId()));
           }
           accountLabel.appendChild(account);
           const textLabel = document.createElement("label");

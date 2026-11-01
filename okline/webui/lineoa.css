@@ -1,0 +1,13 @@
+    /* ===== LINE OA (through OA Manager) ===== */
+    .inbox-pill.line_oa { background: #fff; color: #067647; box-shadow: inset 0 0 0 1px #06C755; }
+    .oa-login { display: grid; gap: 10px; justify-items: center; text-align: center; }
+    .oa-login .ux-muted { max-width: 420px; }
+    .oa-howto { justify-self: stretch; margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 1.6; text-align: left; }
+    .oa-qr { width: 220px; height: 220px; padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: #fff; image-rendering: pixelated; }
+    .oa-pin { color: var(--ink); font-size: 40px; font-weight: 800; letter-spacing: 10px; }
+    .oa-status { color: var(--muted); font-size: 14px; }
+    .oa-status.error { color: var(--danger); }
+    .oa-picks { display: grid; gap: 6px; justify-self: stretch; text-align: left; }
+    .oa-picks .checkbox-row { gap: 10px; }
+    .oa-picks img { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+    .oa-unofficial { justify-self: stretch; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); color: var(--muted); font-size: 12px; text-align: left; }

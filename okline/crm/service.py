@@ -1874,6 +1874,11 @@ class CrmService:
     def create_broadcast(self, user: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
         owner_id, scope = self._require(user, "manage_crm")
         account = self._account(owner_id, scope, str(body.get("accountId") or ""))
+        if account.get("channel") == "line_oa":
+            # A LINE OA chat goes through OA Manager one person at a time.
+            raise bad_request(
+                "Sending to a segment is not available for LINE OA accounts.", "broadcast_line_oa"
+            )
         text = _clean(body.get("text"), 2000)
         if not text:
             raise bad_request("Write the message first.", "broadcast_text_required")

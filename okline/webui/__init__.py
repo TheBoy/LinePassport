@@ -11,14 +11,14 @@ from importlib import resources
 
 # Marker in INDEX_HTML -> fragments placed there, in order.
 SLOTS: dict[str, list[str]] = {
-    "/*ext:css*/": ["crm.css", "telegram.css", "inbox.css"],
+    "/*ext:css*/": ["crm.css", "telegram.css", "inbox.css", "lineoa.css"],
     "<!--ext:nav-first-->": ["inbox_nav.html"],
     "<!--ext:nav-->": ["crm_nav.html"],
     "<!--ext:panels-->": ["inbox_panel.html", "crm_panels.html"],
     "<!--ext:chat-filters-->": ["crm_chat_filters.html"],
     "<!--ext:convo-actions-->": ["crm_convo_button.html"],
     "<!--ext:chat-side-->": ["crm_chat_side.html"],
-    "<!--ext:account-groups-->": ["telegram_accounts_section.html"],
+    "<!--ext:account-groups-->": ["lineoa_accounts_section.html", "telegram_accounts_section.html"],
     "<!--ext:settings-tabs-->": ["telegram_settings_tab.html"],
     "<!--ext:settings-panes-->": ["telegram_settings_pane.html"],
     "/*ext:script*/": [
@@ -28,6 +28,8 @@ SLOTS: dict[str, list[str]] = {
         "telegram.js",
         "telegram_accounts.js",
         "telegram_personal.js",
+        # After the Telegram scripts: its wrappers see LINE OA accounts first.
+        "lineoa.js",
     ],
 }
 

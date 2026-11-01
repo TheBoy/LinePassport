@@ -41,7 +41,7 @@ Prefer Python? Jump to [Quick start](#quick-start) below.
 - **Response recording** — capture, redact and export every request/response.
 - **CLI** — `python -m okline …` to call any endpoint from the shell.
 - **LinePassport web app** — team inbox with KPI, AI auto-reply and scheduled
-  sends, an **All chats** page with every LINE and Telegram account in one list
+  sends, an **All chats** page with every LINE, LINE OA and Telegram account in one list
   (each chat labelled with its channel and account), plus
   **Customers (CRM)**: customer cards across accounts, chat
   assignment and status, tags, notes, follow-ups, segments and paced segment
@@ -49,6 +49,10 @@ Prefer Python? Jump to [Quick start](#quick-start) below.
 - **Telegram** — staff alerts you can reply to from Telegram, and Telegram bots
   or personal accounts (`pip install "okline[telegram]"`) as chat accounts next
   to LINE.
+- **LINE OA** — LINE Official Accounts as chat accounts through LINE Official
+  Account Manager, added by scanning a QR code with a LINE account that is a
+  member of the OA. Chats arrive live, replies (text, images, files) go out from
+  LinePassport, and replies your team types in OA Manager show up too.
 
 ## Install
 

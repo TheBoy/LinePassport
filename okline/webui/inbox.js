@@ -41,7 +41,7 @@
       "inbox.st_any": {th: "ทุกสถานะ", en: "Any status"},
       "inbox.st_unread": {th: "ยังไม่อ่าน", en: "Unread"},
       "inbox.pick": {th: "เลือกแชทจากรายการ", en: "Pick a chat"},
-      "inbox.pick_hint": {th: "แชทจากทุกบัญชี LINE และ Telegram อยู่ในรายการด้านซ้าย ป้ายสีบอกว่ามาจากช่องทางและบัญชีไหน", en: "Chats from every LINE and Telegram account are on the left; the colored label shows which channel and account each one comes from."},
+      "inbox.pick_hint": {th: "แชทจากทุกบัญชี LINE, LINE OA และ Telegram อยู่ในรายการด้านซ้าย ป้ายสีบอกว่ามาจากช่องทางและบัญชีไหน", en: "Chats from every LINE, LINE OA and Telegram account are on the left; the colored label shows which channel and account each one comes from."},
       "inbox.empty": {th: "ยังไม่มีแชท เมื่อลูกค้าทักเข้ามาที่บัญชีไหนก็ตาม แชทจะขึ้นที่นี่", en: "No chats yet. When a customer writes to any of your accounts, the chat shows up here."},
       "inbox.empty_filtered": {th: "ไม่มีแชทที่ตรงกับตัวกรอง", en: "No chats match these filters."},
       "inbox.group": {th: "กลุ่ม", en: "Group"},
@@ -92,10 +92,11 @@
 
     function inboxPill(chat, extraClass) {
       const account = inboxAccount(chat.accountId);
-      const channelName = chat.channel === "telegram" ? "Telegram" : "LINE";
+      const channelLabel = account ? channelName(account) : (chat.channel === "telegram" ? "Telegram" : "LINE");
+      const key = account ? channelKey(account) : chat.channel;
       const label = account ? (account.label || account.id) : chat.accountId;
-      const pill = textSpan(`${channelName} · ${label}`, "inbox-pill " + chat.channel + (extraClass ? " " + extraClass : ""));
-      pill.title = `${channelName} · ${label}`;
+      const pill = textSpan(`${channelLabel} · ${label}`, "inbox-pill " + key + (extraClass ? " " + extraClass : ""));
+      pill.title = `${channelLabel} · ${label}`;
       return pill;
     }
 
@@ -165,8 +166,7 @@
       const current = select.value;
       const options = [crmOption("", t("inbox.all_accounts"))];
       for (const account of (state.inbox && state.inbox.accounts) || []) {
-        const kind = account.channel && account.channel !== "line" ? "Telegram" : "LINE";
-        options.push(crmOption(account.id, `${account.label} · ${kind}`));
+        options.push(crmOption(account.id, `${account.label} · ${channelName(account)}`));
       }
       select.replaceChildren(...options);
       select.value = [...select.options].some((o) => o.value === current) ? current : "";
