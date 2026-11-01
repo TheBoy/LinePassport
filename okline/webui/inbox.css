@@ -84,6 +84,16 @@
     .inbox-convo > .line-messages-shell { grid-row: 3; }
     .inbox-convo > .line-composer { grid-row: 4; }
     .inbox-notice { margin: 8px 12px 0; padding: 8px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-size: 13px; }
+    .inbox-loading-note {
+      display: block;
+      margin: 6px 8px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .inbox-loading-note.failed { background: var(--warn-bg); color: var(--warn); }
     .inbox-empty-thread { display: block; max-width: 380px; margin: auto; padding: 24px; color: var(--muted); line-height: 1.6; text-align: center; }
     .inbox-convo.no-chat .line-composer { visibility: hidden; }
     .inbox-convo.no-chat .convo-actions { visibility: hidden; }

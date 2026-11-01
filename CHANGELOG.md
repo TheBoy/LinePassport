@@ -148,6 +148,12 @@ All notable changes to OkLine are documented here. The format follows
   alerts".
 
 ### Fixed
+- **All chats showed one account after time away.** Coming back opened the
+  remembered account's own Chat page instead of All chats, and signing in
+  again on a tab left open kept "could not load" until the page reloaded. All
+  chats now reopens where it was left and reloads right after signing in,
+  asks again for any LINE inbox the server has no fresh copy of, and says
+  which accounts are still loading or could not be fetched.
 - **Deleting a user left their Telegram accounts running.** Their bots kept
   polling and the saved Telegram sign-in stayed on disk; customer records and
   auto-reply settings of all their accounts stayed too. A user's accounts are

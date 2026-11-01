@@ -47,6 +47,16 @@ def test_account_gate_lists_accounts_and_remembers_the_last_one():
     assert "baseRenderGateAccountsForInbox = renderGateAccounts" in INDEX_HTML
 
 
+def test_coming_back_reopens_all_chats_and_reloads_it_after_sign_in():
+    # The remembered account opens underneath, but All chats stays the page shown.
+    assert 'TABS_KEPT_ON_RETURN.push("inbox");' in INDEX_HTML
+    status = _block("async function refreshStatus", "setView(\"workspace\");")
+    assert "if (TABS_KEPT_ON_RETURN.includes(lastTab)) setTab(lastTab);" in status
+    assert status.index("const opening = selectAccount();") < status.index("setTab(lastTab)")
+    # Signing in again on an open page restarts the list instead of keeping its error.
+    assert "baseSubmitWebAuthForInbox = submitWebAuth" in INDEX_HTML
+
+
 def test_account_management_keeps_line_and_telegram_apart():
     # Settings has a LINE section and a Telegram section, each with its own add buttons.
     assert INDEX_HTML.count('id="lineAccountGroup"') == 1

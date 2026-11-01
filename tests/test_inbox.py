@@ -221,6 +221,38 @@ def test_group_names_load_in_the_background(state, monkeypatch):
     assert state.inbox_version("acct") == before + 1  # nothing new, nobody woken
 
 
+def test_the_inbox_asks_for_line_inboxes_the_server_has_not_got(state, monkeypatch, tmp_path):
+    owner = _owner(state)
+    _seed_line(state, owner)
+    token_file = tmp_path / "line-session.json"
+    token_file.write_text("{}", encoding="utf-8")
+    state.account_store.data["accounts"][0]["tokenFile"] = str(token_file)
+    state.account_store.save()
+    asked = []
+    monkeypatch.setattr(state, "request_inbox_refresh", asked.append)
+    monkeypatch.setattr(state, "refresh_inbox_for_all_accounts", lambda: None)  # no real LINE here
+
+    # A connected LINE account with no copy yet (e.g. after a restart): fetch it
+    # now and tell the page it is still loading, whichever account is open.
+    assert state.inbox(owner)["accounts"][0]["loading"] is True
+    assert asked == ["acct"]
+    state.inbox(owner)
+    assert asked == ["acct"]  # at most once per refresh interval
+    # A refresh that fails is reported instead of "loading" forever ...
+    state._note_inbox_refresh_failure("acct", RuntimeError("LINE said no"))
+    account = state.inbox(owner)["accounts"][0]
+    assert (account["loading"], account["refreshFailed"]) == (False, True)
+
+    # ... until a fetch works again.
+    class FakeLine:
+        def get_message_boxes(self, **kwargs):
+            return {"messageBoxes": []}
+
+    state.inbox_message_boxes("acct", FakeLine(), force=True)
+    account = state.inbox(owner)["accounts"][0]
+    assert (account["loading"], account["refreshFailed"]) == (False, False)
+
+
 def test_wait_any_live_event_wakes_for_any_account(state):
     versions = {"a": (0, 0), "b": (0, 0)}
     assert state.wait_any_live_event(versions, 0.05) is None

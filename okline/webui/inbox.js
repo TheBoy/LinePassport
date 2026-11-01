@@ -1,5 +1,6 @@
     // ---- All-channels inbox ----------------------------------------------
     TABS.push("inbox");
+    TABS_KEPT_ON_RETURN.push("inbox");
     const INBOX_SIDE_KEY = "okline.inboxSide";
     const INBOX_MAX_UPLOAD = 30 * 1024 * 1024;
     Object.assign(state, {
@@ -50,7 +51,9 @@
       "inbox.open_in_chat": {th: "เปิดในหน้าแชทของบัญชีนี้", en: "Open in this account's chat page"},
       "inbox.disconnected": {th: "บัญชีนี้หลุดการเชื่อมต่อ ตอบแชทนี้ไม่ได้จนกว่าจะเชื่อมใหม่", en: "This account is disconnected. You can reply once it is connected again."},
       "inbox.no_send": {th: "คุณดูแชทได้อย่างเดียว ตอบไม่ได้", en: "You can read this chat but not reply."},
-      "inbox.file_too_big": {th: "ไฟล์ใหญ่เกิน 30 MB", en: "The file is larger than 30 MB."}
+      "inbox.file_too_big": {th: "ไฟล์ใหญ่เกิน 30 MB", en: "The file is larger than 30 MB."},
+      "inbox.loading_accounts": {th: "กำลังดึงแชทล่าสุดจาก {names}…", en: "Fetching the latest chats from {names}…"},
+      "inbox.refresh_failed": {th: "ดึงแชทล่าสุดจาก {names} ไม่ได้ ตรวจการเชื่อมต่อที่ ตั้งค่า → จัดการบัญชี", en: "Could not fetch the latest chats from {names}. Check the connection in Settings → Account Management."}
     });
 
     // The inbox has its own customer panel (see the Chat page's one in the CRM script).
@@ -174,7 +177,17 @@
       const all = (state.inbox && state.inbox.chats) || [];
       const chats = all.filter(inboxMatches);
       root.replaceChildren(...chats.map(inboxRow));
-      if (!chats.length) root.appendChild(textSpan(t(all.length ? "inbox.empty_filtered" : "inbox.empty"), "state-row"));
+      // Accounts the server is still fetching, or cannot fetch: say so rather than
+      // leave them looking empty.
+      const accounts = (state.inbox && state.inbox.accounts) || [];
+      const names = (list) => list.map((account) => account.label || account.id).join(", ");
+      const failed = accounts.filter((account) => account.refreshFailed);
+      const loading = accounts.filter((account) => account.loading);
+      if (failed.length) root.prepend(textSpan(t("inbox.refresh_failed", {names: names(failed)}), "inbox-loading-note failed"));
+      if (loading.length) root.prepend(textSpan(t("inbox.loading_accounts", {names: names(loading)}), "inbox-loading-note"));
+      if (!chats.length && !loading.length) {
+        root.appendChild(textSpan(t(all.length ? "inbox.empty_filtered" : "inbox.empty"), "state-row"));
+      }
       const unreadBy = (pick) => all.filter((chat) => pick(chat) && inboxUnread(chat)).length;
       const show = (id, n) => { $(id).textContent = n ? String(n) : ""; };
       show("inboxCountLine", unreadBy((chat) => chat.channel === "line"));
@@ -495,6 +508,16 @@
     renderProfile = function (status) {
       baseRenderProfileForInbox(status);
       ensureInboxLive();
+    };
+    // Signing in again on a page left open: the stream died with the old session
+    // and the list may still show its error, so start both afresh.
+    const baseSubmitWebAuthForInbox = submitWebAuth;
+    submitWebAuth = async function () {
+      const wasRunning = state.inboxStarted;
+      await baseSubmitWebAuthForInbox();
+      if (!wasRunning || !state.currentUser || !state.inboxStarted) return;
+      if (!state.inboxSource) startInboxStream();
+      loadInbox({silent: true}).catch(() => {});
     };
     const baseWebLogoutForInbox = webLogout;
     webLogout = async function () {

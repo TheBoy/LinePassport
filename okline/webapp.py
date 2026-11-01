@@ -7143,6 +7143,8 @@ INDEX_HTML = r"""<!doctype html>
 
     // ---- top-level tabs -------------------------------------------------
     const TABS = ["line", "assistant", "incoming-api", "tools", "bot", "logs", "kpi", "settings"];
+    // Pages that cover every account: coming back reopens them instead of Chat.
+    const TABS_KEPT_ON_RETURN = [];
     const BOT_PAGES = ["schedules", "schedule", "wizard", "patterns", "pattern-categories", "ai-settings", "guide"];
     function setTab(tab) {
       if (!TABS.includes(tab)) tab = "line";
@@ -8421,9 +8423,12 @@ INDEX_HTML = r"""<!doctype html>
         const remembered = state.accounts.find((item) => item.id === rememberedAccountId());
         const preset = state.accounts.length === 1 ? state.accounts[0] : remembered;
         if (!accountId && preset) {
+          const lastTab = state.tab;
           state.activeAccountId = preset.id;
           renderAccounts();
-          await selectAccount();
+          const opening = selectAccount();
+          if (TABS_KEPT_ON_RETURN.includes(lastTab)) setTab(lastTab);
+          await opening;
           return;
         }
         if (!accountId) {
@@ -17080,6 +17085,9 @@ BROADCAST_TICK_SECONDS = 2.0
 MAX_INBOX_ACCOUNTS = 50
 MAX_INBOX_CHATS = 500
 GROUP_NAME_TTL_SECONDS = 600.0
+# Opening the inbox asks again for a LINE inbox the server has no fresh copy of.
+INBOX_STALE_SECONDS = 180.0
+INBOX_FAILURE_LOG_SECONDS = 600.0
 # Bots may send quickly; personal accounts keep the scheduler's human-like gaps.
 BROADCAST_BOT_GAP_SECONDS = 1.0
 PRESENCE_STATES = frozenset({"active", "standby", "away", "busy", "idle"})
@@ -19301,6 +19309,9 @@ class WebState:
         # LINE group names for the all-channels inbox, refreshed in the background.
         self.group_name_cache: dict[str, tuple[float, dict[str, str]]] = {}
         self.group_name_pending: set[str] = set()
+        self.inbox_kicked_at: dict[str, float] = {}
+        self.inbox_refresh_logged_at: dict[str, float] = {}
+        self.inbox_refresh_failed: set[str] = set()
         self.inbox_watchers: dict[str, float] = {}
         self.ops_watchers: dict[str, OpsWatcher] = {}
         self.ops_refresh_pending: set[str] = set()
@@ -19726,6 +19737,9 @@ class WebState:
             with self.inbox_snapshot_lock:
                 self.inbox_snapshots[account_id] = (time.monotonic(), payload)
             self.inbox_refreshed_at[account_id] = time.monotonic()
+            if account_id in self.inbox_refresh_failed:
+                self.inbox_refresh_failed.discard(account_id)
+                self._bump_inbox_version(account_id)
             self._after_inbox_fetch(account_id, payload, api)
             return payload
 
@@ -20875,9 +20889,10 @@ class WebState:
             self.inbox_refreshed_at[account_id] = now
             try:
                 self.inbox_message_boxes(account_id, self.get_api(account_id), force=True)
-            except Exception:
+            except Exception as exc:
                 # A broken session is reported by the views that need it; keep
-                # polling the remaining accounts.
+                # polling the remaining accounts, and say why in the log.
+                self._note_inbox_refresh_failure(account_id, exc)
                 continue
         for account_id in set(self.ops_watchers) - eligible:
             # Signed out, deleted or needing a new QR login: stop streaming.
@@ -20932,8 +20947,9 @@ class WebState:
             self.ops_refresh_pending.discard(account_id)
         try:
             self.inbox_message_boxes(account_id, self.get_api(account_id), force=True)
-        except Exception:
+        except Exception as exc:
             # The regular refresh loop retries; never kill the executor thread.
+            self._note_inbox_refresh_failure(account_id, exc)
             return
 
     # -- Web Push for staff without an open page (B7) --------------------------
@@ -21481,11 +21497,13 @@ class WebState:
         rows = self.crm.inbox_rows(list(by_id), limit=MAX_INBOX_CHATS)
         tags = self.crm.tags_for_customers(sorted({str(row["customer_id"]) for row in rows}))
         snapshots: dict[str, dict[str, Any]] = {}
+        fetched: dict[str, float] = {}
         with self.inbox_snapshot_lock:
             for account_id in by_id:
                 cached = self.inbox_snapshots.get(account_id)
                 if cached is not None:
-                    snapshots[account_id] = cached[1]
+                    fetched[account_id], snapshots[account_id] = cached
+        loading = self._kick_stale_line_inboxes(by_id, fetched)
         line_unread: dict[str, dict[str, int]] = {}
         chats: list[dict[str, Any]] = []
         for account_id, payload in snapshots.items():
@@ -21549,6 +21567,9 @@ class WebState:
                     "channel": str(account.get("channel") or "line"),
                     "mid": str(account.get("mid") or ""),
                     "connected": account.get("sessionState") == "connected",
+                    "loading": str(account["id"]) in loading
+                    and str(account["id"]) not in self.inbox_refresh_failed,
+                    "refreshFailed": str(account["id"]) in self.inbox_refresh_failed,
                 }
                 for account in accounts
             ],
@@ -21556,6 +21577,46 @@ class WebState:
             "unread": sum(chat["unread"] for chat in chats),
             "me": str((user or {}).get("id") or ""),
         }
+
+    def _kick_stale_line_inboxes(
+        self, accounts: dict[str, dict[str, Any]], fetched: dict[str, float]
+    ) -> set[str]:
+        """Ask for connected LINE inboxes the server has no fresh copy of.
+
+        The background refresh normally keeps every account current; this covers
+        a restart and an account whose refreshes keep failing, so the list never
+        depends on which account happens to be open. Returns the accounts with no
+        copy yet (the page says they are still loading).
+        """
+        now = time.monotonic()
+        missing: set[str] = set()
+        for account_id, account in accounts.items():
+            if account.get("channel") != "line" or account.get("sessionState") != "connected":
+                continue
+            fetched_at = fetched.get(account_id)
+            if fetched_at is None:
+                missing.add(account_id)
+                # The first copy must reach open pages even if nothing changed.
+                self.inbox_signatures.pop(account_id, None)
+            elif now - fetched_at <= INBOX_STALE_SECONDS:
+                continue
+            if now - self.inbox_kicked_at.get(account_id, -1e9) < INBOX_IDLE_REFRESH_SECONDS:
+                continue
+            self.inbox_kicked_at[account_id] = now
+            self.request_inbox_refresh(account_id)
+        return missing
+
+    def _note_inbox_refresh_failure(self, account_id: str, exc: Exception) -> None:
+        """Log, at most every 10 minutes per account, why an inbox did not refresh."""
+        if account_id not in self.inbox_refresh_failed:
+            self.inbox_refresh_failed.add(account_id)
+            self._bump_inbox_version(account_id)  # open pages show the problem
+        now = time.monotonic()
+        if now - self.inbox_refresh_logged_at.get(account_id, -1e9) < INBOX_FAILURE_LOG_SECONDS:
+            return
+        self.inbox_refresh_logged_at[account_id] = now
+        detail = _safe_log_detail(exc, 160)
+        print(f"[inbox] {account_id}: refresh failed ({type(exc).__name__}) {detail}", flush=True)
 
     def _inbox_group_row(
         self, account: dict[str, Any], box: dict[str, Any], names: dict[str, str]
