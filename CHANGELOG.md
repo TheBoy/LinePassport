@@ -7,6 +7,12 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Where to get a proxy.** Under the proxy fields of a LINE account (adding
+  it, or Edit in Settings → Account Management) LinePassport now names a few
+  providers (IPRoyal, Oxylabs, DataImpulse; examples, not endorsements) and
+  what to pick: a residential or ISP proxy with a Thai IP that stays the same,
+  entered as host, port, username and password. The web guide and install.md
+  say the same.
 - **LINE OA accounts (through LINE Official Account Manager).** Settings →
   Account Management has a LINE OA section: "+ Add a LINE OA" shows a QR code
   to scan with LINE on the phone of an account that is a member of the OA,

@@ -1155,6 +1155,8 @@ INDEX_HTML = r"""<!doctype html>
     .proxy-field-grid label { display: grid; gap: 5px; min-width: 0; }
     .proxy-field-grid .proxy-wide { grid-column: 1 / -1; }
     .proxy-field-grid .muted { grid-column: 1 / -1; }
+    .proxy-providers { font-size: 12px; line-height: 1.55; }
+    .proxy-providers a { color: var(--accent-ink); font-weight: 600; }
 
     @media (max-width: 560px) {
       .proxy-field-grid { grid-template-columns: 1fr; }
@@ -6480,6 +6482,8 @@ INDEX_HTML = r"""<!doctype html>
       "proxy.connect": {th: "เชื่อมต่อผ่าน พร็อกซี", en: "Connect through proxy"},
       "proxy.url": {th: "พร็อกซี URL", en: "Proxy URL"},
       "proxy.hint": {th: "รองรับ HTTP, HTTPS, SOCKS5 และ SOCKS5H โดยใช้เฉพาะบัญชี LINE นี้", en: "Supports HTTP, HTTPS, SOCKS5, and SOCKS5H. This proxy is used only by this LINE account."},
+      "proxy.where_lead": {th: "ยังไม่มีพร็อกซี? ซื้อได้จากผู้ให้บริการพร็อกซี เช่น", en: "No proxy yet? Proxy providers include"},
+      "proxy.where_tips": {th: "(เป็นแค่ตัวอย่าง ไม่ได้รับรอง) เลือกแบบ Residential หรือ ISP ที่เป็น IP ประเทศไทย และใช้ IP เดิมตลอด (static หรือ sticky session) เพราะถ้า IP เปลี่ยนบ่อยหรืออยู่ต่างประเทศ LINE อาจให้ออกจากระบบหรือขอยืนยันตัวตนบ่อย จากนั้นนำ Host, Port, Username และ Password จากหน้าบัญชีของผู้ให้บริการมากรอกด้านบน (ส่วนมากให้มาในรูป host:port:username:password)", en: "(examples, not endorsements). Pick residential or ISP proxies with a Thai IP that stays the same (static, or a sticky session): when the IP keeps changing or is abroad, LINE may sign the account out or ask to verify often. Then copy the host, port, username and password from the provider's dashboard into the fields above (they usually come as host:port:username:password)."},
       "proxy.configured": {th: "เปิดใช้ พร็อกซี", en: "Proxy enabled"},
       "proxy.keep_existing": {th: "เว้นว่างเพื่อใช้ พร็อกซี เดิม", en: "Leave blank to keep the current proxy"},
       "proxy.required": {th: "กรุณากรอก พร็อกซี URL", en: "Enter a proxy URL."},
@@ -7102,8 +7106,39 @@ INDEX_HTML = r"""<!doctype html>
       return s;
     }
 
+    // Where to get a proxy: a few well-known providers (examples, not endorsements).
+    const PROXY_PROVIDERS = [
+      ["IPRoyal", "https://iproyal.com/"],
+      ["Oxylabs", "https://oxylabs.io/"],
+      ["DataImpulse", "https://dataimpulse.com/"]
+    ];
+
+    function proxyProvidersHint() {
+      const box = document.createElement("div");
+      box.className = "proxy-providers muted";
+      box.appendChild(document.createTextNode(t("proxy.where_lead") + " "));
+      PROXY_PROVIDERS.forEach(([name, url], index) => {
+        if (index) box.appendChild(document.createTextNode(", "));
+        const link = document.createElement("a");
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = `${name} (${new URL(url).hostname})`;
+        box.appendChild(link);
+      });
+      box.appendChild(document.createTextNode(" " + t("proxy.where_tips")));
+      return box;
+    }
+
+    function renderLoginProxyProviders() {
+      const wrap = $("loginProxyFieldsWrap");
+      wrap.querySelectorAll(".proxy-providers").forEach((el) => el.remove());
+      wrap.appendChild(proxyProvidersHint());
+    }
+
     function applyI18n() {
       document.documentElement.lang = state.lang;
+      renderLoginProxyProviders();
       document.querySelectorAll("[data-i18n]").forEach((el) => {
         el.textContent = t(el.dataset.i18n);
       });
@@ -8046,6 +8081,8 @@ INDEX_HTML = r"""<!doctype html>
           if (account.proxyConfigured) {
             proxyFields.appendChild(textSpan(t("proxy.keep_existing"), "muted"));
           }
+          proxyFields.appendChild(textSpan(t("proxy.hint"), "muted"));
+          proxyFields.appendChild(proxyProvidersHint());
           const syncProxy = () => {
             proxyFields.classList.toggle("hidden", !proxyEnabled.checked);
             proxyFields.querySelectorAll("input, select").forEach((field) => {

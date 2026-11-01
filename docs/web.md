@@ -57,6 +57,26 @@ Once you're signed in to the web app, add a LINE account with the 4-step wizard:
 You can add **several LINE accounts** and switch between them with the account
 picker at the top of the page.
 
+## A proxy per LINE account
+
+Tick **Connect through proxy** in step 1 of adding a LINE account, or set it later
+in Settings → Account Management → Edit. HTTP, HTTPS, SOCKS5 and SOCKS5H are
+supported; the proxy is used only by that account and its password is stored
+encrypted.
+
+- **Where to get one:** proxy providers such as [IPRoyal](https://iproyal.com/),
+  [Oxylabs](https://oxylabs.io/) or [DataImpulse](https://dataimpulse.com/)
+  (examples, not endorsements).
+- **What to pick:** residential or ISP proxies with an IP in the account's
+  country (Thailand for Thai accounts) that stays the same: a static IP or a
+  sticky session. When the IP keeps changing or is abroad, LINE may sign the
+  account out or ask to verify often. Give each account its own IP.
+- **Filling it in:** providers usually hand out `host:port:username:password`;
+  put each part in its own field.
+
+LINE OA and Telegram accounts don't use this proxy (Telegram uses
+`LINEPASSPORT_TELEGRAM_PROXY`).
+
 ## After login
 
 - **Contacts & groups** — load and search your contacts, list your groups.

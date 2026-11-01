@@ -101,6 +101,17 @@ def test_line_oa_accounts_have_their_own_section_and_labels():
     assert 'a.channel !== "line_oa"' in INDEX_HTML
 
 
+def test_proxy_fields_say_where_to_get_a_proxy():
+    for url in ("https://iproyal.com/", "https://oxylabs.io/", "https://dataimpulse.com/"):
+        assert f'"{url}"' in INDEX_HTML
+    assert 'link.rel = "noopener noreferrer";' in _block("function proxyProvidersHint", "function applyI18n")
+    # Both places that take a proxy show it: the add-account wizard and Edit.
+    assert "renderLoginProxyProviders();" in _block("function applyI18n", "function setLang")
+    assert "proxyFields.appendChild(proxyProvidersHint());" in _block(
+        "async function editLineAccount", "async function deleteLineAccount"
+    )
+
+
 def test_compose_refuses_a_page_without_markers():
     with pytest.raises(RuntimeError):
         webui.compose_index("<html></html>")
