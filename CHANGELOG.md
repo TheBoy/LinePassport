@@ -7,6 +7,18 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A soft chat alert that keeps beeping while a customer waits.** A new
+  customer message on any account (All chats keeps them all live) plays a soft
+  double "boop": pure 587 Hz sine tones that swell in and fade straight out,
+  quieter and lower than the old sounds. Unless "Repeat" is turned off in
+  Settings → Notifications, it beeps again every 4 seconds until someone
+  opens or answers the chat, and a small bar shows how many customers wait,
+  with Open chat and Stop sound. Groups beep once and never repeat, a chat the
+  AI may answer waits 20 seconds before repeating, and two open tabs don't
+  beep over each other. The reminder past the reply target is the same beep
+  three times, a little louder. It replaces the short tick, which only covered
+  the selected account, and the three-note chime; Settings → Notifications can
+  play it.
 - **God page: require a proxy.** A new System settings tab on `/god` can
   require a proxy for LINE accounts, LINE OA accounts, or both. The server
   then refuses to add or reconnect such an account without one and refuses

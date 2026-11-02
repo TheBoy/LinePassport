@@ -1,0 +1,31 @@
+    /* ===== Chat ring: shown while a customer waits ===== */
+    /* In the empty right end of the header, so it hides no chat controls. */
+    .chat-ring-bar {
+      position: fixed;
+      z-index: 45;
+      top: 6px;
+      right: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: calc(100vw - 32px);
+      padding: 4px 4px 4px 14px;
+      border: 1px solid #b7e4c7;
+      border-radius: 999px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+    }
+    .chat-ring-dot {
+      flex: 0 0 auto;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #06C755;
+      animation: chat-ring-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes chat-ring-pulse { 50% { opacity: .3; transform: scale(.75); } }
+    .chat-ring-text { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; }
+    .chat-ring-bar button { flex: 0 0 auto; width: auto; min-height: 30px; padding: 4px 12px; border-radius: 999px; font-size: 13px; }
+    @media (prefers-reduced-motion: reduce) { .chat-ring-dot { animation: none; } }
+    @media (max-width: 640px) { .chat-ring-bar { top: 2px; right: 8px; left: 8px; max-width: none; } }

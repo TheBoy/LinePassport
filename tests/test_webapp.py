@@ -1721,7 +1721,7 @@ def test_web_ui_notifies_only_after_conversation_baseline_is_ready():
     assert "state.notificationWorker.showNotification(title, options)" in INDEX_HTML
     assert "new Notification(" in INDEX_HTML
     assert "function unlockNotificationSound()" in INDEX_HTML
-    assert "function playNotificationSound()" in INDEX_HTML
+    assert "async function playNotificationSound({urgent = false, preview = false} = {})" in INDEX_HTML
     assert 'button.dataset.soundStatus = "played";' in INDEX_HTML
     assert 'button.dataset.soundStatus = "blocked";' in INDEX_HTML
     assert "function playNotificationSoundForItems(accountId, items)" in INDEX_HTML

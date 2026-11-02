@@ -704,7 +704,9 @@ def test_notification_policy_matches_plan():
         "    async function refreshConversationsInBackground() {",
     )
     assert "pageIsInFront()" in block
-    assert "playSoftSound()" in block
+    # The beep comes from the chat ring, which listens to every account.
+    assert "playSoftSound" not in INDEX_HTML
+    assert "noteInboxForRing(before, state.inbox)" in INDEX_HTML
     assert "dispatchBackgroundAlerts(accountId, direct);" in block
     assert "autoReplyCovers(item.mid)" in block
     assert "insideWorkingTime()" in block

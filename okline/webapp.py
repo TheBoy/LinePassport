@@ -5308,9 +5308,11 @@ INDEX_HTML = r"""<!doctype html>
               <div class="ux-row">
                 <button id="notifySettingsEnable" class="primary" type="button" data-i18n="notify.banner_enable">Turn on notifications</button>
                 <button id="notifySettingsTest" type="button" data-i18n="notify.test">Send a test</button>
+                <button id="notifySettingsSound" type="button" data-i18n="notify.play_sound">Play the alert sound</button>
               </div>
+              <label class="checkbox-row"><input id="notifyRepeat" type="checkbox"><span data-i18n="notify.repeat">Repeat the beep every 4 seconds until someone opens or answers the chat</span></label>
               <label class="checkbox-row"><input id="notifyOutsideShift" type="checkbox"><span data-i18n="notify.outside_shift">Also notify me outside my shift</span></label>
-              <span class="muted" data-i18n="notify.policy">While this page is in front you hear one soft sound per new chat. When it's hidden you get at most one notification per chat every 2 minutes, a single summary when many customers write at once, and one louder reminder when a chat waits past the reply target. No alert when the AI already replied.</span>
+              <span class="muted" data-i18n="notify.policy">A soft double beep plays when a customer writes to any of your accounts and, with Repeat on, again every 4 seconds until someone opens or answers the chat (Stop sound quiets it). When this page is hidden you also get at most one notification per chat every 2 minutes, a single summary when many customers write at once, and one louder reminder when a chat waits past the reply target. No notification when the AI already replied.</span>
             </div>
           </div>
 
@@ -8809,9 +8811,37 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
-    async function playNotificationSound() {
+    // The chat alert: a soft double "boop". Pure sine tones at 587 Hz (D5),
+    // below the range the ear finds sharp, that swell in and fade straight out
+    // with no held note, so it stays gentle when it repeats while a customer
+    // waits. Urgent (a chat past the reply target) boops three times, a little
+    // louder.
+    function chatBeepSamples(sampleRate, urgent = false) {
+      const frequency = 587.33;
+      const attack = 0.025;
+      const decay = 0.09;
+      const fadeOut = 0.04;
+      const toneSeconds = 0.24;
+      const spacing = 0.26;
+      const levels = urgent ? [0.17, 0.14, 0.17] : [0.13, 0.11];
+      const toneLength = Math.round(toneSeconds * sampleRate);
+      const start = (index) => Math.round(index * spacing * sampleRate);
+      const samples = new Float32Array(start(levels.length - 1) + toneLength);
+      levels.forEach((level, index) => {
+        for (let i = 0; i < toneLength; i += 1) {
+          const time = i / sampleRate;
+          const rise = time < attack ? 0.5 - 0.5 * Math.cos(Math.PI * time / attack) : 1;
+          const fall = Math.exp(-Math.max(0, time - attack) / decay);
+          const end = Math.min(1, (toneSeconds - time) / fadeOut);
+          samples[start(index) + i] += level * rise * fall * end * Math.sin(2 * Math.PI * frequency * time);
+        }
+      });
+      return samples;
+    }
+
+    async function playNotificationSound({urgent = false, preview = false} = {}) {
       const button = $("notificationButton");
-      if (!state.notificationsEnabled) {
+      if (!state.notificationsEnabled && !preview) {
         if (button) button.dataset.soundStatus = "disabled";
         return false;
       }
@@ -8820,27 +8850,13 @@ INDEX_HTML = r"""<!doctype html>
         return false;
       }
       const context = state.notificationAudioContext;
-      const startAt = context.currentTime + 0.02;
-      const notes = [
-        {offset: 0, frequency: 740},
-        {offset: 0.18, frequency: 987.77},
-        {offset: 0.36, frequency: 1318.51}
-      ];
-      for (const note of notes) {
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
-        const noteStart = startAt + note.offset;
-        const noteEnd = noteStart + 0.24;
-        oscillator.type = "triangle";
-        oscillator.frequency.setValueAtTime(note.frequency, noteStart);
-        gain.gain.setValueAtTime(0.0001, noteStart);
-        gain.gain.exponentialRampToValueAtTime(0.32, noteStart + 0.025);
-        gain.gain.exponentialRampToValueAtTime(0.0001, noteEnd);
-        oscillator.connect(gain);
-        gain.connect(context.destination);
-        oscillator.start(noteStart);
-        oscillator.stop(noteEnd + 0.02);
-      }
+      const samples = chatBeepSamples(context.sampleRate, urgent);
+      const buffer = context.createBuffer(1, samples.length, context.sampleRate);
+      buffer.getChannelData(0).set(samples);
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      source.connect(context.destination);
+      source.start(context.currentTime + 0.02);
       if (button) {
         button.dataset.soundStatus = "played";
         button.dataset.soundPlayedAt = String(Date.now());
@@ -8993,7 +9009,7 @@ INDEX_HTML = r"""<!doctype html>
         const isOwn = state.profile && message.from === state.profile.mid;
         const isOpen = inFront && state.tab === "line" && state.target === item.mid;
         if (!changed || current.unreadCount <= 0 || isOwn || isOpen) continue;
-        // One soft sound per room that just started waiting, not per message.
+        // One toast per room that just started waiting, not per message.
         if (!previous || previous.unreadCount <= 0) newRooms.push(item);
         if (!inFront) backgroundAlerts.push(item);
       }
@@ -9001,9 +9017,9 @@ INDEX_HTML = r"""<!doctype html>
       if (!newRooms.length && !backgroundAlerts.length) return;
       const working = insideWorkingTime();
       if (inFront) {
-        // Visible and focused: toast + title badge + a soft sound, no pop-ups.
+        // Visible and focused: toast + title badge, no pop-ups. The beep comes
+        // from the chat ring, which listens to every account (chat_ring.js).
         if (newRooms.length && working) {
-          playSoftSound();
           toast(newRooms.length === 1
             ? t("notifications.new_message", {name: conversationName(newRooms[0])})
             : t("notifications.new_messages", {n: newRooms.length}));
@@ -9011,7 +9027,6 @@ INDEX_HTML = r"""<!doctype html>
         return;
       }
       if (!working) return;
-      if (newRooms.length) playSoftSound();
       const now = Date.now();
       const direct = [];
       for (const item of backgroundAlerts) {
@@ -12566,6 +12581,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     const PRESENCE_IDLE_MS = 15 * 60000;
     const NOTIFY_SNOOZE_KEY = "okline.notifyBannerSnoozedUntil";
     const NOTIFY_OUTSIDE_SHIFT_KEY = "okline.notifyOutsideShift";
+    const NOTIFY_REPEAT_KEY = "okline.notifyRepeat";
 
     function initialsOf(name) {
       return String(name || "?").trim().charAt(0).toUpperCase() || "?";
@@ -12794,6 +12810,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       $("notifySettingsTest").disabled = permission !== "granted";
       try {
         $("notifyOutsideShift").checked = localStorage.getItem(NOTIFY_OUTSIDE_SHIFT_KEY) === "on";
+        $("notifyRepeat").checked = localStorage.getItem(NOTIFY_REPEAT_KEY) !== "off";
       } catch (_) { /* storage unavailable */ }
     }
 
@@ -12901,26 +12918,6 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       return (data.selectedGroupMids || []).includes(mid);
     }
 
-    function playSoftSound() {
-      if (!state.notificationsEnabled) return;
-      unlockNotificationSound().then((ok) => {
-        if (!ok) return;
-        const context = state.notificationAudioContext;
-        const osc = context.createOscillator();
-        const gain = context.createGain();
-        const at = context.currentTime + 0.02;
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(880, at);
-        gain.gain.setValueAtTime(0.0001, at);
-        gain.gain.exponentialRampToValueAtTime(0.12, at + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.25);
-        osc.connect(gain);
-        gain.connect(context.destination);
-        osc.start(at);
-        osc.stop(at + 0.3);
-      }).catch(() => {});
-    }
-
     async function showPolicyNotification(title, options) {
       if (!state.notificationsEnabled || notificationPermission() !== "granted") return;
       try {
@@ -13002,7 +12999,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         if (!item || Number(item.unreadCount) <= 0) continue;
         if (!insideWorkingTime()) continue;
         state.escalated.add(mid);
-        playNotificationSound().catch(() => {});
+        playNotificationSound({urgent: true}).catch(() => {});
         if (!pageIsInFront()) notifyRoom(accountId, item, {escalate: true}).catch(() => {});
         else toast(t("notify.escalate_title", {name: conversationName(item)}), true);
       }
@@ -15040,7 +15037,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "notify.test_title": {th: "ทดลองแจ้งเตือน LinePassport", en: "LinePassport test notification"},
       "notify.test_body": {th: "ถ้าเห็นข้อความนี้ แปลว่าแจ้งเตือนใช้งานได้", en: "If you can see this, notifications work."},
       "notify.outside_shift": {th: "แจ้งเตือนฉันนอกกะด้วย", en: "Also notify me outside my shift"},
-      "notify.policy": {th: "ขณะเปิดหน้านี้อยู่ จะมีเสียงเบา ๆ 1 ครั้งต่อห้องที่มีข้อความใหม่ เมื่อสลับไปหน้าอื่น จะเด้งได้ไม่เกิน 1 ครั้งต่อห้องใน 2 นาที ถ้าลูกค้าทักพร้อมกันหลายคนจะรวมเป็นใบเดียว และเด้งเตือนซ้ำ 1 ครั้งเมื่อรอเกินเวลาที่ตั้งไว้ ถ้า AI ตอบแล้วจะไม่เด้ง", en: "While this page is in front you hear one soft sound per new chat. When it's hidden you get at most one notification per chat every 2 minutes, a single summary when many customers write at once, and one louder reminder when a chat waits past the reply target. No alert when the AI already replied."},
+      "notify.policy": {th: "เมื่อลูกค้าทักเข้ามาในบัญชีใดก็ตาม จะมีเสียงบี๊บเบา ๆ สองครั้ง ถ้าเปิด “ดังซ้ำ” ไว้ จะดังทุก 4 วินาทีจนกว่าจะมีคนเปิดอ่านหรือตอบแชทนั้น (กด “หยุดเสียง” เพื่อปิด) เมื่อสลับไปหน้าอื่น จะเด้งแจ้งเตือนได้ไม่เกิน 1 ครั้งต่อห้องใน 2 นาที ถ้าลูกค้าทักพร้อมกันหลายคนจะรวมเป็นใบเดียว และเตือนอีก 1 ครั้งด้วยเสียงที่ดังขึ้นเมื่อรอเกินเวลาที่ตั้งไว้ ถ้า AI ตอบแล้วจะไม่เด้ง", en: "A soft double beep plays when a customer writes to any of your accounts and, with Repeat on, again every 4 seconds until someone opens or answers the chat (Stop sound quiets it). When this page is hidden you also get at most one notification per chat every 2 minutes, a single summary when many customers write at once, and one louder reminder when a chat waits past the reply target. No notification when the AI already replied."},
+      "notify.repeat": {th: "ดังซ้ำทุก 4 วินาทีจนกว่าจะมีคนเปิดอ่านหรือตอบแชท", en: "Repeat the beep every 4 seconds until someone opens or answers the chat"},
+      "notify.play_sound": {th: "ฟังเสียงเตือน", en: "Play the alert sound"},
       "notify.settings_title": {th: "การแจ้งเตือนในเบราว์เซอร์", en: "Browser notifications"},
       "notify.escalate_title": {th: "{name} รอตอบนานแล้ว", en: "{name} has been waiting"},
       "notify.escalate_body": {th: "รอเกิน {minutes} นาที", en: "Waiting more than {minutes} min"},
@@ -15698,6 +15697,14 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     $("notifySettingsEnable").addEventListener("click", () => enableNotificationsFromBanner().catch(toastError));
     $("notifySettingsTest").addEventListener("click", () => {
       showPolicyNotification(t("notify.test_title"), {body: t("notify.test_body"), tag: "linepassport:test", renotify: false, data: {}});
+    });
+    $("notifySettingsSound").addEventListener("click", () => {
+      playNotificationSound({preview: true}).then((played) => {
+        if (!played) toast(t("notifications.sound_unavailable"), true);
+      }).catch(toastError);
+    });
+    $("notifyRepeat").addEventListener("change", () => {
+      try { localStorage.setItem(NOTIFY_REPEAT_KEY, $("notifyRepeat").checked ? "on" : "off"); } catch (_) { /* optional */ }
     });
     $("notifyOutsideShift").addEventListener("change", () => {
       try { localStorage.setItem(NOTIFY_OUTSIDE_SHIFT_KEY, $("notifyOutsideShift").checked ? "on" : "off"); } catch (_) { /* optional */ }

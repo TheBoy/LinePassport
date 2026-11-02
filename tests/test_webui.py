@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -138,6 +139,51 @@ def test_line_oa_accounts_take_a_proxy_like_line_accounts():
     assert "editLineAccount(account)" in _block(
         "function renderLineOaAccountList", "const baseRenderLineAccountListForOa"
     )
+
+
+def test_the_chat_alert_is_a_soft_beep_that_repeats_while_a_customer_waits():
+    sound = _block("async function playNotificationSound", "function messageNotificationKey")
+    assert "chatBeepSamples(context.sampleRate, urgent)" in sound
+    assert "playNotificationSound({urgent: true})" in _block(
+        "function checkEscalationsAndAiHolds", "function trackUnreadRooms"
+    )
+    # All chats sees every account, so the ring listens there (after inbox.js).
+    assert INDEX_HTML.index("async function loadInbox") < INDEX_HTML.index(
+        "baseLoadInboxForRing = loadInbox"
+    )
+    assert "if (state.inbox !== before) noteInboxForRing(before, state.inbox);" in INDEX_HTML
+    ring = _block("function ringTick", "function ringBeep")
+    assert "setTimeout(() => ringTick(), RING_EVERY_MS)" in ring and "if (!ringRepeats())" in ring
+    assert 'ringBar.id = "chatRingBar";' in INDEX_HTML
+    # Repeating is a per-browser setting, on unless turned off; the beep can be tried.
+    assert 'id="notifyRepeat"' in INDEX_HTML
+    assert INDEX_HTML.count('localStorage.getItem(NOTIFY_REPEAT_KEY) !== "off"') == 2
+    assert "playNotificationSound({preview: true})" in INDEX_HTML
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_the_chat_beep_is_quiet_short_and_click_free(tmp_path):
+    source = _block("function chatBeepSamples", "\n    }\n") + "\n    }\n"
+    probe = source + (
+        "\nfor (const urgent of [false, true]) {\n"
+        "  const samples = chatBeepSamples(48000, urgent);\n"
+        "  let peak = 0;\n"
+        "  for (const value of samples) peak = Math.max(peak, Math.abs(value));\n"
+        "  console.log(JSON.stringify({seconds: samples.length / 48000, peak,"
+        " first: samples[0], last: samples[samples.length - 1]}));\n"
+        "}\n"
+    )
+    path = tmp_path / "beep.js"
+    path.write_text(probe, encoding="utf-8")
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    normal, urgent = (json.loads(line) for line in result.stdout.splitlines())
+    assert normal["seconds"] < 0.6 and urgent["seconds"] < 0.8
+    # Soft, and the reminder past the reply target a little louder.
+    assert 0.08 < normal["peak"] < 0.15 and normal["peak"] < urgent["peak"] < 0.2
+    # Starts and ends at silence, so no click.
+    for beep in (normal, urgent):
+        assert abs(beep["first"]) < 1e-3 and abs(beep["last"]) < 1e-3
 
 
 def test_compose_refuses_a_page_without_markers():
