@@ -263,7 +263,7 @@ def test_web_ui_configures_proxy_per_line_account():
     assert 'id="loginProxyUrl"' not in INDEX_HTML
     assert 'accountId: state.reconnectAccountId || ""' in INDEX_HTML
     assert 'await post("/api/login/start", {' in INDEX_HTML
-    assert "proxyEnabled: proxyEnabled.checked" in INDEX_HTML
+    assert "proxyEnabled: enabled.checked" in INDEX_HTML
     assert "proxyScheme: scheme.value" in INDEX_HTML
     assert "proxyHost: host.input.value.trim()" in INDEX_HTML
     assert "proxyPort: port.input.value.trim()" in INDEX_HTML
@@ -3075,7 +3075,7 @@ def test_every_primary_menu_and_settings_has_a_detailed_usage_guide():
 
     assert 'data-god-page-target="guide"' in GOD_HTML
     assert 'data-god-page="guide"' in GOD_HTML
-    assert '"unanswered", "guide"' in GOD_HTML
+    assert '"unanswered", "system", "guide"' in GOD_HTML
 
 
 def test_assistant_general_knowledge_mode_is_the_default(web_state):

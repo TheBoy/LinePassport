@@ -11,6 +11,7 @@
       "oa.step2": {th: "สแกน QR ด้านล่างด้วยแอป LINE ของบัญชีนั้น", en: "Scan the QR code below with LINE on that account's phone."},
       "oa.step3": {th: "ถ้ามีรหัส 4 หลักขึ้น ให้กรอกรหัสนั้นในแอป LINE บนมือถือ", en: "If a 4-digit code appears, enter it in LINE on the phone."},
       "oa.unofficial": {th: "ทำงานแบบเดียวกับหน้าเว็บ OA Manager ซึ่ง LINE ไม่ได้เปิดให้ใช้อย่างเป็นทางการ ถ้า LINE เปลี่ยนระบบอาจใช้ไม่ได้ชั่วคราว", en: "This works the way the OA Manager web page does, which LINE does not officially offer, so it may stop working for a while if LINE changes it."},
+      "oa.start": {th: "แสดง QR", en: "Show the QR code"},
       "oa.preparing": {th: "กำลังเตรียม QR…", en: "Preparing the QR code…"},
       "oa.scan": {th: "สแกน QR นี้ด้วยแอป LINE", en: "Scan this QR code with LINE"},
       "oa.pin": {th: "กรอกรหัสนี้ในแอป LINE บนมือถือ", en: "Enter this code in LINE on your phone"},
@@ -31,7 +32,6 @@
       "oa.banner_title": {th: "LINE OA นี้หลุดการเชื่อมต่อ", en: "This LINE OA is disconnected"},
       "oa.banner_body": {th: "อ่านและส่งข้อความไม่ได้ จนกว่าจะสแกน QR เข้า OA Manager ใหม่", en: "Messages can't be read or sent until you scan the QR code for OA Manager again."},
       "oa.ask_owner": {th: "LINE OA นี้หลุดการเชื่อมต่อ แจ้งเจ้าของร้านให้เชื่อมต่อใหม่", en: "This LINE OA is disconnected. Ask the owner to reconnect it."},
-      "oa.rename": {th: "เปลี่ยนชื่อ", en: "Rename"},
       "oa.delete_note": {th: "ระบบจะหยุดรับและส่งข้อความผ่าน OA นี้ และลบประวัติแชทที่เก็บในระบบนี้ ตัว OA และแชทใน OA Manager ไม่ถูกลบ", en: "Messages stop flowing through this OA and the chat history kept here is deleted. The OA and its chats in OA Manager stay."},
       "errors.line_oa_reauth": {th: "OA Manager ให้ LINE OA นี้ออกจากระบบแล้ว สแกน QR ใหม่ได้ที่ ตั้งค่า → จัดการบัญชี", en: "OA Manager signed this LINE OA out. Scan the QR code again in Settings → Account Management."},
       "errors.line_oa_unavailable": {th: "ติดต่อ LINE OA Manager ไม่ได้ชั่วคราว ลองใหม่อีกครั้ง", en: "Could not reach LINE OA Manager. Please try again."},
@@ -63,9 +63,40 @@
       return I18N[key] ? t(key) : (login.error || t("errors.line_oa_login_failed"));
     }
 
+    // Before a new sign-in: how to become a member, and an optional proxy.
+    // The sign-in itself goes through that proxy, then every OA added keeps it.
+    function lineOaLoginSettings() {
+      return openModal({
+        title: t("oa.add_title"),
+        confirmKey: "oa.start",
+        build(body) {
+          const steps = document.createElement("ol");
+          steps.className = "oa-howto";
+          for (const key of ["oa.step1", "oa.step2", "oa.step3"]) {
+            const item = document.createElement("li");
+            item.textContent = t(key);
+            steps.appendChild(item);
+          }
+          const proxy = buildProxyForm(false, proxyRequiredFor({channel: "line_oa"}));
+          body.append(steps, proxy.row, proxy.fields);
+          return () => proxy.values();
+        }
+      });
+    }
+
     // One window for the whole sign-in: QR, then the PIN, then which OAs to add.
     async function openLineOaLogin(reconnectAccount) {
-      await post("/api/lineoa/login/start", reconnectAccount ? {reconnectAccountId: reconnectAccount.id} : {});
+      let start = reconnectAccount ? {reconnectAccountId: reconnectAccount.id} : null;
+      if (!start) {
+        const proxy = await lineOaLoginSettings();
+        if (!proxy) return;
+        if (proxyValuesMissing(proxy, false)) {
+          toast(t("proxy.host_port_required"), true);
+          return;
+        }
+        start = proxy;
+      }
+      await post("/api/lineoa/login/start", start);
       let latest = {state: "starting"};
       let stopped = false;
       const checks = [];
@@ -243,7 +274,10 @@
         const info = document.createElement("div");
         const title = document.createElement("strong");
         title.textContent = account.label || account.id;
-        info.append(title, textSpan(account.userid || "", "mono"), textSpan(lineOaAccountState(account), "muted"));
+        const states = [lineOaAccountState(account)];
+        if (account.proxyConfigured) states.push(t("proxy.configured"));
+        else if (proxyRequiredFor(account)) states.push(t("proxy.missing_required"));
+        info.append(title, textSpan(account.userid || "", "mono"), textSpan(states.join(" · "), "muted"));
 
         const lost = account.sessionState === "reauth_required" || !account.tokenFileExists;
         const actions = document.createElement("div");
@@ -265,39 +299,21 @@
           fix.addEventListener("click", () => openReconnect(account));
           actions.append(fix);
         }
-        const rename = document.createElement("button");
-        rename.textContent = t("oa.rename");
-        rename.disabled = !canManage;
-        rename.addEventListener("click", () => renameLineOaAccount(account).catch(toastError));
+        // Name and proxy, in the same window as a LINE account's.
+        const edit = document.createElement("button");
+        edit.textContent = t("common.edit");
+        edit.disabled = !canManage;
+        edit.addEventListener("click", () => editLineAccount(account).catch(toastError));
         const del = document.createElement("button");
         del.className = "danger";
         del.textContent = t("common.delete");
         del.disabled = !canManage;
         del.addEventListener("click", () => deleteLineOaAccount(account).catch(toastError));
-        actions.append(rename, del);
+        actions.append(edit, del);
         row.append(info, actions);
         list.appendChild(row);
       }
       if (!list.children.length) list.appendChild(textSpan(t("oa.accounts_none"), "muted"));
-    }
-
-    async function renameLineOaAccount(account) {
-      const label = await openModal({
-        title: t("accounts.edit_title"),
-        build(body) {
-          const {label: field, input} = labeledInput(t("accounts.name"), "text");
-          input.maxLength = 60;
-          input.value = account.label || account.id;
-          body.appendChild(field);
-          return () => input.value.trim();
-        },
-        confirmKey: "common.save"
-      });
-      if (!label) return;
-      await post("/api/accounts/update", {accountId: account.id, label});
-      toast(t("toast.account_updated"));
-      await refreshStatus(false);
-      await loadAccountManagement();
     }
 
     async function deleteLineOaAccount(account) {

@@ -7,6 +7,20 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **God page: require a proxy.** A new System settings tab on `/god` can
+  require a proxy for LINE accounts, LINE OA accounts, or both. The server
+  then refuses to add or reconnect such an account without one and refuses
+  to switch an account's proxy off; pages lock "Connect through proxy" on and
+  say the admin requires it. Accounts added before keep working, are marked
+  "Needs a proxy", and need one before they reconnect; the God page counts
+  them.
+- **A proxy for LINE OA accounts.** "+ Add a LINE OA" asks for an optional
+  proxy before showing the QR code; the OA Manager sign-in goes through it and
+  every OA added from that sign-in keeps it (stored encrypted), so the live
+  stream, sends, files and reconnects all use the same address. Edit on a
+  LINE OA row changes or removes it, like for a LINE account, and restarts
+  the OA's stream on the new route. A saved proxy that can't be read stops
+  the OA rather than falling back to a direct connection.
 - **Where to get a proxy.** Under the proxy fields of a LINE account (adding
   it, or Edit in Settings → Account Management) LinePassport now names a few
   providers (IPRoyal, Oxylabs, DataImpulse; examples, not endorsements) and

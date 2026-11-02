@@ -4407,6 +4407,7 @@ INDEX_HTML = r"""<!doctype html>
                     <input id="loginProxyEnabled" type="checkbox">
                     <span data-i18n="proxy.connect">Connect through proxy</span>
                   </label>
+                  <span class="muted hidden" id="loginProxyRequired" data-i18n="proxy.required_by_admin">The system admin requires a proxy for this kind of account.</span>
                   <div id="loginProxyFieldsWrap" class="proxy-field-grid hidden">
                     <label>
                       <span data-i18n="proxy.scheme">Proxy type</span>
@@ -4433,7 +4434,7 @@ INDEX_HTML = r"""<!doctype html>
                       <span data-i18n="proxy.password">Password</span>
                       <input id="loginProxyPassword" type="password" autocomplete="new-password">
                     </label>
-                    <span class="muted" data-i18n="proxy.hint">Supports HTTP, HTTPS, SOCKS5, and SOCKS5H. This proxy is used only by this LINE account.</span>
+                    <span class="muted" data-i18n="proxy.hint">Supports HTTP, HTTPS, SOCKS5, and SOCKS5H. This proxy is used only by this account.</span>
                   </div>
                 </div>
                 <button id="beginAddAccountButton" class="primary wizard-start" data-i18n="login.start">Start</button>
@@ -6481,7 +6482,10 @@ INDEX_HTML = r"""<!doctype html>
       "accounts.also_line_logout": {th: "ออกจากระบบบน LINE ด้วย", en: "Also log out on LINE"},
       "proxy.connect": {th: "เชื่อมต่อผ่าน พร็อกซี", en: "Connect through proxy"},
       "proxy.url": {th: "พร็อกซี URL", en: "Proxy URL"},
-      "proxy.hint": {th: "รองรับ HTTP, HTTPS, SOCKS5 และ SOCKS5H โดยใช้เฉพาะบัญชี LINE นี้", en: "Supports HTTP, HTTPS, SOCKS5, and SOCKS5H. This proxy is used only by this LINE account."},
+      "proxy.hint": {th: "รองรับ HTTP, HTTPS, SOCKS5 และ SOCKS5H โดยใช้เฉพาะบัญชีนี้", en: "Supports HTTP, HTTPS, SOCKS5, and SOCKS5H. This proxy is used only by this account."},
+      "proxy.required_by_admin": {th: "ผู้ดูแลระบบกำหนดให้บัญชีประเภทนี้ต้องใช้พร็อกซี", en: "The system admin requires a proxy for this kind of account."},
+      "proxy.missing_required": {th: "ต้องตั้งพร็อกซี (ผู้ดูแลระบบกำหนด)", en: "Needs a proxy (required by the admin)"},
+      "errors.proxy_required": {th: "ผู้ดูแลระบบกำหนดให้บัญชีประเภทนี้ต้องใช้พร็อกซี กรอกพร็อกซีก่อน (ตั้งค่า → จัดการบัญชี → แก้ไข)", en: "The system admin requires a proxy for this kind of account. Enter one first (Settings → Account Management → Edit)."},
       "proxy.where_lead": {th: "ยังไม่มีพร็อกซี? ซื้อได้จากผู้ให้บริการพร็อกซี เช่น", en: "No proxy yet? Proxy providers include"},
       "proxy.where_tips": {th: "(เป็นแค่ตัวอย่าง ไม่ได้รับรอง) เลือกแบบ Residential หรือ ISP ที่เป็น IP ประเทศไทย และใช้ IP เดิมตลอด (static หรือ sticky session) เพราะถ้า IP เปลี่ยนบ่อยหรืออยู่ต่างประเทศ LINE อาจให้ออกจากระบบหรือขอยืนยันตัวตนบ่อย จากนั้นนำ Host, Port, Username และ Password จากหน้าบัญชีของผู้ให้บริการมากรอกด้านบน (ส่วนมากให้มาในรูป host:port:username:password)", en: "(examples, not endorsements). Pick residential or ISP proxies with a Thai IP that stays the same (static, or a sticky session): when the IP keeps changing or is abroad, LINE may sign the account out or ask to verify often. Then copy the host, port, username and password from the provider's dashboard into the fields above (they usually come as host:port:username:password)."},
       "proxy.configured": {th: "เปิดใช้ พร็อกซี", en: "Proxy enabled"},
@@ -7994,6 +7998,7 @@ INDEX_HTML = r"""<!doctype html>
           ? t("accounts.reconnect_required")
           : (account.tokenFileExists ? t("accounts.session_ready") : t("accounts.session_missing"))];
         if (account.proxyConfigured) accountStates.push(t("proxy.configured"));
+        else if (proxyRequiredFor(account)) accountStates.push(t("proxy.missing_required"));
         sub.textContent = accountStates.join(" · ");
         info.append(title, meta, sub);
 
@@ -8032,84 +8037,95 @@ INDEX_HTML = r"""<!doctype html>
       if (!list.children.length) list.appendChild(textSpan(t("accounts.none"), "muted"));
     }
 
+    // Whether the God page requires a proxy for this kind of account (LINE or LINE OA).
+    function proxyRequiredFor(account) {
+      const channel = accountChannel(account) === "line_oa" ? "line_oa" : "line";
+      return !!(state.proxyPolicy && state.proxyPolicy[channel]);
+    }
+
+    // The proxy checkbox and fields, for adding or editing a LINE or LINE OA account.
+    function buildProxyForm(configured, required = false) {
+      const row = document.createElement("label");
+      row.className = "checkbox-row";
+      const enabled = document.createElement("input");
+      enabled.type = "checkbox";
+      enabled.checked = !!configured || required;
+      enabled.disabled = required;
+      row.append(enabled, textSpan(t("proxy.connect")));
+      const fields = document.createElement("div");
+      fields.className = "proxy-field-grid";
+      if (required) fields.appendChild(textSpan(t("proxy.required_by_admin"), "muted"));
+      const schemeLabel = document.createElement("label");
+      schemeLabel.appendChild(textSpan(t("proxy.scheme")));
+      const scheme = document.createElement("select");
+      for (const value of ["http", "https", "socks5", "socks5h"]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value.toUpperCase();
+        scheme.appendChild(option);
+      }
+      schemeLabel.appendChild(scheme);
+      const port = labeledInput(t("proxy.port"), "number");
+      port.input.min = "1";
+      port.input.max = "65535";
+      port.input.inputMode = "numeric";
+      port.input.placeholder = "8080";
+      const host = labeledInput(t("proxy.host"), "text");
+      host.label.classList.add("proxy-wide");
+      host.input.autocomplete = "off";
+      host.input.spellcheck = false;
+      host.input.placeholder = "proxy.example.com";
+      const username = labeledInput(t("proxy.username"), "text");
+      username.input.autocomplete = "off";
+      username.input.spellcheck = false;
+      const password = labeledInput(t("proxy.password"), "password");
+      password.input.autocomplete = "new-password";
+      fields.append(schemeLabel, port.label, host.label, username.label, password.label);
+      if (configured) fields.appendChild(textSpan(t("proxy.keep_existing"), "muted"));
+      fields.appendChild(textSpan(t("proxy.hint"), "muted"));
+      fields.appendChild(proxyProvidersHint());
+      const sync = () => {
+        fields.classList.toggle("hidden", !enabled.checked);
+        fields.querySelectorAll("input, select").forEach((field) => {
+          field.disabled = !enabled.checked;
+        });
+      };
+      enabled.addEventListener("change", sync);
+      sync();
+      return {
+        row,
+        fields,
+        values: () => ({
+          proxyEnabled: enabled.checked,
+          proxyScheme: scheme.value,
+          proxyHost: host.input.value.trim(),
+          proxyPort: port.input.value.trim(),
+          proxyUsername: username.input.value.trim(),
+          proxyPassword: password.input.value
+        })
+      };
+    }
+
+    // A proxy that is switched on needs a host and port, unless the saved one is kept.
+    function proxyValuesMissing(values, configured) {
+      const typed = !!(values.proxyHost || values.proxyPort || values.proxyUsername || values.proxyPassword);
+      return values.proxyEnabled && (!configured || typed) && (!values.proxyHost || !values.proxyPort);
+    }
+
     async function editLineAccount(account) {
       const res = await openModal({
         title: t("accounts.edit_title"),
         build: (body) => {
           const li = labeledInput(t("accounts.name"), "text");
           li.input.value = account.label || account.id;
-          const proxyRow = document.createElement("label");
-          proxyRow.className = "checkbox-row";
-          const proxyEnabled = document.createElement("input");
-          proxyEnabled.type = "checkbox";
-          proxyEnabled.checked = !!account.proxyConfigured;
-          proxyRow.append(proxyEnabled, textSpan(t("proxy.connect")));
-          const proxyFields = document.createElement("div");
-          proxyFields.className = "proxy-field-grid";
-          const schemeLabel = document.createElement("label");
-          schemeLabel.appendChild(textSpan(t("proxy.scheme")));
-          const scheme = document.createElement("select");
-          for (const value of ["http", "https", "socks5", "socks5h"]) {
-            const option = document.createElement("option");
-            option.value = value;
-            option.textContent = value.toUpperCase();
-            scheme.appendChild(option);
-          }
-          schemeLabel.appendChild(scheme);
-          const port = labeledInput(t("proxy.port"), "number");
-          port.input.min = "1";
-          port.input.max = "65535";
-          port.input.inputMode = "numeric";
-          port.input.placeholder = "8080";
-          const host = labeledInput(t("proxy.host"), "text");
-          host.label.classList.add("proxy-wide");
-          host.input.autocomplete = "off";
-          host.input.spellcheck = false;
-          host.input.placeholder = "proxy.example.com";
-          const username = labeledInput(t("proxy.username"), "text");
-          username.input.autocomplete = "off";
-          username.input.spellcheck = false;
-          const password = labeledInput(t("proxy.password"), "password");
-          password.input.autocomplete = "new-password";
-          proxyFields.append(
-            schemeLabel,
-            port.label,
-            host.label,
-            username.label,
-            password.label
-          );
-          if (account.proxyConfigured) {
-            proxyFields.appendChild(textSpan(t("proxy.keep_existing"), "muted"));
-          }
-          proxyFields.appendChild(textSpan(t("proxy.hint"), "muted"));
-          proxyFields.appendChild(proxyProvidersHint());
-          const syncProxy = () => {
-            proxyFields.classList.toggle("hidden", !proxyEnabled.checked);
-            proxyFields.querySelectorAll("input, select").forEach((field) => {
-              field.disabled = !proxyEnabled.checked;
-            });
-          };
-          proxyEnabled.addEventListener("change", syncProxy);
-          syncProxy();
-          body.append(li.label, proxyRow, proxyFields);
-          return () => ({
-            label: li.input.value.trim(),
-            proxyEnabled: proxyEnabled.checked,
-            proxyScheme: scheme.value,
-            proxyHost: host.input.value.trim(),
-            proxyPort: port.input.value.trim(),
-            proxyUsername: username.input.value.trim(),
-            proxyPassword: password.input.value
-          });
+          const proxy = buildProxyForm(account.proxyConfigured, proxyRequiredFor(account));
+          body.append(li.label, proxy.row, proxy.fields);
+          return () => ({label: li.input.value.trim(), ...proxy.values()});
         },
         confirmKey: "common.save"
       });
       if (!res || !res.label) return;
-      const hasNewProxy = !!(
-        res.proxyHost || res.proxyPort || res.proxyUsername || res.proxyPassword
-      );
-      if (res.proxyEnabled && (!account.proxyConfigured || hasNewProxy)
-          && (!res.proxyHost || !res.proxyPort)) {
+      if (proxyValuesMissing(res, account.proxyConfigured)) {
         toast(t("proxy.host_port_required"), true);
         return;
       }
@@ -8404,6 +8420,8 @@ INDEX_HTML = r"""<!doctype html>
       clearTimeout(state.authRetryTimer);
       state.webAuthConfigured = data.configured;
       state.setupTokenRequired = !!data.setupTokenRequired;
+      state.proxyPolicy = data.proxyPolicy || {};
+      syncLoginProxyInput();
       state.simpleMode = !!data.simpleMode;
       state.currentUser = data.user || null;
       state.roles = data.roles || {};
@@ -9682,6 +9700,11 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function syncLoginProxyInput() {
+      // The God page may require a proxy for LINE accounts: then it stays on.
+      const required = proxyRequiredFor({channel: "line"});
+      if (required) $("loginProxyEnabled").checked = true;
+      $("loginProxyEnabled").disabled = required;
+      $("loginProxyRequired").classList.toggle("hidden", !required);
       const enabled = $("loginProxyEnabled").checked;
       $("loginProxyFieldsWrap").classList.toggle("hidden", !enabled);
       $("loginProxyFieldsWrap").querySelectorAll("input, select").forEach((field) => {
@@ -16228,6 +16251,7 @@ GOD_HTML = r"""<!doctype html>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="ai-settings">Ollama</button>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="knowledge">Knowledge / RAG</button>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="unanswered">ตอบไม่ได้ <span class="nav-count" id="godUnansweredCount"></span></button>
+      <button type="button" role="tab" aria-selected="false" data-god-page-target="system">ตั้งค่าระบบ</button>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="guide">วิธีใช้</button>
     </nav>
     <main class="page">
@@ -16308,6 +16332,22 @@ GOD_HTML = r"""<!doctype html>
           <button class="secondary" type="button" id="refreshUnansweredButton">รีเฟรช</button>
         </div>
         <div class="question-list" id="godUnansweredList"><div class="empty-panel">กำลังโหลด...</div></div>
+      </section>
+
+      <section class="god-page hidden" data-god-page="system">
+        <div class="page-head">
+          <div><h2>ตั้งค่าระบบ</h2><span class="muted">กติกาที่ใช้กับสมาชิกทุกคน</span></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>บังคับใช้พร็อกซี</h3></div>
+          <div class="panel-body form-grid">
+            <label class="switch-row"><input id="proxyRequiredLine" type="checkbox"> บังคับใช้พร็อกซีกับบัญชี LINE</label>
+            <label class="switch-row"><input id="proxyRequiredLineOa" type="checkbox"> บังคับใช้พร็อกซีกับบัญชี LINE OA</label>
+            <span class="muted">เมื่อเปิด สมาชิกต้องกรอกพร็อกซีตอนเพิ่มบัญชีหรือเชื่อมต่อใหม่ และปิดพร็อกซีของบัญชีนั้นไม่ได้ บัญชีเดิมที่ยังไม่มีพร็อกซียังใช้งานต่อได้ แต่จะเชื่อมต่อใหม่หรือแก้พร็อกซีไม่ได้จนกว่าจะกรอกพร็อกซี</span>
+            <div class="connection-state" id="proxyPolicyState">กำลังโหลด...</div>
+            <div class="button-row"><button class="primary" type="button" id="saveSystemSettingsButton">บันทึกการตั้งค่า</button></div>
+          </div>
+        </div>
       </section>
 
       <section class="god-page hidden" data-god-page="guide">
@@ -16487,8 +16527,33 @@ GOD_HTML = r"""<!doctype html>
       }
     }
 
+    function renderSystemSettings(data) {
+      const required = data.proxyRequired || {};
+      const without = data.withoutProxy || {};
+      $("proxyRequiredLine").checked = !!required.line;
+      $("proxyRequiredLineOa").checked = !!required.line_oa;
+      $("proxyPolicyState").textContent =
+        `บัญชีที่ยังไม่มีพร็อกซี: LINE ${without.line || 0} บัญชี · LINE OA ${without.line_oa || 0} บัญชี`;
+    }
+
+    async function loadSystemSettings() {
+      renderSystemSettings(await api("/api/god/settings"));
+    }
+
+    async function saveSystemSettings() {
+      const button = $("saveSystemSettingsButton");
+      button.disabled = true;
+      try {
+        const payload = {proxyRequired: {line: $("proxyRequiredLine").checked, line_oa: $("proxyRequiredLineOa").checked}};
+        renderSystemSettings(await api("/api/god/settings", {method: "POST", body: JSON.stringify(payload)}));
+        toast("บันทึกการตั้งค่าระบบแล้ว");
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     async function setGodPage(page) {
-      const allowed = ["members", "ai-settings", "knowledge", "unanswered", "guide"];
+      const allowed = ["members", "ai-settings", "knowledge", "unanswered", "system", "guide"];
       state.page = allowed.includes(page) ? page : "members";
       document.querySelectorAll("[data-god-page-target]").forEach((button) => {
         const active = button.dataset.godPageTarget === state.page;
@@ -16502,6 +16567,7 @@ GOD_HTML = r"""<!doctype html>
       if (state.page === "ai-settings") await loadGlobalAiSettings();
       if (state.page === "knowledge") await loadKnowledge();
       if (state.page === "unanswered") await loadUnanswered();
+      if (state.page === "system") await loadSystemSettings();
     }
 
     function setConnectionState(message, kind = "") {
@@ -16936,6 +17002,7 @@ GOD_HTML = r"""<!doctype html>
     });
     $("testOllamaButton").addEventListener("click", () => testOllama().catch((error) => toast(error.message)));
     $("saveGlobalAiButton").addEventListener("click", () => saveGlobalAiSettings().catch((error) => toast(error.message)));
+    $("saveSystemSettingsButton").addEventListener("click", () => saveSystemSettings().catch((error) => toast(error.message)));
     $("reindexKnowledgeButton").addEventListener("click", () => reindexKnowledge().catch((error) => toast(error.message)));
     $("saveKnowledgeButton").addEventListener("click", () => saveKnowledge().catch((error) => toast(error.message)));
     $("saveKnowledgeSourceButton").addEventListener("click", () => saveKnowledgeSource().catch((error) => toast(error.message)));
@@ -17145,6 +17212,8 @@ NON_REPLY_SENDERS = frozenset({"schedule", "api", "broadcast"})
 LINE_OA_RESYNC_AFTER_SECONDS = 30 * 60
 LINE_OA_LOGIN_SECONDS = 300.0
 MAX_LINE_OA_AVATAR_BYTES = 1024 * 1024
+# Channels the God page can require a proxy for.
+PROXY_POLICY_CHANNELS = ("line", "line_oa")
 # A chat first seen by the CRM keeps its full recent history only if it is this fresh.
 CRM_BACKFILL_RECENT_DAYS = 7
 BROADCAST_TICK_SECONDS = 2.0
@@ -19443,7 +19512,7 @@ class WebState:
         # (per owner; the signed-in session waits server-side until OAs are picked).
         self.line_oa = LineOAChannels(self)
         self.oa_logins: dict[str, dict[str, Any]] = {}
-        self.oa_login_results: dict[str, tuple[str, Any]] = {}
+        self.oa_login_results: dict[str, tuple[str, Any, str | None]] = {}
         for account in self.account_store.list_accounts():
             if account.get("sessionState") != "connected":
                 continue
@@ -20220,6 +20289,8 @@ class WebState:
                 raise _line_only()
             if validated_proxy is None:
                 validated_proxy = self._proxy_url_for_account(account)
+        if not validated_proxy:
+            self._require_no_proxy_policy("line")
         owner_id = self._login_owner_key(user)
         with self.lock:
             login = self.logins.setdefault(owner_id, {"state": "idle"})
@@ -20637,6 +20708,44 @@ class WebState:
         with self.room_state_lock:
             self.room_states_cache.pop(account_id, None)
 
+    # -- System settings set on the God page ----------------------------------
+    def proxy_policy(self) -> dict[str, bool]:
+        """Which channels must connect through a proxy (set on the God page)."""
+        raw = self.store.get("system_settings", {})
+        required = (raw.get("proxyRequired") if isinstance(raw, dict) else None) or {}
+        return {channel: bool(required.get(channel)) for channel in PROXY_POLICY_CHANNELS}
+
+    def _require_no_proxy_policy(self, channel: str) -> None:
+        """Refuse to go on without a proxy when the God page requires one."""
+        if self.proxy_policy().get(channel):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "This system requires a proxy for this kind of account.",
+                "proxy_required",
+            )
+
+    def god_system_settings(self) -> dict[str, Any]:
+        without_proxy = dict.fromkeys(PROXY_POLICY_CHANNELS, 0)
+        with self.account_store.lock:
+            for account in self.account_store.data.get("accounts", []):
+                channel = _account_channel(account if isinstance(account, dict) else None)
+                if channel in without_proxy and not account.get("proxyUrl"):
+                    without_proxy[channel] += 1
+        return {"ok": True, "proxyRequired": self.proxy_policy(), "withoutProxy": without_proxy}
+
+    def save_god_system_settings(self, body: dict[str, Any]) -> dict[str, Any]:
+        required = body.get("proxyRequired")
+        if not isinstance(required, dict):
+            raise WebError(HTTPStatus.BAD_REQUEST, "proxyRequired must be an object.")
+        raw = self.store.get("system_settings", {})
+        settings = dict(raw) if isinstance(raw, dict) else {}
+        settings["proxyRequired"] = {
+            channel: bool(required.get(channel)) for channel in PROXY_POLICY_CHANNELS
+        }
+        settings["updatedAt"] = _now_iso()
+        self.store.set("system_settings", settings)
+        return self.god_system_settings()
+
     def update_account(
         self,
         account_id: str,
@@ -20655,8 +20764,15 @@ class WebState:
             )
         validated_proxy = _validate_proxy_url(proxy_url) if proxy_url else None
         before = self.account_store.get(account_id) or {}
-        if _account_channel(before) != "line" and (proxy_enabled or validated_proxy):
+        if _account_channel(before) not in ("line", "line_oa") and (
+            proxy_enabled or validated_proxy
+        ):
             raise _line_only()
+        if proxy_enabled is not None and (
+            proxy_enabled is False or not (validated_proxy or before.get("proxyUrl"))
+        ):
+            # Renaming alone (no proxy fields) stays allowed for accounts still without one.
+            self._require_no_proxy_policy(_account_channel(before))
         account = self.account_store.update_settings(
             account_id,
             label,
@@ -20668,6 +20784,11 @@ class WebState:
         proxy_changed = str(before.get("proxyUrl") or "") != str(account.get("proxyUrl") or "")
         if proxy_changed:
             self.close_api(account_id)
+            if _account_channel(before) == "line_oa":
+                # A new client picks the proxy up; the old one keeps the old route.
+                self.line_oa.stop(account_id)
+                if self.account_store.session_state(account_id) == "connected":
+                    self.line_oa.start(account_id)
         account.pop("tokenFile", None)
         account["proxyConfigured"] = bool(account.pop("proxyUrl", None))
         return {
@@ -22922,7 +23043,12 @@ class WebState:
         self._write_channel_secret(path, secret)
 
     def oa_proxy(self, account_id: str) -> str | None:
-        return None
+        try:
+            return self._proxy_url_for_account(self.account_store.get(account_id))
+        except WebError as exc:
+            # Never fall back to a direct connection when the saved proxy is unusable.
+            raise OAManagerError(f"The proxy of this LINE OA cannot be used: {exc.message}",
+                                 status=400) from None
 
     def oa_cursor(self, account_id: str) -> str:
         raw = self.store.get(f"lineoa_runtime:{account_id}", {})
@@ -23109,7 +23235,13 @@ class WebState:
         ):
             raise WebError(HTTPStatus.NOT_FOUND, "No profile picture.", "profile_picture_not_found")
         try:
-            response = requests.get(url, timeout=10, stream=True)
+            proxy = self._proxy_url_for_account(account)
+            response = requests.get(
+                url,
+                timeout=10,
+                stream=True,
+                proxies={"http": proxy, "https": proxy} if proxy else None,
+            )
             chunks: list[bytes] = []
             total = 0
             for chunk in response.iter_content(64 * 1024):
@@ -23119,7 +23251,7 @@ class WebState:
                 chunks.append(chunk)
             if response.status_code != 200:
                 raise ValueError(f"HTTP {response.status_code}")
-        except (requests.RequestException, ValueError):
+        except (requests.RequestException, ValueError, WebError):
             raise WebError(
                 HTTPStatus.NOT_FOUND, "No profile picture.", "profile_picture_not_found"
             ) from None
@@ -23162,7 +23294,11 @@ class WebState:
     def oa_login_start(
         self, body: dict[str, Any], user: dict[str, Any] | None
     ) -> dict[str, Any]:
-        """Start signing in to OA Manager by QR, to add OAs or to reconnect one."""
+        """Start signing in to OA Manager by QR, to add OAs or to reconnect one.
+
+        The sign-in goes through the proxy the OAs will use, so LINE sees one
+        address from the first request on.
+        """
         owner_id = self._require_account_adder(user)
         reconnect_id = str(body.get("reconnectAccountId") or "").strip()
         cookies: list[dict[str, Any]] = []
@@ -23176,6 +23312,11 @@ class WebState:
                 raise WebError(HTTPStatus.NOT_FOUND, "LINE OA not found.")
             # LINE Business ID may still know this browser; then no QR is needed.
             cookies = self.oa_cookies(reconnect_id)
+            proxy_url = self._proxy_url_for_account(account)
+        else:
+            proxy_url = _proxy_url_from_fields(body)
+        if not proxy_url:
+            self._require_no_proxy_policy("line_oa")
         with self.lock:
             if (self.oa_logins.get(owner_id) or {}).get("state") in {"starting", "qr", "pin"}:
                 raise WebError(
@@ -23196,7 +23337,7 @@ class WebState:
             self.oa_login_results.pop(owner_id, None)
         threading.Thread(
             target=self._oa_login_worker,
-            args=(owner_id, login_id, reconnect_id, cookies),
+            args=(owner_id, login_id, reconnect_id, cookies, proxy_url),
             name=f"linepassport-oa-login-{owner_id[:12]}",
             daemon=True,
         ).start()
@@ -23211,7 +23352,12 @@ class WebState:
         return {"ok": True, "state": "idle"}
 
     def _oa_login_worker(
-        self, owner_id: str, login_id: str, reconnect_id: str, cookies: list[dict[str, Any]]
+        self,
+        owner_id: str,
+        login_id: str,
+        reconnect_id: str,
+        cookies: list[dict[str, Any]],
+        proxy_url: str | None = None,
     ) -> None:
         def current() -> bool:
             with self.lock:
@@ -23227,7 +23373,7 @@ class WebState:
         def on_pin(pin: str) -> None:
             self._oa_login_update(owner_id, login_id, state="pin", pin=pin)
 
-        login = OAManagerQrLogin(cookies=cookies or None)
+        login = OAManagerQrLogin(cookies=cookies or None, proxy=proxy_url)
         try:
             result = login.run(
                 on_qr, on_pin, wait_seconds=LINE_OA_LOGIN_SECONDS, should_stop=lambda: not current()
@@ -23272,7 +23418,7 @@ class WebState:
                 )
             fresh = [bot for bot in bots if not bot["connected"]]
             if len(bots) == 1 and fresh:
-                added = self._oa_add_bots(owner_id, result, [fresh[0]["botId"]])
+                added = self._oa_add_bots(owner_id, result, [fresh[0]["botId"]], proxy_url)
                 self._oa_login_update(
                     owner_id, login_id, state="done", accountId=added[0], bots=bots,
                     qrImage=None, pin=None,
@@ -23287,7 +23433,7 @@ class WebState:
         with self.lock:
             if (self.oa_logins.get(owner_id) or {}).get("id") != login_id:
                 return
-            self.oa_login_results[owner_id] = (login_id, result)
+            self.oa_login_results[owner_id] = (login_id, result, proxy_url)
             self.oa_logins[owner_id].update(state="pick", bots=bots, qrImage=None, pin=None)
 
     def oa_login_pick(
@@ -23300,14 +23446,16 @@ class WebState:
             stored = self.oa_login_results.get(owner_id)
         if login.get("state") != "pick" or not stored or stored[0] != login.get("id"):
             raise WebError(HTTPStatus.CONFLICT, "Scan the QR code again.", "line_oa_login_expired")
-        added = self._oa_add_bots(owner_id, stored[1], bot_ids)
+        added = self._oa_add_bots(owner_id, stored[1], bot_ids, stored[2])
         with self.lock:
             if (self.oa_logins.get(owner_id) or {}).get("id") == login.get("id"):
                 self.oa_logins[owner_id].update(state="done", accountId=added[0])
             self.oa_login_results.pop(owner_id, None)
         return {**self._accounts_payload(owner_id, added[0]), "state": "done"}
 
-    def _oa_add_bots(self, owner_id: str, result: Any, bot_ids: list[str]) -> list[str]:
+    def _oa_add_bots(
+        self, owner_id: str, result: Any, bot_ids: list[str], proxy_url: str | None = None
+    ) -> list[str]:
         offered = {str(bot.get("botId") or ""): bot for bot in result.bots}
         connected = self._connected_oa_bot_ids()
         added: list[str] = []
@@ -23336,6 +23484,9 @@ class WebState:
             }
             if str(bot.get("responseMode") or "CHAT").upper() != "CHAT":
                 record["channelProblem"] = "chat_off"
+            if proxy_url:
+                # The proxy the sign-in used; its session belongs to that address.
+                record["proxyUrl"] = self._encrypt_secret(proxy_url)
             account = self._create_channel_account(record, {"cookies": result.cookies}, owner_id)
             self.line_oa.start(str(account["id"]))
             connected.add(bot_id)
@@ -28058,6 +28209,10 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.update_user(self._read_json(), self.current_user)
         if method == "POST" and path == "/api/god/users/delete":
             return self.state.delete_user(self._read_json(), self.current_user or {})
+        if method == "GET" and path == "/api/god/settings":
+            return self.state.god_system_settings()
+        if method == "POST" and path == "/api/god/settings":
+            return self.state.save_god_system_settings(self._read_json())
         if method == "GET" and path == "/api/god/ai/settings":
             return self.state.global_ai_settings()
         if method == "POST" and path == "/api/god/ai/settings":
@@ -28102,6 +28257,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             status["setupTokenRequired"] = bool(
                 not auth.configured() and self.state.setup_token_required()
             )
+            status["proxyPolicy"] = self.state.proxy_policy()
             if (status.get("user") or {}).get("role") == "god":
                 auth.logout(cookie)
                 status = auth.status(None)

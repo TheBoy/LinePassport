@@ -57,7 +57,7 @@ Once you're signed in to the web app, add a LINE account with the 4-step wizard:
 You can add **several LINE accounts** and switch between them with the account
 picker at the top of the page.
 
-## A proxy per LINE account
+## A proxy per LINE or LINE OA account
 
 Tick **Connect through proxy** in step 1 of adding a LINE account, or set it later
 in Settings → Account Management → Edit. HTTP, HTTPS, SOCKS5 and SOCKS5H are
@@ -73,9 +73,17 @@ encrypted.
   account out or ask to verify often. Give each account its own IP.
 - **Filling it in:** providers usually hand out `host:port:username:password`;
   put each part in its own field.
+- **Requiring one:** on the God page (`/god`) → System settings → Require a
+  proxy, separately for LINE and LINE OA accounts. Then "Connect through
+  proxy" is ticked and locked, and no account of that kind can be added or
+  reconnected without one. Accounts added before keep working, are marked
+  "Needs a proxy", and need one before they reconnect. The God page shows
+  how many accounts still have none.
 
-LINE OA and Telegram accounts don't use this proxy (Telegram uses
-`LINEPASSPORT_TELEGRAM_PROXY`).
+LINE OA accounts take a proxy too: "+ Add a LINE OA" asks for it before the QR
+code, the sign-in goes through it, and every OA added from that sign-in keeps
+it; change or remove it later with Edit. Telegram accounts don't use it
+(Telegram uses `LINEPASSPORT_TELEGRAM_PROXY`).
 
 ## After login
 

@@ -9,7 +9,7 @@ import subprocess
 import pytest
 
 from okline import webui
-from okline.webapp import INDEX_HTML
+from okline.webapp import GOD_HTML, INDEX_HTML
 
 
 def test_every_marker_is_filled_once():
@@ -105,10 +105,38 @@ def test_proxy_fields_say_where_to_get_a_proxy():
     for url in ("https://iproyal.com/", "https://oxylabs.io/", "https://dataimpulse.com/"):
         assert f'"{url}"' in INDEX_HTML
     assert 'link.rel = "noopener noreferrer";' in _block("function proxyProvidersHint", "function applyI18n")
-    # Both places that take a proxy show it: the add-account wizard and Edit.
+    # Every place that takes a proxy shows it: the add-account wizard and the shared form.
     assert "renderLoginProxyProviders();" in _block("function applyI18n", "function setLang")
-    assert "proxyFields.appendChild(proxyProvidersHint());" in _block(
+    assert "fields.appendChild(proxyProvidersHint());" in _block(
+        "function buildProxyForm", "function proxyValuesMissing"
+    )
+    assert "buildProxyForm(account.proxyConfigured, proxyRequiredFor(account))" in _block(
         "async function editLineAccount", "async function deleteLineAccount"
+    )
+
+
+def test_a_proxy_the_god_page_requires_cannot_be_switched_off():
+    assert "state.proxyPolicy = data.proxyPolicy || {};" in _block(
+        "async function refreshWebAuth", "state.simpleMode = !!data.simpleMode"
+    )
+    form = _block("function buildProxyForm", "function proxyValuesMissing")
+    assert "enabled.disabled = required;" in form and 't("proxy.required_by_admin")' in form
+    wizard = _block("function syncLoginProxyInput", "function openAddAccount")
+    assert '$("loginProxyEnabled").disabled = required;' in wizard
+    assert 'buildProxyForm(false, proxyRequiredFor({channel: "line_oa"}))' in INDEX_HTML
+    assert 'data-god-page-target="system"' in GOD_HTML
+    assert '"/api/god/settings"' in GOD_HTML and 'id="proxyRequiredLineOa"' in GOD_HTML
+
+
+def test_line_oa_accounts_take_a_proxy_like_line_accounts():
+    # A new sign-in asks for the proxy before the QR; rows edit name and proxy.
+    settings = _block("function lineOaLoginSettings", "async function openLineOaLogin")
+    assert "buildProxyForm(false, " in settings
+    assert "proxyValuesMissing(proxy, false)" in _block(
+        "async function openLineOaLogin", "const baseOpenReconnectForOa"
+    )
+    assert "editLineAccount(account)" in _block(
+        "function renderLineOaAccountList", "const baseRenderLineAccountListForOa"
     )
 
 

@@ -258,9 +258,11 @@ class FakeLogin:
     result = _result(HOTMAN)
     error: OAManagerLoginError | None = None
     seen_cookies: list = []
+    seen_proxies: list = []
 
-    def __init__(self, *, cookies=None, **kwargs):
+    def __init__(self, *, cookies=None, proxy=None, **kwargs):
         FakeLogin.seen_cookies.append(cookies)
+        FakeLogin.seen_proxies.append(proxy)
         self.trace = []
         self.client = FakeOA()
 
@@ -310,6 +312,62 @@ def test_signing_in_adds_the_only_oa_or_offers_a_choice(state, monkeypatch):
     state.oa_login_start({}, owner)
     login = _wait_for(state, owner, {"error"})
     assert login["errorCode"] == "line_oa_no_business_id" and login["qrImage"] is None
+
+
+PROXY_FIELDS = {"proxyEnabled": True, "proxyScheme": "http", "proxyHost": "th.proxy.test",
+                "proxyPort": "8000", "proxyUsername": "shop", "proxyPassword": "p@ss"}
+
+
+def test_a_proxy_carries_the_sign_in_and_stays_with_the_oa(state, monkeypatch):
+    monkeypatch.setattr(webapp, "OAManagerQrLogin", FakeLogin)
+    made: list[tuple] = []
+
+    def factory(cookies=None, proxy=None):
+        made.append((proxy,))
+        return FakeOA(cookies, proxy)
+
+    state.line_oa.client_factory = factory
+    owner = _owner(state)
+    FakeLogin.result, FakeLogin.error, FakeLogin.seen_proxies = _result(HOTMAN), None, []
+    state.oa_login_start(dict(PROXY_FIELDS), owner)
+    login = _wait_for(state, owner, {"done", "error"})
+    assert login["state"] == "done" and "p@ss" not in str(login)
+    proxy = "http://shop:p%40ss@th.proxy.test:8000"
+    assert FakeLogin.seen_proxies == [proxy]  # the QR sign-in itself went through it
+    account_id = login["accountId"]
+    stored = state.account_store.get(account_id)
+    assert stored["proxyUrl"].startswith("fernet:") and "p@ss" not in stored["proxyUrl"]
+    listed = next(a for a in state.account_store.list_accounts() if a["id"] == account_id)
+    assert listed["proxyConfigured"] is True and "proxyUrl" not in listed
+    assert state.oa_proxy(account_id) == proxy and made[-1] == (proxy,)
+
+    # Reconnecting signs in through the same proxy.
+    state.oa_auth_failed(account_id)
+    state.oa_login_start({"reconnectAccountId": account_id}, owner)
+    assert _wait_for(state, owner, {"done", "error"})["state"] == "done"
+    assert FakeLogin.seen_proxies[-1] == proxy
+
+    # Edit can change or drop it; the stream restarts on the new route.
+    state.update_account(account_id, "Hotman", owner, proxy_enabled=False)
+    assert state.oa_proxy(account_id) is None and made[-1] == (None,)
+    assert state.line_oa.running(account_id)
+    state.update_account(account_id, "Hotman", owner, proxy_enabled=True,
+                         proxy_url="socks5h://th.proxy.test:1080")
+    assert made[-1] == ("socks5h://th.proxy.test:1080",)
+
+
+def test_telegram_accounts_still_refuse_a_proxy(state):
+    owner = _owner(state)
+    account = state._create_channel_account(
+        {"id": "tg-shop", "label": "Shop TG", "channel": "telegram_bot", "botId": "555",
+         "sessionState": "connected"},
+        {"token": "555:x"},
+        owner["id"],
+    )
+    with pytest.raises(WebError) as exc:
+        state.update_account(account["id"], "Shop TG", owner, proxy_enabled=True,
+                             proxy_url="http://p.test:80")
+    assert exc.value.code == "line_only"
 
 
 def test_reconnecting_replaces_the_session_of_that_oa_only(state, monkeypatch):
