@@ -7,6 +7,17 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Rename a customer from the customer panel.** The pencil next to the name in
+  the chat's customer panel (Chat and All chats) renames them in place: Enter
+  saves, Escape cancels. The new name shows in chat lists, chat titles,
+  message senders, All chats, Customers and notifications, for LINE, LINE OA
+  and Telegram alike, while the panel keeps showing the name they use
+  themselves ("Name on LINE: …"). Searching finds them by either name, the
+  customer's history records the rename, and "Use their own name" (or saving
+  an empty name) goes back. Until the team renames someone, their name now
+  follows the one they use on Telegram or LINE OA. Names typed in the customer
+  card before this update count as names the team gave (CRM schema 2 adds
+  `crm_customers.name_custom`).
 - **A soft chat alert that keeps beeping while a customer waits.** A new
   customer message on any account (All chats keeps them all live) plays a soft
   double "boop": pure 587 Hz sine tones that swell in and fade straight out,

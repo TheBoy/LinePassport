@@ -14,6 +14,7 @@ from collections.abc import Iterator
 import pytest
 import requests
 
+from okline.crm.schema import MIGRATIONS
 from okline.webapp import OkLineWebHandler, OkLineWebServer, WebConfig, WebState
 
 PG_URL = os.getenv("OKLINE_TEST_DATABASE_URL", "")
@@ -177,7 +178,7 @@ def test_a_restart_keeps_customers_like_a_deploy(tmp_path):
 
     second = WebState(config)  # same database, new process: migrations must be a no-op
     try:
-        assert second.crm.db.migrate() == 1
+        assert second.crm.db.migrate() == MIGRATIONS[-1][0]
         listed = second.crm.list_customers(owner, {"filter": {"q": "0812345678"}})
         assert [c["displayName"] for c in listed["customers"]] == ["Kept"]
         tables = {

@@ -8661,6 +8661,7 @@ INDEX_HTML = r"""<!doctype html>
       const search = $("contactSearch").value.trim().toLocaleLowerCase();
       const rows = currentConversationRows()
         .filter(({item}) => !search || String(item.name || "").toLocaleLowerCase().includes(search)
+          || String(item.originalName || "").toLocaleLowerCase().includes(search)
           || String(item.mid || "").toLocaleLowerCase() === search)
         .sort((a, b) => compareConversationItems(a.item, b.item));
       for (const {item, kind} of rows) {
@@ -21755,6 +21756,8 @@ class WebState:
                 if channel == "line"
                 else _coerce_int(row["unread"])
             )
+            name = str(row["display_name"] or "")
+            own = str(row["identity_name"] or "")
             chats.append(
                 {
                     "key": f"{row['account_id']}|{chat_id}",
@@ -21762,8 +21765,9 @@ class WebState:
                     "channel": "telegram" if channel.startswith("telegram") else "line",
                     "chatId": chat_id,
                     "kind": "contact",
-                    "name": str(row["display_name"] or "")
-                    or (f"@{row['username']}" if row["username"] else ""),
+                    "name": name or (f"@{row['username']}" if row["username"] else ""),
+                    # Searching finds a renamed customer by their own name too.
+                    "originalName": own if _coerce_int(row["name_custom"]) and own != name else "",
                     "username": str(row["username"] or ""),
                     "customerId": str(row["customer_id"]),
                     "conversationId": str(row["id"]),
@@ -21858,6 +21862,7 @@ class WebState:
             "chatId": chat_id,
             "kind": "group",
             "name": names.get(chat_id, ""),
+            "originalName": "",
             "username": "",
             "customerId": "",
             "conversationId": "",
@@ -22059,6 +22064,11 @@ class WebState:
     def crm_changed(self, account_ids: list[str]) -> None:
         for account_id in account_ids:
             self._bump_crm_version(account_id)
+
+    def crm_custom_names(self, account_id: str) -> dict[str, str]:
+        """Names the team gave the contacts of a LINE account, by LINE user id."""
+        owner_id = self._account_owner_id(account_id)
+        return self.crm.custom_names(owner_id) if owner_id else {}
 
     def crm_resolve_names(
         self, account_id: str, external_ids: list[str]
@@ -22815,7 +22825,8 @@ class WebState:
         rows = []
         for rank, row in enumerate(self.crm.account_chats(account_id)):
             username = str(row.get("identity_username") or "")
-            name = str(row.get("display_name") or row.get("identity_name") or "") or (
+            own = str(row.get("identity_name") or "")
+            name = str(row.get("display_name") or own) or (
                 f"@{username}" if username else row["chat_id"]
             )
             preview = str(row.get("last_preview") or "")
@@ -22824,10 +22835,13 @@ class WebState:
                 row.get("last_inbound_at")
             ) and _coerce_int(row.get("last_outbound_at")) > 0
             last_at = _coerce_int(row.get("last_message_at"))
+            renamed = bool(_coerce_int(row.get("name_custom")) and own and own != name)
             rows.append(
                 {
                     "mid": row["chat_id"],
                     "name": name,
+                    # What the person calls themselves, when the team renamed them.
+                    "originalName": own if renamed else "",
                     "statusMessage": f"@{username}" if username else "",
                     "picturePath": None,
                     "rank": rank,
@@ -22860,7 +22874,7 @@ class WebState:
         rows = [
             row
             for row in self._telegram_chat_rows(account_id)
-            if not search or search in str(row["name"]).lower()
+            if not search or search in f"{row['name']} {row['originalName']}".lower()
         ][:limit]
         return {"contacts": rows, "count": len(rows)}
 
@@ -28999,10 +29013,15 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         limit = _query_int(query, "limit", 250, minimum=1, maximum=1000)
         chat_summaries = self._conversation_summaries(api, query)
         recency = _chat_recency_from_summaries(chat_summaries)
+        custom = self._custom_names(query)
         rows = []
-        for _mid, contact in _contact_rows(api):
-            name = contact.get("name") or ""
-            if search and search not in name.lower():
+        for mid, contact in _contact_rows(api):
+            own = contact.get("name") or ""
+            name = custom.get(mid) or own
+            if name != own:
+                contact["name"] = name
+                contact["originalName"] = own
+            if search and search not in name.lower() and search not in own.lower():
                 continue
             contact.update(
                 _chat_list_fields(chat_summaries.get(str(contact.get("mid") or "")))
@@ -29120,10 +29139,25 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             message_mids,
             names,
         )
+        names.update(
+            (mid, name) for mid, name in self._custom_names(query).items() if mid in names
+        )
         return {
             "messages": [_message_summary(api, msg, names) for msg in reversed(messages)],
             "count": len(messages),
         }
+
+    def _custom_names(self, query: dict[str, list[str]]) -> dict[str, str]:
+        """Names the team gave this LINE account's contacts in the customer panel."""
+        account_id = _query_one(query, "accountId", "").strip()
+        state = getattr(getattr(self, "server", None), "state", None)
+        if not account_id or state is None:
+            return {}
+        try:
+            return state.crm_custom_names(account_id)
+        except Exception:
+            # The chat still lists with LINE's names when the customer records can't be read.
+            return {}
 
     def _mark_messages_read(self, api: OkLine, body: dict[str, Any]) -> dict[str, Any]:
         chat_mid = str(body.get("chatMid") or "").strip()

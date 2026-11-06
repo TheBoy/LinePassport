@@ -121,7 +121,7 @@
       if ((f.status === "pending" || f.status === "closed") && chat.status !== f.status) return false;
       if (f.q) {
         const account = inboxAccount(chat.accountId);
-        const haystack = [inboxChatName(chat), chat.username, chat.lastPreview, account && account.label]
+        const haystack = [inboxChatName(chat), chat.originalName, chat.username, chat.lastPreview, account && account.label]
           .filter(Boolean).join(" ").toLocaleLowerCase();
         if (!haystack.includes(f.q.toLocaleLowerCase())) return false;
       }

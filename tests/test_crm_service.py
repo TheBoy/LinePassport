@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import sqlite3
 import time
 from typing import Any
 
@@ -12,6 +13,7 @@ import pytest
 
 from okline.crm import CrmDatabase, CrmError, CrmService
 from okline.crm.filters import normalize_filter
+from okline.crm.schema import MIGRATIONS
 
 OWNER = {"id": "owner", "role": "member"}
 STAFF = {"id": "staff", "role": "operator", "teamOwnerId": "owner", "staffAccountIds": ["acct-a"]}
@@ -297,6 +299,119 @@ def test_merge_moves_everything_to_one_customer(crm):
     later = _ingest(service, account="tg-bot", chat="tgu12345", channel="telegram_bot",
                     messages=[_msg("t2", "in", now)])
     assert later["customerId"] == line["customerId"]
+
+
+def test_renaming_keeps_their_own_name_and_can_go_back(crm):
+    service, ctx = crm
+    customer_id = _ingest(service, messages=[_msg("m1", "in", _now())], name="Somchai")["customerId"]
+
+    renamed = service.update_customer(OWNER, {"id": customer_id, "displayName": "คุณสมชาย VIP"})
+    customer = renamed["customer"]
+    assert (customer["displayName"], customer["nameCustom"]) == ("คุณสมชาย VIP", True)
+    assert customer["identities"][0]["name"] == "Somchai"  # their own name stays
+    assert "acct-a" in ctx.changed  # open chat lists pick the new name up
+    assert service.custom_names("owner") == {MID_1: "คุณสมชาย VIP"}
+    chat = service.conversations_map(OWNER, "acct-a")["conversations"][MID_1]
+    assert (chat["customerName"], chat["nameCustom"]) == ("คุณสมชาย VIP", True)
+    assert service.list_customers(OWNER, {"q": "somchai"})["total"] == 1
+    event = next(item for item in renamed["timeline"] if item.get("kind") == "renamed")
+    assert event["data"] == {"from": "Somchai", "to": "คุณสมชาย VIP", "own": False}
+
+    # An empty name, or their own name typed back, means no name of the team's.
+    back = service.update_customer(OWNER, {"id": customer_id, "displayName": ""})["customer"]
+    assert (back["displayName"], back["nameCustom"]) == ("Somchai", False)
+    assert service.custom_names("owner") == {}
+    service.update_customer(OWNER, {"id": customer_id, "displayName": "Som"})
+    own = service.update_customer(OWNER, {"id": customer_id, "displayName": "Somchai"})
+    assert own["customer"]["nameCustom"] is False
+    with pytest.raises(CrmError):
+        service.update_customer(VIEWER, {"id": customer_id, "displayName": "Viewer's pick"})
+
+
+def test_a_name_follows_the_person_until_the_team_renames_them(crm):
+    service, _ctx = crm
+
+    def say(external_id, name):
+        return _ingest(service, account="tg-bot", chat="tgu777", channel="telegram_bot",
+                       messages=[_msg(external_id, "in", _now())], name=name)
+
+    customer_id = say("t1", "Tom")["customerId"]
+    say("t2", "Thomas")
+    customer = service.customer_detail(OWNER, customer_id)["customer"]
+    assert (customer["displayName"], customer["nameCustom"]) == ("Thomas", False)
+
+    service.update_customer(OWNER, {"id": customer_id, "displayName": "Tom from Chiang Mai"})
+    say("t3", "Tommy")
+    customer = service.customer_detail(OWNER, customer_id)["customer"]
+    assert customer["displayName"] == "Tom from Chiang Mai"
+    assert customer["identities"][0]["name"] == "Tommy"
+    assert service.custom_names("owner") == {}  # only LINE lists chats under LINE's names
+
+
+def test_chat_lists_know_the_own_name_of_line_oa_and_telegram_people(crm):
+    service, _ctx = crm
+    oa_chat = "U" + "3" * 32
+    service.ingest(owner_id="owner", account_id="oa-1", channel="line_oa", chat_id=oa_chat,
+                   contact={"externalId": oa_chat, "name": "Mint Shop"},
+                   messages=[_msg("o1", "in", _now())])
+    _ingest(service, account="tg-bot", chat="tgu55", channel="telegram_bot",
+            messages=[_msg("t1", "in", _now())], name="Ploy")
+    for row in service.inbox_rows(["oa-1", "tg-bot"]):
+        service.update_customer(OWNER, {"id": row["customer_id"], "displayName": "Renamed"})
+    own = {row["chat_id"]: row["identity_name"] for row in service.inbox_rows(["oa-1", "tg-bot"])}
+    assert own == {oa_chat: "Mint Shop", "tgu55": "Ploy"}
+    for account, chat_id, name in (("oa-1", oa_chat, "Mint Shop"), ("tg-bot", "tgu55", "Ploy")):
+        [row] = service.account_chats(account)
+        assert (row["chat_id"], row["display_name"], row["identity_name"]) == (chat_id, "Renamed", name)
+
+
+def test_customers_the_team_adds_keep_their_name_through_a_merge(crm):
+    service, _ctx = crm
+    manual = service.create_customer(OWNER, {"displayName": "Walk-in Nok"})["customer"]
+    assert manual["nameCustom"] is True
+    line = _ingest(service, messages=[_msg("a", "in", _now())])  # LINE has no name for them yet
+    merged = service.merge_customers(
+        OWNER, {"targetId": line["customerId"], "sourceIds": [manual["id"]]}
+    )["customer"]
+    assert (merged["displayName"], merged["nameCustom"]) == ("Walk-in Nok", True)
+    service.set_identity_profile("owner", "line", MID_1, name="Nok")
+    customer = service.customer_detail(OWNER, merged["id"])["customer"]
+    assert customer["displayName"] == "Walk-in Nok"
+    assert service.custom_names("owner") == {MID_1: "Walk-in Nok"}
+
+
+def test_names_typed_before_the_upgrade_stay_as_the_team_gave_them(tmp_path):
+    path = tmp_path / "crm.sqlite3"
+    conn = sqlite3.connect(path)
+    for statement in MIGRATIONS[0][1]:
+        conn.execute(statement)
+    conn.execute("CREATE TABLE crm_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO crm_meta (key, value) VALUES ('schema', '1')")
+    people = [("own", "Somchai", "Somchai"), ("typed", "VIP Som", "Som"),
+              ("manual", "Walk-in", None), ("unnamed", "", "")]
+    for customer_id, display_name, own in people:
+        conn.execute(
+            "INSERT INTO crm_customers (id, owner_id, display_name, created_at, updated_at) "
+            "VALUES (?, 'owner', ?, 1, 1)",
+            (customer_id, display_name),
+        )
+        if own is not None:
+            conn.execute(
+                "INSERT INTO crm_identities (id, owner_id, customer_id, channel, external_id, "
+                "name, created_at, updated_at) VALUES (?, 'owner', ?, 'line', ?, ?, 1, 1)",
+                (f"i-{customer_id}", customer_id, f"u-{customer_id}", own),
+            )
+    conn.commit()
+    conn.close()
+
+    service = CrmService(CrmDatabase(sqlite_path=str(path)), FakeContext())
+    try:
+        rows = service.db.query("SELECT id, name_custom FROM crm_customers")
+    finally:
+        service.close()
+    assert {row["id"]: row["name_custom"] for row in rows} == {
+        "own": 0, "typed": 1, "manual": 1, "unnamed": 0,
+    }
 
 
 def test_tasks_reminders_and_permissions(crm):

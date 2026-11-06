@@ -133,6 +133,10 @@
       "crm.claim": {th: "ฉันรับเรื่องนี้", en: "I'll take it"},
       "crm.claimed": {th: "รับเรื่องแล้ว", en: "You're on it"},
       "crm.open_profile": {th: "เปิดการ์ดลูกค้า", en: "Open customer card"},
+      "crm.rename": {th: "เปลี่ยนชื่อ", en: "Rename"},
+      "crm.rename_reset": {th: "ใช้ชื่อเดิม", en: "Use their own name"},
+      "crm.renamed": {th: "เปลี่ยนชื่อแล้ว", en: "Name saved"},
+      "crm.own_name": {th: "ชื่อใน {channel}: {name}", en: "Name on {channel}: {name}"},
       "crm.quick_note_ph": {th: "จดโน้ตถึงทีม…", en: "Note for the team…"},
       "crm.save_note": {th: "บันทึกโน้ต", en: "Save note"},
       "crm.note_saved": {th: "บันทึกโน้ตแล้ว", en: "Note saved"},
@@ -180,6 +184,8 @@
       "crm.ev_task_done": {th: "{who} ทำงานเสร็จ: {title}", en: "{who} finished: {title}"},
       "crm.ev_merged": {th: "{who} รวมการ์ด {n} ใบเข้ามา", en: "{who} merged {n} cards in"},
       "crm.ev_updated": {th: "{who} แก้ไขข้อมูลติดต่อ", en: "{who} edited the details"},
+      "crm.ev_renamed": {th: "{who} เปลี่ยนชื่อเป็น “{name}”", en: "{who} renamed them “{name}”"},
+      "crm.ev_renamed_own": {th: "{who} กลับไปใช้ชื่อเดิม “{name}”", en: "{who} went back to their own name “{name}”"},
       "help.customers.title": {th: "ลูกค้า", en: "Customers"},
       "help.customers.intro": {th: "รู้ว่าลูกค้าแต่ละคนเป็นใคร ใครในทีมดูแลอยู่ และต้องทำอะไรต่อ", en: "Know who each customer is, who is looking after them and what to do next."},
       "help.customers.s1_title": {th: "การ์ดลูกค้าขึ้นเอง", en: "Customers appear by themselves"},
@@ -940,6 +946,7 @@
         case "task_done": return t("crm.ev_task_done", {who, title: data.title || ""});
         case "merged": return t("crm.ev_merged", {who, n: data.count || 1});
         case "updated": return t("crm.ev_updated", {who});
+        case "renamed": return t(data.own ? "crm.ev_renamed_own" : "crm.ev_renamed", {who, name: data.to || ""});
         default: return item.kind;
       }
     }
@@ -1251,6 +1258,32 @@
       if (data.members) state.crmMembers = data.members;
       if (data.me) state.crmMe = data.me;
       decorateCrmRows();
+      applyCrmNames();
+    }
+
+    // Names the team gives customers replace the chat's own in the chat list and
+    // title. The list loads with them; this follows renames made since, here or
+    // on another device, without loading the list again.
+    function applyCrmNames() {
+      let changed = false;
+      for (const item of state.contacts || []) {
+        const info = state.crmMap[item.mid];
+        const given = info && info.nameCustom ? info.customerName : "";
+        const own = item.originalName || item.name;
+        const name = given || own;
+        if (name === item.name) continue;
+        item.name = name;
+        item.originalName = given ? own : "";
+        changed = true;
+      }
+      if (!changed) return;
+      renderAllList();
+      renderContactsList();
+      const open = state.contacts.find((item) => item.mid === state.target);
+      if (open && $("chatTitle").textContent !== open.name) {
+        $("chatTitle").textContent = open.name;
+        loadMessages({silent: true}).catch(() => {});  // the messages name their sender too
+      }
     }
 
     function crmRowMatches(mid) {
@@ -1354,6 +1387,7 @@
       const fresh = panel.key !== key;
       panel.key = key;
       if (fresh) {
+        panel.renaming = null;
         const row = document.createElement("div");
         row.className = "state-row";
         const spin = document.createElement("span");
@@ -1378,6 +1412,10 @@
     function renderCrmPanel(panel) {
       const data = panel.data;
       const body = $(panel.bodyId);
+      // A rename in progress keeps its text and cursor while the panel redraws.
+      const rename = panel.renaming;
+      const caret = rename && rename.form.contains(document.activeElement)
+        ? [rename.input.selectionStart, rename.input.selectionEnd] : null;
       body.replaceChildren();
       if (!data) return;
       const ctx = panel.context();
@@ -1402,12 +1440,21 @@
 
       const head = document.createElement("div");
       head.className = "crm-side-name";
-      const name = document.createElement("strong");
-      name.textContent = customer.displayName || chatName || t("crm.no_name");
-      head.append(name, crmChannelBadges(customer.identities));
+      head.appendChild(crmSideTitle(panel, customer, chatName, data.canEdit));
+      if (customer.nameCustom) {
+        for (const own of crmOwnNames(customer).filter((item) => item.name !== customer.displayName)) {
+          const channel = own.channel === "telegram" ? "Telegram" : "LINE";
+          head.appendChild(textSpan(t("crm.own_name", {channel, name: own.name}), "ux-muted crm-own-name"));
+        }
+      }
+      head.appendChild(crmChannelBadges(customer.identities));
       if (customer.phone) head.appendChild(textSpan(customer.phone, "ux-muted"));
       head.appendChild(crmButton("crm.open_profile", () => openCustomer(customer.id), "crm-link"));
       body.appendChild(head);
+      if (caret && rename.form.isConnected) {
+        rename.input.focus({preventScroll: true});
+        rename.input.setSelectionRange(...caret);
+      }
 
       // Status
       const statusBlock = document.createElement("div");
@@ -1506,6 +1553,96 @@
       }
       for (const note of data.notes || []) noteBlock.appendChild(crmNoteItem(note, data.canManage, reload));
       body.appendChild(noteBlock);
+    }
+
+    // What the person calls themselves on LINE or Telegram.
+    function crmOwnNames(customer) {
+      return (customer.identities || []).filter((item) => item.name);
+    }
+
+    // The name at the top of a customer panel, with a button to rename the customer there.
+    function crmSideTitle(panel, customer, chatName, canEdit) {
+      if (panel.renaming && panel.renaming.customerId === customer.id) return panel.renaming.form;
+      panel.renaming = null;
+      const row = document.createElement("div");
+      row.className = "crm-side-title";
+      const name = document.createElement("strong");
+      name.textContent = customer.displayName || chatName || t("crm.no_name");
+      row.appendChild(name);
+      if (!canEdit) return row;
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "icon-ghost";
+      edit.title = t("crm.rename");
+      edit.setAttribute("aria-label", t("crm.rename"));
+      const icon = svgEl("svg", {viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2,
+        "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true"});
+      icon.append(svgEl("path", {d: "M12 20h9"}), svgEl("path", {d: "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"}));
+      edit.appendChild(icon);
+      edit.addEventListener("click", () => crmRename(panel, customer, row));
+      row.appendChild(edit);
+      return row;
+    }
+
+    // Rename in place: Enter saves, Escape cancels, and an empty name goes back to
+    // the person's own.
+    function crmRename(panel, customer, row) {
+      const own = crmOwnNames(customer)[0];
+      const form = document.createElement("form");
+      form.className = "crm-rename";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.maxLength = 120;
+      input.value = customer.displayName || "";
+      input.placeholder = own ? own.name : t("crm.field_name");
+      input.setAttribute("aria-label", t("crm.rename"));
+      const save = document.createElement("button");
+      save.type = "submit";
+      save.className = "primary";
+      save.textContent = t("common.save");
+      const actions = document.createElement("div");
+      actions.className = "crm-rename-actions";
+      actions.append(save, crmButton("common.cancel", () => close()));
+      if (customer.nameCustom && own) {
+        actions.appendChild(crmButton("crm.rename_reset", () => submit(""), "crm-link"));
+      }
+      form.append(input, actions);
+      panel.renaming = {customerId: customer.id, form, input};
+      row.replaceWith(form);
+      input.focus();
+      input.select();
+
+      function close() {
+        panel.renaming = null;
+        renderCrmPanel(panel);
+      }
+      async function submit(value) {
+        if (value === (customer.displayName || "")) {
+          close();
+          return;
+        }
+        for (const element of form.elements) element.disabled = true;
+        try {
+          await post("/api/crm/customers/update", {id: customer.id, displayName: value});
+        } catch (err) {
+          for (const element of form.elements) element.disabled = false;
+          input.focus();
+          throw err;
+        }
+        panel.renaming = null;
+        toast(t("crm.renamed"));
+        crmAfterChange();
+      }
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        submit(input.value.trim()).catch(toastError);
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      });
     }
 
     async function crmAssign(target, assignee, panel) {

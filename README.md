@@ -43,9 +43,9 @@ Prefer Python? Jump to [Quick start](#quick-start) below.
 - **LinePassport web app** — team inbox with KPI, AI auto-reply and scheduled
   sends, an **All chats** page with every LINE, LINE OA and Telegram account in one list
   (each chat labelled with its channel and account), plus
-  **Customers (CRM)**: customer cards across accounts, chat
-  assignment and status, tags, notes, follow-ups, segments and paced segment
-  messages.
+  **Customers (CRM)**: customer cards across accounts, renaming customers
+  from the chat (their own name stays visible), chat assignment and status,
+  tags, notes, follow-ups, segments and paced segment messages.
 - **Telegram** — staff alerts you can reply to from Telegram, and Telegram bots
   or personal accounts (`pip install "okline[telegram]"`) as chat accounts next
   to LINE.

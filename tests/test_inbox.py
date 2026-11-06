@@ -177,6 +177,63 @@ def test_inbox_lists_every_channel_and_where_each_chat_comes_from(state):
     assert tg["lastPreview"] == "มีค่ะ"
 
 
+class _LineContactsApi:
+    """Just enough of a LINE client for the chat list and one chat's messages."""
+
+    def __init__(self, names: dict[str, str]) -> None:
+        self.names = names
+
+    def get_all_contact_ids(self):
+        return list(self.names)
+
+    def get_contacts(self, ids):
+        return {"contacts": {mid: {"contact": {"mid": mid, "displayName": self.names[mid]}}
+                             for mid in ids if mid in self.names}}
+
+    def get_profile(self):
+        return {"mid": "U-me", "displayName": "Shop"}
+
+    def get_recent_messages(self, chat_mid, count):
+        return [{"id": "m1", "from": chat_mid, "to": "U-me", "createdTime": "1000",
+                 "contentType": 0, "text": "สวัสดีค่ะ"}]
+
+
+def test_a_renamed_customer_shows_the_new_name_and_keeps_their_own(state):
+    owner = _owner(state)
+    _seed_line(state, owner)
+    tg_id = state.add_telegram_bot({"token": TOKEN, "label": "Shop TG"}, owner)["account"]["id"]
+    owner = state.web_auth._find_user(owner["id"])
+    now = int(time.time() * 1000)
+    _line_inbox(state, {"messageBoxes": [_box(CUSTOMER, 1, (CUSTOMER, now - 9000, "สนใจค่ะ"))]})
+    state.crm.set_identity_profile(owner["id"], "line", CUSTOMER, name="Somchai")
+    state.tg_receive(tg_id, _tg_incoming("มีสินค้าไหม"))
+    chats = {chat["chatId"]: chat for chat in state.inbox(owner)["chats"]}
+    for chat_id, name in ((CUSTOMER, "คุณสมชาย"), (TG_CHAT, "คุณพลอย ร้านดอกไม้")):
+        state.crm.update_customer(owner, {"id": chats[chat_id]["customerId"], "displayName": name})
+
+    # All chats shows the team's name and still finds them by their own.
+    chats = {chat["chatId"]: chat for chat in state.inbox(owner)["chats"]}
+    assert (chats[CUSTOMER]["name"], chats[CUSTOMER]["originalName"]) == ("คุณสมชาย", "Somchai")
+    assert (chats[TG_CHAT]["name"], chats[TG_CHAT]["originalName"]) == ("คุณพลอย ร้านดอกไม้", "Ploy")
+
+    # LINE lists the chat under LINE's name; the team's replaces it, in the list and the chat.
+    handler = OkLineWebHandler.__new__(OkLineWebHandler)
+    handler.server = type("Server", (), {"state": state})()
+    api = _LineContactsApi({CUSTOMER: "Somchai", "U" + "b" * 32: "Mali"})
+    query = {"accountId": ["acct"], "limit": ["10"], "search": ["somchai"]}
+    [contact] = handler._contacts(api, query)["contacts"]
+    assert (contact["mid"], contact["name"], contact["originalName"]) == (CUSTOMER, "คุณสมชาย", "Somchai")
+    messages = handler._messages(api, {"accountId": ["acct"], "chat_mid": [CUSTOMER]})["messages"]
+    assert messages[0]["fromName"] == "คุณสมชาย"
+    [row] = state.tg_contacts(tg_id, {"search": ["ploy"]})["contacts"]
+    assert (row["name"], row["originalName"]) == ("คุณพลอย ร้านดอกไม้", "Ploy")
+
+    # Going back to their own name puts LINE's name back.
+    state.crm.update_customer(owner, {"id": chats[CUSTOMER]["customerId"], "displayName": ""})
+    names = [item["name"] for item in handler._contacts(api, {"accountId": ["acct"]})["contacts"]]
+    assert sorted(names) == ["Mali", "Somchai"]
+
+
 def test_staff_see_only_the_accounts_they_can_open(state):
     owner = _owner(state)
     _seed_line(state, owner)

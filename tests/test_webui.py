@@ -186,6 +186,61 @@ def test_the_chat_beep_is_quiet_short_and_click_free(tmp_path):
         assert abs(beep["first"]) < 1e-3 and abs(beep["last"]) < 1e-3
 
 
+def test_customers_can_be_renamed_from_the_customer_panel():
+    panel = _block("function renderCrmPanel", "function crmOwnNames")
+    assert "head.appendChild(crmSideTitle(panel, customer, chatName, data.canEdit));" in panel
+    # Their own name stays in the panel, under the team's.
+    assert 't("crm.own_name", {channel, name: own.name})' in panel
+    title = _block("function crmSideTitle", "function crmRename")
+    assert 'edit.setAttribute("aria-label", t("crm.rename"));' in title
+    # Live redraws of the panel keep a rename in progress.
+    assert "return panel.renaming.form;" in title
+    rename = _block("function crmRename", "async function crmAssign")
+    assert 'post("/api/crm/customers/update", {id: customer.id, displayName: value})' in rename
+    assert 'crmButton("crm.rename_reset", () => submit(""), "crm-link")' in rename
+    # Chat lists follow a rename and find a customer by either name.
+    assert "applyCrmNames();" in _block("async function loadCrmMap", "function applyCrmNames")
+    assert 'String(item.originalName || "").toLocaleLowerCase().includes(search)' in INDEX_HTML
+    assert "[inboxChatName(chat), chat.originalName," in INDEX_HTML
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_chat_lists_follow_a_rename_without_reloading(tmp_path):
+    source = _block("function applyCrmNames", "\n    }\n") + "\n    }\n"
+    probe = (
+        "const title = {textContent: 'Som'};\n"
+        "const $ = () => title;\n"
+        "let renders = 0;\n"
+        "let loads = 0;\n"
+        "const renderAllList = () => { renders += 1; };\n"
+        "const renderContactsList = () => {};\n"
+        "const loadMessages = () => { loads += 1; return Promise.resolve(); };\n"
+        "const state = {target: 'u1', crmMap: {}, contacts: [\n"
+        "  {mid: 'u1', name: 'Som', originalName: ''}, {mid: 'u2', name: 'Mali'}]};\n"
+        + source
+        + "state.crmMap = {u1: {customerName: 'Khun Somchai', nameCustom: true},\n"
+        "  u2: {customerName: 'Mali M', nameCustom: false}};\n"
+        "applyCrmNames();\n"
+        "const renamed = [state.contacts[0].name, state.contacts[0].originalName, title.textContent];\n"
+        "applyCrmNames();\n"
+        "const draws = renders;\n"
+        "state.crmMap.u1.nameCustom = false;\n"
+        "applyCrmNames();\n"
+        "console.log(JSON.stringify({renamed, draws, loads, other: state.contacts[1].name,\n"
+        "  back: [state.contacts[0].name, state.contacts[0].originalName, title.textContent]}));\n"
+    )
+    path = tmp_path / "names.js"
+    path.write_text(probe, encoding="utf-8")
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    seen = json.loads(result.stdout)
+    assert seen["renamed"] == ["Khun Somchai", "Som", "Khun Somchai"]
+    assert seen["draws"] == 1  # nothing changed the second time, so no redraw
+    assert seen["other"] == "Mali"  # only names the team gave replace LINE's
+    assert seen["back"] == ["Som", "", "Som"]
+    assert seen["loads"] == 2  # the open chat's messages reload to name the sender anew
+
+
 def test_compose_refuses_a_page_without_markers():
     with pytest.raises(RuntimeError):
         webui.compose_index("<html></html>")

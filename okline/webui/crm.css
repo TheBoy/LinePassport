@@ -201,6 +201,15 @@
     .crm-side-body h4 { margin: 0 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
     .crm-side-name { display: grid; gap: 4px; }
     .crm-side-name strong { font-size: 16px; overflow-wrap: anywhere; }
+    .crm-side-title { display: flex; align-items: center; gap: 2px; min-width: 0; }
+    .crm-side-title strong { min-width: 0; }
+    .crm-side-title .icon-ghost { flex: 0 0 auto; width: 30px; height: 30px; min-height: 30px; }
+    .crm-side-title .icon-ghost svg { width: 16px; height: 16px; }
+    .crm-own-name { overflow-wrap: anywhere; }
+    .crm-rename { display: grid; gap: 6px; }
+    .crm-rename input { width: 100%; }
+    .crm-rename-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+    .crm-rename-actions button { width: auto; min-height: 32px; }
     .crm-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 2px; border-radius: 10px; background: var(--surface-2); }
     .crm-seg button { min-height: 30px; padding: 2px 4px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; }
     .crm-seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(16, 24, 40, .12); }

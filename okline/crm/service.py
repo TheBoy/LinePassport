@@ -39,6 +39,14 @@ MAX_MERGE = 20
 MAX_BULK = 500
 MAX_FIELDS = 30
 MAX_BROADCAST_RECIPIENTS = 1000
+# The name the person behind conversation ``v`` uses on its channel (LINE OA chats are
+# LINE people), for queries over crm_conversations v. No "%" here: PostgreSQL reads it as
+# a placeholder.
+OWN_NAME_SQL = (
+    "(SELECT o.name FROM crm_identities o WHERE o.customer_id = v.customer_id "
+    "AND o.channel = CASE WHEN SUBSTR(v.channel, 1, 8) = 'telegram' THEN 'telegram' "
+    "ELSE 'line' END AND o.name <> '' ORDER BY o.created_at LIMIT 1)"
+)
 
 
 class CrmContext(Protocol):
@@ -433,12 +441,16 @@ class CrmService:
         updates["updated_at"] = now
         self._update_row("crm_identities", identity["id"], updates)
         customer = self.db.query_one(
-            "SELECT id, display_name, picture FROM crm_customers WHERE id = ?",
+            "SELECT id, display_name, name_custom, picture FROM crm_customers WHERE id = ?",
             (identity["customer_id"],),
         )
         if customer:
             fill: dict[str, Any] = {}
-            if name and not customer["display_name"]:
+            # The name follows the person's own, unless the team named them.
+            follows = (
+                not _int(customer["name_custom"]) and customer["display_name"] == identity["name"]
+            )
+            if name and (not customer["display_name"] or follows):
                 fill["display_name"] = name
             if picture and not customer["picture"]:
                 fill["picture"] = picture
@@ -458,15 +470,18 @@ class CrmService:
         email: str = "",
         company: str = "",
         fields: dict[str, str] | None = None,
+        name_custom: bool = False,
     ) -> str:
         customer_id = new_id()
         self.db.execute(
-            "INSERT INTO crm_customers (id, owner_id, display_name, phone, email, company, "
-            "fields, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO crm_customers (id, owner_id, display_name, name_custom, phone, email, "
+            "company, fields, created_by, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 customer_id,
                 owner_id,
                 name,
+                1 if name_custom else 0,
                 phone,
                 email,
                 company,
@@ -635,10 +650,25 @@ class CrmService:
         )
         return {row["chat_id"]: row["assigned_to"] for row in rows if row["assigned_to"]}
 
+    def custom_names(self, owner_id: str) -> dict[str, str]:
+        """Names the team gave LINE contacts, by LINE user id (system lookup).
+
+        LINE accounts list chats with the names LINE gives them; these replace them.
+        """
+        rows = self.db.query(
+            "SELECT i.external_id, c.display_name FROM crm_identities i "
+            "JOIN crm_customers c ON c.id = i.customer_id "
+            "WHERE i.owner_id = ? AND i.channel = 'line' AND c.name_custom = 1 "
+            "AND c.display_name <> ''",
+            (owner_id,),
+        )
+        return {str(row["external_id"]): str(row["display_name"]) for row in rows}
+
     def account_chats(self, account_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
-        """Chats of one Telegram account, newest first (its inbox lives here)."""
+        """Chats of one Telegram or LINE OA account, newest first (its inbox lives here)."""
         return self.db.query(
-            "SELECT v.*, c.display_name, c.picture AS customer_picture, i.name AS identity_name, "
+            "SELECT v.*, c.display_name, c.name_custom, c.picture AS customer_picture, "
+            f"{OWN_NAME_SQL} AS identity_name, "
             "i.username AS identity_username, i.picture AS identity_picture "
             "FROM crm_conversations v JOIN crm_customers c ON c.id = v.customer_id "
             "LEFT JOIN crm_identities i ON i.customer_id = v.customer_id "
@@ -666,9 +696,10 @@ class CrmService:
         return self.db.query(
             "SELECT v.id, v.account_id, v.chat_id, v.channel, v.status, v.assigned_to, v.unread, "
             "v.last_message_at, v.last_inbound_at, v.last_outbound_at, v.last_preview, "
-            "v.customer_id, c.display_name, "
+            "v.customer_id, c.display_name, c.name_custom, "
             "(SELECT i.username FROM crm_identities i WHERE i.customer_id = v.customer_id "
-            "AND i.username <> '' LIMIT 1) AS username "
+            "AND i.username <> '' LIMIT 1) AS username, "
+            f"{OWN_NAME_SQL} AS identity_name "
             "FROM crm_conversations v JOIN crm_customers c ON c.id = v.customer_id "
             f"WHERE v.account_id IN ({_placeholders(account_ids)}) "
             "ORDER BY v.last_message_at DESC LIMIT ?",
@@ -928,6 +959,7 @@ class CrmService:
                 email=values.get("email", ""),
                 company=values.get("company", ""),
                 fields=values.get("fields"),
+                name_custom=True,
             )
             self._event(owner_id, "created", customer_id=customer_id, actor_id=_user_id(user))
         return self.customer_detail(user, customer_id)
@@ -935,23 +967,59 @@ class CrmService:
     def update_customer(self, user: dict[str, Any] | None, body: dict[str, Any]) -> dict[str, Any]:
         owner_id, scope = self._require(user, "crm")
         row = self._customer_row(owner_id, scope, str(body.get("id") or ""))
+        values = _customer_values(body, require_name=False)
+        if "display_name" in values:
+            values.update(self._name_values(row["id"], values["display_name"]))
         changed: dict[str, Any] = {}
-        for key, value in _customer_values(body, require_name=False).items():
+        for key, value in values.items():
             stored_value = _dumps(value) if key == "fields" else value
             if stored_value != row[key]:
                 changed[key] = stored_value
         if changed:
+            actor = _user_id(user)
+            details = sorted(set(changed) - {"display_name", "name_custom"})
             with self.db.transaction():
                 self._update_row("crm_customers", row["id"], {**changed, "updated_at": now_ms()})
                 self._refresh_search(row["id"])
-                self._event(
-                    owner_id,
-                    "updated",
-                    customer_id=row["id"],
-                    actor_id=_user_id(user),
-                    data={"fields": sorted(changed)},
-                )
+                if "display_name" in changed:
+                    self._event(
+                        owner_id,
+                        "renamed",
+                        customer_id=row["id"],
+                        actor_id=actor,
+                        data={"from": row["display_name"], "to": changed["display_name"],
+                              "own": not _int(values["name_custom"])},
+                    )
+                if details:
+                    self._event(owner_id, "updated", customer_id=row["id"], actor_id=actor,
+                                data={"fields": details})
+            if "display_name" in changed:
+                # Chat lists and the all-channels inbox show the name.
+                self.ctx.crm_changed(self._customer_account_ids(row["id"]))
         return self.customer_detail(user, row["id"])
+
+    def _name_values(self, customer_id: str, name: str) -> dict[str, Any]:
+        """A name the team types stays; an empty one goes back to the person's own name."""
+        own = [
+            str(row["name"])
+            for row in self.db.query(
+                "SELECT name FROM crm_identities WHERE customer_id = ? AND name <> '' "
+                "ORDER BY created_at",
+                (customer_id,),
+            )
+        ]
+        if not name or name in own:
+            return {"display_name": name or (own[0] if own else ""), "name_custom": 0}
+        return {"display_name": name, "name_custom": 1}
+
+    def _customer_account_ids(self, customer_id: str) -> list[str]:
+        return [
+            str(row["account_id"])
+            for row in self.db.query(
+                "SELECT DISTINCT account_id FROM crm_conversations WHERE customer_id = ?",
+                (customer_id,),
+            )
+        ]
 
     def delete_customer(self, user: dict[str, Any] | None, customer_id: str) -> dict[str, Any]:
         owner_id, scope = self._require(user, "manage_crm")
@@ -994,6 +1062,8 @@ class CrmService:
                 for key in ("display_name", "phone", "email", "company", "picture"):
                     if not (fill.get(key) or target[key]) and source[key]:
                         fill[key] = source[key]
+                        if key == "display_name":
+                            fill["name_custom"] = _int(source["name_custom"])
                 for key, value in _loads(source["fields"]).items():
                     fields.setdefault(key, value)
                 for key in ("last_inbound_at", "last_outbound_at"):
@@ -1324,7 +1394,8 @@ class CrmService:
         account = self._account(owner_id, scope, account_id)
         rows = self.db.query(
             "SELECT v.id, v.chat_id, v.customer_id, v.status, v.assigned_to, v.unread, "
-            "c.display_name FROM crm_conversations v JOIN crm_customers c ON c.id = v.customer_id "
+            "c.display_name, c.name_custom FROM crm_conversations v "
+            "JOIN crm_customers c ON c.id = v.customer_id "
             "WHERE v.account_id = ? AND v.owner_id = ?",
             (account["id"], owner_id),
         )
@@ -1347,6 +1418,7 @@ class CrmService:
                     "conversationId": row["id"],
                     "customerId": row["customer_id"],
                     "customerName": row["display_name"],
+                    "nameCustom": bool(_int(row["name_custom"])),
                     "status": row["status"],
                     "assignedTo": row["assigned_to"],
                     "tags": tags.get(row["customer_id"], []),
@@ -2121,6 +2193,8 @@ def _public_customer(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"],
         "displayName": row["display_name"],
+        # The team named this customer; their own names stay on the identities.
+        "nameCustom": bool(_int(row.get("name_custom"))),
         "phone": row["phone"],
         "email": row["email"],
         "company": row["company"],

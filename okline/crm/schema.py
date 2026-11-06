@@ -191,4 +191,16 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
             )""",
         ],
     ),
+    (
+        2,
+        [
+            # 1 when the team gave the customer a name of its own. Otherwise the
+            # name is what the person calls themselves on LINE or Telegram.
+            "ALTER TABLE crm_customers ADD COLUMN name_custom INTEGER NOT NULL DEFAULT 0",
+            # A name that matches none of the person's channel names was typed by staff.
+            "UPDATE crm_customers SET name_custom = 1 WHERE display_name <> '' AND NOT EXISTS "
+            "(SELECT 1 FROM crm_identities i WHERE i.customer_id = crm_customers.id "
+            "AND i.name = crm_customers.display_name)",
+        ],
+    ),
 ]
