@@ -18170,18 +18170,25 @@ class WebAuth:
             self._save()
             return token
 
-    def secure_with_password(self, username: str, password: str) -> None:
+    def secure_with_password(
+        self, user: dict[str, Any] | None, username: str, password: str
+    ) -> None:
         """Graduate out of simple mode: give the local user a real
-        username/password so future visitors must sign in."""
-        username = self._normalize_email(username)
-        self._validate_password(password)
+        username/password so future visitors must sign in.
+
+        Only that auto-provisioned local user may do this, and only for itself:
+        otherwise any signed-in account could rewrite another account's sign-in.
+        """
         with self.lock:
-            users = self.data.get("users", [])
-            target = next((u for u in users if u.get("simple")), None) or (
-                users[0] if users else None
-            )
-            if target is None:
-                raise WebError(HTTPStatus.BAD_REQUEST, "No user to secure.")
+            target = self._find_user(str((user or {}).get("id") or ""))
+            if target is None or not target.get("simple"):
+                raise WebError(
+                    HTTPStatus.FORBIDDEN,
+                    "Only the local user of a new install can set its password here.",
+                    "forbidden",
+                )
+            username = self._normalize_email(username)
+            self._validate_password(password)
             other = self._find_user_by_username(username)
             if other and other.get("id") != target.get("id"):
                 raise WebError(HTTPStatus.CONFLICT, "Username already exists.")
@@ -28406,6 +28413,7 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             self.state.web_auth.require_permission(user, "change_password")
             body = self._read_json()
             self.state.web_auth.secure_with_password(
+                user,
                 str(body.get("email") or body.get("username") or ""),
                 str(body.get("password") or ""),
             )

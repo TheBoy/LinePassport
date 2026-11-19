@@ -252,6 +252,16 @@ All notable changes to OkLine are documented here. The format follows
   redesign, desktop had no account picker on that screen. It now lists the
   accounts (and All chats), and each browser reopens the account it used last.
 
+### Security
+- **Any signed-in account could take over the first account.**
+  `POST /api/auth/secure` exists so the local user of a new install can set
+  its first email and password. It accepted any signed-in account, including
+  one registered a minute earlier, and once no local user was left it
+  rewrote the first stored account instead: its email, password, role (to
+  admin) and active flag. That locked the owner out, or demoted a God
+  account. Only the local user can now use it, and only for itself (403
+  otherwise).
+
 ## [2.8.0] - 2026-07-08
 
 ### Added

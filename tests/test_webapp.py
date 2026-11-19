@@ -2926,13 +2926,37 @@ def test_ensure_simple_mode_provisions_hidden_admin(tmp_path):
 
 def test_secure_with_password_leaves_simple_mode(tmp_path):
     auth = WebAuth(str(tmp_path / "auth.json"))
-    auth.ensure_simple_mode()
+    token = auth.ensure_simple_mode()
+    local = auth.current_user(WebAuth.cookie_header(token))
 
-    auth.secure_with_password("owner@example.com", "owner-pass")
+    auth.secure_with_password(local, "owner@example.com", "owner-pass")
 
     assert auth.simple_mode() is False
     new_token = auth.login("owner@example.com", "owner-pass")
     assert auth.is_authenticated(WebAuth.cookie_header(new_token)) is True
+    # Done once: the secured account cannot run it again.
+    secured = auth._find_user(local["id"])
+    with pytest.raises(WebError) as again:
+        auth.secure_with_password(secured, "other@example.com", "other-pass")
+    assert again.value.status == HTTPStatus.FORBIDDEN
+
+
+def test_only_the_local_user_can_secure_itself(tmp_path):
+    # Any other account used to rewrite the first stored account's sign-in.
+    auth = WebAuth(str(tmp_path / "auth.json"))
+    auth.setup("owner@example.com", "owner-pass")
+    auth.ensure_god("god", "god-password")
+    auth.register("member@example.com", "member-pass")
+    before = [(u["id"], u.get("email"), u.get("role")) for u in auth.data["users"]]
+    for user in list(auth.data["users"]):
+        with pytest.raises(WebError) as refused:
+            auth.secure_with_password(user, "taken@example.com", "taken-pass")
+        assert (refused.value.status, refused.value.code) == (HTTPStatus.FORBIDDEN, "forbidden")
+    with pytest.raises(WebError):
+        auth.secure_with_password(None, "taken@example.com", "taken-pass")
+    assert [(u["id"], u.get("email"), u.get("role")) for u in auth.data["users"]] == before
+    assert auth.login("owner@example.com", "owner-pass")
+    assert auth.sign_in("god", "god-password")[1] is True
 
 
 def test_create_user_leaves_simple_mode(tmp_path):
@@ -3146,6 +3170,33 @@ def test_register_route_creates_member_and_sets_cookie(live_server):
     status = newcomer.get(f"{live_server}/api/auth/status", timeout=5).json()
     assert status["authenticated"] is True
     assert status["user"]["username"] == "newviewer@example.com"
+
+    # A newcomer cannot use the first-run route to take over the owner's account.
+    takeover = newcomer.post(
+        f"{live_server}/api/auth/secure",
+        json={"email": "taken@example.com", "password": "taken-pass"},
+        timeout=5,
+    )
+    assert (takeover.status_code, takeover.json()["code"]) == (403, "forbidden")
+    owner = requests.post(
+        f"{live_server}/api/auth/login",
+        json={"email": "owner@example.com", "password": "owner-pass"},
+        timeout=5,
+    )
+    assert owner.status_code == 200 and owner.json()["user"]["role"] == "admin"
+    taken = requests.post(
+        f"{live_server}/api/auth/login",
+        json={"email": "taken@example.com", "password": "taken-pass"},
+        timeout=5,
+    )
+    assert taken.status_code == HTTPStatus.UNAUTHORIZED
+    # And the owner, already secured, cannot run it a second time either.
+    again = admin.post(
+        f"{live_server}/api/auth/secure",
+        json={"email": "taken@example.com", "password": "taken-pass"},
+        timeout=5,
+    )
+    assert again.status_code == HTTPStatus.FORBIDDEN
 
 
 def test_registered_member_can_add_line_but_cannot_manage_users(live_server):
