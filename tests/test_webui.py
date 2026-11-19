@@ -102,9 +102,24 @@ def test_line_oa_accounts_have_their_own_section_and_labels():
     assert 'a.channel !== "line_oa"' in INDEX_HTML
 
 
+THAI_PROXY_PAGES = (
+    "https://www.corecasys.com/fix-ip.php",
+    "https://brightdata.com/locations/th",
+    "https://oxylabs.io/location-proxy/thailand",
+    "https://litport.net/locations/asia/thailand",
+    "https://shifter.io/location/thailand",
+    "https://decodo.com/proxies/list/thailand",
+)
+
+
 def test_proxy_fields_say_where_to_get_a_proxy():
-    for url in ("https://iproyal.com/", "https://oxylabs.io/", "https://dataimpulse.com/"):
-        assert f'"{url}"' in INDEX_HTML
+    # The Thailand pages of the providers the owner picked, in that order.
+    providers = _block("const PROXY_PROVIDERS = [", "];")
+    assert [providers.index(f'"{url}"') for url in THAI_PROXY_PAGES] == sorted(
+        providers.index(f'"{url}"') for url in THAI_PROXY_PAGES
+    )
+    for gone in ("https://iproyal.com/", "https://dataimpulse.com/"):
+        assert gone not in INDEX_HTML
     assert 'link.rel = "noopener noreferrer";' in _block("function proxyProvidersHint", "function applyI18n")
     # Every place that takes a proxy shows it: the add-account wizard and the shared form.
     assert "renderLoginProxyProviders();" in _block("function applyI18n", "function setLang")

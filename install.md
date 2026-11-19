@@ -317,8 +317,13 @@ docker rm -f linepassport
 - **ตั้งที่ไหน:** ตอนเพิ่มบัญชี LINE (ขั้นที่ 1 → ติ๊ก "เชื่อมต่อผ่านพร็อกซี") หรือภายหลังที่
   ตั้งค่า → จัดการบัญชี → แก้ไข บัญชีนั้น รองรับ HTTP, HTTPS, SOCKS5 และ SOCKS5H
   ใช้เฉพาะบัญชีนั้น และรหัสผ่านของพร็อกซีถูกเก็บแบบเข้ารหัส
-- **หาได้จากไหน:** ซื้อได้จากผู้ให้บริการพร็อกซี เช่น [IPRoyal](https://iproyal.com/),
-  [Oxylabs](https://oxylabs.io/), [DataImpulse](https://dataimpulse.com/)
+- **หาได้จากไหน:** พร็อกซี IP ประเทศไทยจากผู้ให้บริการ เช่น
+  [CORECASYS](https://www.corecasys.com/fix-ip.php),
+  [Bright Data](https://brightdata.com/locations/th),
+  [Oxylabs](https://oxylabs.io/location-proxy/thailand),
+  [Litport](https://litport.net/locations/asia/thailand),
+  [Shifter](https://shifter.io/location/thailand),
+  [Decodo](https://decodo.com/proxies/list/thailand)
   (เป็นแค่ตัวอย่าง ไม่ได้รับรอง)
 - **ควรเลือกแบบไหน:** Residential หรือ ISP ที่เป็น IP ประเทศไทย และใช้ IP เดิมตลอด
   (static หรือ sticky session) ถ้า IP เปลี่ยนบ่อยหรืออยู่ต่างประเทศ LINE อาจให้ออกจากระบบ

@@ -6493,7 +6493,7 @@ INDEX_HTML = r"""<!doctype html>
       "proxy.required_by_admin": {th: "ผู้ดูแลระบบกำหนดให้บัญชีประเภทนี้ต้องใช้พร็อกซี", en: "The system admin requires a proxy for this kind of account."},
       "proxy.missing_required": {th: "ต้องตั้งพร็อกซี (ผู้ดูแลระบบกำหนด)", en: "Needs a proxy (required by the admin)"},
       "errors.proxy_required": {th: "ผู้ดูแลระบบกำหนดให้บัญชีประเภทนี้ต้องใช้พร็อกซี กรอกพร็อกซีก่อน (ตั้งค่า → จัดการบัญชี → แก้ไข)", en: "The system admin requires a proxy for this kind of account. Enter one first (Settings → Account Management → Edit)."},
-      "proxy.where_lead": {th: "ยังไม่มีพร็อกซี? ซื้อได้จากผู้ให้บริการพร็อกซี เช่น", en: "No proxy yet? Proxy providers include"},
+      "proxy.where_lead": {th: "ยังไม่มีพร็อกซี? ดูพร็อกซี IP ประเทศไทยได้จาก", en: "No proxy yet? Thai IP proxies are offered by"},
       "proxy.where_tips": {th: "(เป็นแค่ตัวอย่าง ไม่ได้รับรอง) เลือกแบบ Residential หรือ ISP ที่เป็น IP ประเทศไทย และใช้ IP เดิมตลอด (static หรือ sticky session) เพราะถ้า IP เปลี่ยนบ่อยหรืออยู่ต่างประเทศ LINE อาจให้ออกจากระบบหรือขอยืนยันตัวตนบ่อย จากนั้นนำ Host, Port, Username และ Password จากหน้าบัญชีของผู้ให้บริการมากรอกด้านบน (ส่วนมากให้มาในรูป host:port:username:password)", en: "(examples, not endorsements). Pick residential or ISP proxies with a Thai IP that stays the same (static, or a sticky session): when the IP keeps changing or is abroad, LINE may sign the account out or ask to verify often. Then copy the host, port, username and password from the provider's dashboard into the fields above (they usually come as host:port:username:password)."},
       "proxy.configured": {th: "เปิดใช้ พร็อกซี", en: "Proxy enabled"},
       "proxy.keep_existing": {th: "เว้นว่างเพื่อใช้ พร็อกซี เดิม", en: "Leave blank to keep the current proxy"},
@@ -7119,11 +7119,15 @@ INDEX_HTML = r"""<!doctype html>
       return s;
     }
 
-    // Where to get a proxy: a few well-known providers (examples, not endorsements).
+    // Where to get a proxy: the Thailand pages of a few providers (examples, not
+    // endorsements). A LINE account needs a Thai IP that stays the same.
     const PROXY_PROVIDERS = [
-      ["IPRoyal", "https://iproyal.com/"],
-      ["Oxylabs", "https://oxylabs.io/"],
-      ["DataImpulse", "https://dataimpulse.com/"]
+      ["CORECASYS", "https://www.corecasys.com/fix-ip.php"],
+      ["Bright Data", "https://brightdata.com/locations/th"],
+      ["Oxylabs", "https://oxylabs.io/location-proxy/thailand"],
+      ["Litport", "https://litport.net/locations/asia/thailand"],
+      ["Shifter", "https://shifter.io/location/thailand"],
+      ["Decodo", "https://decodo.com/proxies/list/thailand"]
     ];
 
     function proxyProvidersHint() {
@@ -7136,7 +7140,7 @@ INDEX_HTML = r"""<!doctype html>
         link.href = url;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
-        link.textContent = `${name} (${new URL(url).hostname})`;
+        link.textContent = `${name} (${new URL(url).hostname.replace(/^www\./, "")})`;
         box.appendChild(link);
       });
       box.appendChild(document.createTextNode(" " + t("proxy.where_tips")));

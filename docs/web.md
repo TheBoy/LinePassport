@@ -64,8 +64,13 @@ in Settings → Account Management → Edit. HTTP, HTTPS, SOCKS5 and SOCKS5H are
 supported; the proxy is used only by that account and its password is stored
 encrypted.
 
-- **Where to get one:** proxy providers such as [IPRoyal](https://iproyal.com/),
-  [Oxylabs](https://oxylabs.io/) or [DataImpulse](https://dataimpulse.com/)
+- **Where to get one:** Thai IP proxies from providers such as
+  [CORECASYS](https://www.corecasys.com/fix-ip.php),
+  [Bright Data](https://brightdata.com/locations/th),
+  [Oxylabs](https://oxylabs.io/location-proxy/thailand),
+  [Litport](https://litport.net/locations/asia/thailand),
+  [Shifter](https://shifter.io/location/thailand) or
+  [Decodo](https://decodo.com/proxies/list/thailand)
   (examples, not endorsements).
 - **What to pick:** residential or ISP proxies with an IP in the account's
   country (Thailand for Thai accounts) that stays the same: a static IP or a
