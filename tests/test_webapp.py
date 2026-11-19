@@ -18,6 +18,7 @@ from okline.exceptions import LineAuthError, LineLoginRequired
 from okline.obs import encode_message_talk_meta
 from okline.webapp import (
     GOD_HTML,
+    GOD_SIGN_IN_PATH,
     INDEX_HTML,
     OkLineWebHandler,
     OkLineWebServer,
@@ -349,10 +350,7 @@ def test_add_account_wizard_uses_line_name_and_large_pin_display():
     assert "OkLine Web" not in INDEX_HTML
     assert "OkLine God" not in GOD_HTML
     assert "LinePassport God" in GOD_HTML
-    login_form = GOD_HTML.split('<form class="login-panel" id="loginForm">', 1)[1].split(
-        "</form>", 1
-    )[0]
-    assert "brand-mark" not in login_form
+    assert "brand-mark" not in GOD_HTML
     assert 'id="accountNameInput"' not in INDEX_HTML
     assert 'id="loginPin"' not in INDEX_HTML
     assert 'class="pin-display mono" id="loginPinReview"' in INDEX_HTML
@@ -856,11 +854,17 @@ def test_god_login_and_user_management_guards(tmp_path):
     god = auth.ensure_god("god", "god-password")
     admin = next(user for user in auth.data["users"] if user.get("role") == "admin")
 
+    # A workspace sign-in refuses a God account; the shared form tells the two apart.
     with pytest.raises(WebError) as regular_login:
         auth.login("god", "god-password")
     assert regular_login.value.status == HTTPStatus.UNAUTHORIZED
+    assert auth.sign_in("admin@example.com", "admin-pass")[1] is False
+    with pytest.raises(WebError) as wrong_password:
+        auth.sign_in("god", "not-the-password")
+    assert wrong_password.value.status == HTTPStatus.UNAUTHORIZED
 
-    token = auth.login_god("god", "god-password")
+    token, is_god = auth.sign_in("god", "god-password")
+    assert is_god is True
     signed_in = auth.current_user(
         WebAuth.cookie_header(token, cookie_name=WebAuth.god_cookie_name),
         cookie_name=WebAuth.god_cookie_name,
@@ -886,30 +890,70 @@ def test_god_login_and_user_management_guards(tmp_path):
         auth.delete_user(god["id"], actor=admin)
 
 
-def test_god_portal_is_separate_and_management_only(god_live_server):
-    page = requests.get(f"{god_live_server}/god", timeout=5)
-    assert page.status_code == 200
-    assert "LinePassport God" in page.text
-    assert "/api/god/users/detail" in page.text
-    assert "/api/accounts/switch" not in page.text
+def test_god_signs_in_on_the_main_page_and_works_only_on_the_god_page(god_live_server):
+    # Signed out, the God page sends people to the main page's sign-in form, with a
+    # marker that shows the form even over a workspace session.
+    signed_out = requests.get(f"{god_live_server}/god", timeout=5, allow_redirects=False)
+    assert signed_out.status_code == HTTPStatus.FOUND
+    assert signed_out.headers["Location"] == GOD_SIGN_IN_PATH == "/?signin=god"
+    assert "LinePassport God" not in signed_out.text
 
-    regular = requests.Session()
-    denied = regular.post(
+    # A workspace user stays in the workspace and gets no way into the God page.
+    owner = requests.Session()
+    workspace = owner.post(
+        f"{god_live_server}/api/auth/login",
+        json={"email": "owner@example.com", "password": "owner-pass"},
+        timeout=5,
+    )
+    assert workspace.status_code == 200 and "portal" not in workspace.json()
+    assert WebAuth.god_cookie_name not in owner.cookies
+    assert owner.get(f"{god_live_server}/god", timeout=5, allow_redirects=False).status_code == 302
+    assert owner.get(f"{god_live_server}/api/god/users", timeout=5).status_code == 401
+
+    wrong = requests.post(
+        f"{god_live_server}/api/auth/login",
+        json={"username": "god", "password": "not-the-password"},
+        timeout=5,
+    )
+    assert wrong.status_code == HTTPStatus.UNAUTHORIZED and "Set-Cookie" not in wrong.headers
+    # Its own code, so the form says the password is wrong, not that a session ended.
+    assert wrong.json()["code"] == "invalid_credentials"
+    assert '"errors.invalid_credentials"' in INDEX_HTML
+    # A blank name never matches an account whose email is empty (this God's is).
+    blank = requests.post(
+        f"{god_live_server}/api/auth/login",
+        json={"email": "", "password": "god-password"},
+        timeout=5,
+    )
+    assert (blank.status_code, blank.json()["code"]) == (401, "invalid_credentials")
+
+    # The same form signs a God account in: its session lives in the God cookie only.
+    god = requests.Session()
+    logged_in = god.post(
         f"{god_live_server}/api/auth/login",
         json={"username": "god", "password": "god-password"},
         timeout=5,
     )
-    assert denied.status_code == HTTPStatus.UNAUTHORIZED
-
-    god = requests.Session()
-    logged_in = god.post(
-        f"{god_live_server}/api/god/login",
-        json={"username": "god", "password": "god-password"},
-        timeout=5,
-    )
     assert logged_in.status_code == 200
+    assert logged_in.json() == {"ok": True, "authenticated": True, "portal": "god"}
     assert WebAuth.god_cookie_name in god.cookies
     assert WebAuth.cookie_name not in god.cookies
+
+    page = god.get(f"{god_live_server}/god", timeout=5, allow_redirects=False)
+    assert page.status_code == 200
+    assert "LinePassport God" in page.text
+    assert "/api/god/users/detail" in page.text
+    assert "/api/accounts/switch" not in page.text
+    # The God page's own sign-in is gone; a God page opened before the update still
+    # posts there and shows this answer under its old form.
+    for client in (requests, god):
+        old_login = client.post(
+            f"{god_live_server}/api/god/login",
+            json={"username": "god", "password": "god-password"},
+            timeout=5,
+        )
+        assert (old_login.status_code, old_login.json()["code"]) == (410, "god_login_moved")
+        assert "Set-Cookie" not in old_login.headers
 
     users = god.get(f"{god_live_server}/api/god/users", timeout=5)
     assert users.status_code == 200
@@ -920,11 +964,122 @@ def test_god_portal_is_separate_and_management_only(god_live_server):
     main_api = god.get(f"{god_live_server}/api/accounts", timeout=5)
     assert main_api.status_code == HTTPStatus.UNAUTHORIZED
 
+    # The role checks, not just a missing cookie, keep the two apart: each session is
+    # refused under the other cookie's name.
+    as_god = {WebAuth.god_cookie_name: owner.cookies[WebAuth.cookie_name]}
+    crossed_page = requests.get(
+        f"{god_live_server}/god", cookies=as_god, timeout=5, allow_redirects=False
+    )
+    assert crossed_page.status_code == HTTPStatus.FOUND
+    crossed_api = requests.get(f"{god_live_server}/api/god/users", cookies=as_god, timeout=5)
+    assert (crossed_api.status_code, crossed_api.json()["code"]) == (403, "god_auth_required")
+    as_workspace = {WebAuth.cookie_name: god.cookies[WebAuth.god_cookie_name]}
+    crossed_main = requests.get(
+        f"{god_live_server}/api/accounts", cookies=as_workspace, timeout=5
+    )
+    assert (crossed_main.status_code, crossed_main.json()["code"]) == (403, "god_portal_only")
+
+    # A God signing in on a browser that holds a workspace session keeps both, as with
+    # the old God form: the workspace stays signed in next to the God page.
+    both = requests.Session()
+    both.post(
+        f"{god_live_server}/api/auth/login",
+        json={"email": "owner@example.com", "password": "owner-pass"},
+        timeout=5,
+    ).raise_for_status()
+    both.post(
+        f"{god_live_server}/api/auth/login",
+        json={"username": "god", "password": "god-password"},
+        timeout=5,
+    ).raise_for_status()
+    assert {WebAuth.cookie_name, WebAuth.god_cookie_name} <= set(both.cookies.keys())
+    assert both.get(f"{god_live_server}/api/auth/status", timeout=5).json()["authenticated"]
+    assert both.get(f"{god_live_server}/api/god/users", timeout=5).status_code == 200
+
+
+def test_god_changes_its_own_password_on_the_god_page(god_live_server):
+    god = requests.Session()
+    god.post(
+        f"{god_live_server}/api/auth/login",
+        json={"username": "god", "password": "god-password"},
+        timeout=5,
+    ).raise_for_status()
+    first_session = god.cookies[WebAuth.god_cookie_name]
+    url = f"{god_live_server}/api/god/change-password"
+
+    # Nobody else can use it: signed out, or signed in to the workspace.
+    # (No body: the gate answers before reading one, and an unread body can reset
+    # the connection on Windows.)
+    assert requests.post(url, timeout=5).status_code == HTTPStatus.UNAUTHORIZED
+    owner = requests.Session()
+    owner.post(
+        f"{god_live_server}/api/auth/login",
+        json={"email": "owner@example.com", "password": "owner-pass"},
+        timeout=5,
+    ).raise_for_status()
+    assert owner.post(url, timeout=5).status_code == HTTPStatus.UNAUTHORIZED
+
+    def change(current, new, confirm):
+        return god.post(
+            url,
+            json={"currentPassword": current, "newPassword": new, "confirmPassword": confirm},
+            timeout=5,
+        )
+
+    wrong = change("not-the-password", "new-god-password", "new-god-password")
+    assert (wrong.status_code, wrong.json()["code"]) == (401, "current_password_incorrect")
+    assert '"errors.current_password_incorrect"' in INDEX_HTML
+    mismatch = change("god-password", "new-god-password", "another-password")
+    assert (mismatch.status_code, mismatch.json()["code"]) == (400, "password_mismatch")
+    short = change("god-password", "short", "short")
+    assert (short.status_code, short.json()["code"]) == (400, "password_too_short")
+    # None of those signed the God out or changed anything.
+    assert god.get(f"{god_live_server}/api/god/users", timeout=5).status_code == 200
+
+    changed = change("god-password", "new-god-password", "new-god-password")
+    assert changed.status_code == 200
+    # This browser stays signed in on a new session; the old one no longer works.
+    assert god.cookies[WebAuth.god_cookie_name] != first_session
+    assert WebAuth.cookie_name not in god.cookies
+    assert god.get(f"{god_live_server}/api/god/users", timeout=5).status_code == 200
+    stale = requests.get(
+        f"{god_live_server}/api/god/users",
+        cookies={WebAuth.god_cookie_name: first_session},
+        timeout=5,
+    )
+    assert stale.status_code == HTTPStatus.UNAUTHORIZED
+
+    def sign_in(password):
+        return requests.post(
+            f"{god_live_server}/api/auth/login",
+            json={"username": "god", "password": password},
+            timeout=5,
+        )
+
+    assert sign_in("god-password").status_code == HTTPStatus.UNAUTHORIZED
+    assert sign_in("new-god-password").json()["portal"] == "god"
+
 
 def test_god_portal_html_has_only_user_management_actions():
-    assert 'id="loginView"' in GOD_HTML
-    assert 'id="godUsername" autocomplete="username" autofocus required' in GOD_HTML
-    assert '$("godUsername").focus({preventScroll: true})' in GOD_HTML
+    # No sign-in form of its own: the main page signs God accounts in.
+    assert 'id="loginView"' not in GOD_HTML and "godUsername" not in GOD_HTML
+    assert '"/api/god/login"' not in GOD_HTML
+    # Signed out it goes to the marked sign-in form; Log out goes to the plain main page.
+    assert f'window.location.replace("{GOD_SIGN_IN_PATH}");' in GOD_HTML
+    assert 'window.location.replace("/");' in GOD_HTML
+    # A failed first load that is not a sign-out keeps the God on the page.
+    assert "if (error && error.status === 401) return;" in GOD_HTML
+    # The main page honours the marker even over a workspace session, once.
+    assert 'new URLSearchParams(window.location.search).get("signin") === "god"' in INDEX_HTML
+    assert "(data.authenticated && !state.godSignIn)" in INDEX_HTML
+    assert 'id="authGodBack"' in INDEX_HTML and '"auth.hint_god"' in INDEX_HTML
+    assert 'if (data.portal === "god") {' in INDEX_HTML
+    assert 'window.location.assign("/god");' in INDEX_HTML
+    # The God account changes its own password here; nothing cuts a long one short.
+    assert 'id="changePasswordButton"' in GOD_HTML and 'id="passwordDialog"' in GOD_HTML
+    assert '"/api/god/change-password"' in GOD_HTML
+    dialog = GOD_HTML.split('<dialog id="passwordDialog">', 1)[1].split("</dialog>", 1)[0]
+    assert "maxlength" not in dialog
     assert 'id="userTable"' in GOD_HTML
     assert 'class="brand-mark"' not in GOD_HTML
     assert "สถานะและการจัดการ" in GOD_HTML
@@ -933,7 +1088,6 @@ def test_god_portal_html_has_only_user_management_actions():
     assert '"action-button delete-action"' in GOD_HTML
     assert 'id="editDialog"' in GOD_HTML
     assert 'id="deleteDialog"' in GOD_HTML
-    assert '"/api/god/login"' in GOD_HTML
     assert '"/api/god/users/update"' in GOD_HTML
     assert '"/api/god/users/delete"' in GOD_HTML
     assert "/api/login/start" not in GOD_HTML

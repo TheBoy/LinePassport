@@ -184,7 +184,7 @@ def test_only_the_god_page_changes_the_policy_and_pages_learn_it(live):
         "line": False, "line_oa": False}
 
     god = requests.Session()
-    god.post(f"{live}/api/god/login", json={"username": "god", "password": "god-password"},
+    god.post(f"{live}/api/auth/login", json={"username": "god", "password": "god-password"},
              timeout=5).raise_for_status()
     assert god.get(f"{live}/api/god/settings", timeout=5).json()["proxyRequired"]["line"] is False
     saved = god.post(f"{live}/api/god/settings",

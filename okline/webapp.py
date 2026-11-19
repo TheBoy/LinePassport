@@ -4332,6 +4332,9 @@ INDEX_HTML = r"""<!doctype html>
         <span class="muted" id="authSwitchText" data-i18n="auth.need_account">Need an account?</span>
         <button id="authModeToggle" class="link-button" type="button" data-i18n="auth.register">Register</button>
       </div>
+      <div class="row auth-switch hidden" id="authGodBackRow">
+        <button id="authGodBack" class="link-button" type="button" data-i18n="auth.god_back">Back to the workspace</button>
+      </div>
       <span class="muted" id="webAuthHint" data-i18n="auth.hint_checking">Checking web auth</span>
     </form>
   </section>
@@ -6376,6 +6379,8 @@ INDEX_HTML = r"""<!doctype html>
       "auth.have_account": {th: "\u0e21\u0e35\u0e1a\u0e31\u0e0d\u0e0a\u0e35\u0e41\u0e25\u0e49\u0e27?", en: "Already have an account?"},
       "auth.hint_checking": {th: "กำลังตรวจสอบ…", en: "Checking web auth"},
       "auth.hint_signin": {th: "ใช้อีเมลและรหัสผ่าน LinePassport ของคุณ", en: "Use your LinePassport email and password."},
+      "auth.hint_god": {th: "เข้าสู่ระบบด้วยบัญชี God แล้วระบบจะเปิดหน้า God ให้", en: "Sign in with a God account to open the God page."},
+      "auth.god_back": {th: "กลับไปหน้าทำงาน", en: "Back to the workspace"},
       "auth.hint_create": {th: "นี่คือรหัสผ่านใหม่สำหรับเปิด LinePassport (คนละอันกับรหัสผ่าน LINE) และกู้คืนไม่ได้ โปรดจดเก็บไว้", en: "This is a NEW LinePassport password (not your LINE password). It cannot be recovered, so keep it safe."},
       "auth.hint_register": {th: "สมัครด้วยอีเมลและเริ่มใช้งานในพื้นที่ส่วนตัว จากนั้นเพิ่ม LINE Account และตั้งค่าทุกอย่างได้เอง", en: "Register with email to get a private workspace, then add your own LINE accounts and settings."},
       "auth.email_invalid": {th: "กรอกอีเมลให้ถูกต้อง", en: "Enter a valid email address."},
@@ -6846,6 +6851,8 @@ INDEX_HTML = r"""<!doctype html>
       "common.copy": {th: "คัดลอกลิงก์", en: "Copy link"},
       "common.copied": {th: "คัดลอกแล้ว", en: "Copied"},
       "errors.auth_required": {th: "โปรดเข้าสู่ระบบอีกครั้ง", en: "Please sign in again."},
+      "errors.invalid_credentials": {th: "อีเมลหรือรหัสผ่านไม่ถูกต้อง", en: "Wrong email or password."},
+      "errors.current_password_incorrect": {th: "รหัสผ่านปัจจุบันไม่ถูกต้อง", en: "The current password is wrong."},
       "errors.forbidden": {th: "คุณไม่มีสิทธิ์ทำรายการนี้", en: "You do not have permission for this."},
       "errors.no_account": {th: "เลือกบัญชีก่อน", en: "Select an account first."},
       "errors.no_session": {th: "บัญชีนี้ยังไม่ได้เข้าสู่ระบบ LINE", en: "This account is not signed in to LINE yet."},
@@ -7402,16 +7409,18 @@ INDEX_HTML = r"""<!doctype html>
       $("webAuthButton").textContent = isSetup
         ? t("auth.create_btn")
         : isRegister ? t("auth.register") : t("auth.signin");
+      const godSignIn = Boolean(state.godSignIn) && mode === "login";
       $("webAuthHint").textContent = isSetup
         ? t("auth.hint_create")
-        : isRegister ? t("auth.hint_register") : t("auth.hint_signin");
+        : isRegister ? t("auth.hint_register") : godSignIn ? t("auth.hint_god") : t("auth.hint_signin");
       $("confirmPasswordRow").classList.toggle("hidden", !(isSetup || isRegister));
       $("registrationNameRow").classList.toggle("hidden", !isRegister);
       $("setupTokenRow").classList.toggle("hidden", !(isSetup && state.setupTokenRequired));
       $("authIdentityLabel").textContent = t("auth.email");
       $("webUsernameInput").type = "email";
       $("webUsernameInput").placeholder = "name@example.com";
-      $("authSwitchRow").classList.toggle("hidden", isSetup);
+      $("authSwitchRow").classList.toggle("hidden", isSetup || godSignIn);
+      $("authGodBackRow").classList.toggle("hidden", !(godSignIn && state.godSignInOverWorkspace));
       $("authSwitchText").textContent = isRegister ? t("auth.have_account") : t("auth.need_account");
       $("authModeToggle").textContent = isRegister ? t("auth.back_to_signin") : t("auth.register");
       $("webPasswordInput").autocomplete = isSetup || isRegister ? "new-password" : "current-password";
@@ -8384,6 +8393,14 @@ INDEX_HTML = r"""<!doctype html>
           setupToken: mode === "setup" ? $("setupTokenInput").value : "",
           displayName: mode === "register" ? $("registrationNameInput").value.trim() : ""
         });
+        if (data.portal === "god") {
+          // A God account signs in here and works on the God page.
+          $("webPasswordInput").value = "";
+          window.location.assign("/god");
+          return;
+        }
+        state.godSignIn = false;
+        state.godSignInOverWorkspace = false;
         state.webAuthConfigured = data.configured;
         state.authMode = "login";
         state.simpleMode = false;
@@ -8428,7 +8445,10 @@ INDEX_HTML = r"""<!doctype html>
       state.currentUser = data.user || null;
       state.roles = data.roles || {};
       document.body.classList.toggle("simple-mode", state.simpleMode);
-      if (state.simpleMode || data.authenticated) {
+      // Coming from /god, the form shows even over a workspace session.
+      if (state.simpleMode) state.godSignIn = false;
+      state.godSignInOverWorkspace = Boolean(state.godSignIn && data.authenticated);
+      if (state.simpleMode || (data.authenticated && !state.godSignIn)) {
         showAuthPanel(false, data.configured);
         applyPermissions();
         await refreshStatus(false);
@@ -12231,6 +12251,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     $("authModeToggle").addEventListener("click", () => {
       setAuthMode(authMode() === "register" ? "login" : "register");
     });
+    $("authGodBack").addEventListener("click", () => {
+      state.godSignIn = false;
+      refreshWebAuth().catch(toastError);
+    });
     $("toastClose").addEventListener("click", hideToast);
     $("langToggle").addEventListener("click", () => setLang(state.lang === "th" ? "en" : "th"));
     $("webLogoutButton").addEventListener("click", () => webLogout().catch(toastError));
@@ -15863,6 +15887,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     setDefaultRunAt();
     syncScheduleMode();
     setAccountControls(false);
+    // /god sends people here to sign in with a God account (GOD_SIGN_IN_PATH). Read the
+    // marker once and drop it, so a reload opens the workspace again.
+    state.godSignIn = new URLSearchParams(window.location.search).get("signin") === "god";
+    if (state.godSignIn) history.replaceState(null, "", window.location.pathname + window.location.hash);
     refreshWebAuth();
     syncNotificationPermission();
   </script>
@@ -15908,6 +15936,11 @@ self.addEventListener("notificationclick", (event) => {
 });
 """
 
+# Where /god sends a browser without a God session: the main page's sign-in form,
+# shown even when the browser is signed in to a workspace. GOD_HTML and INDEX_HTML
+# spell the same address.
+GOD_SIGN_IN_PATH = "/?signin=god"
+
 GOD_HTML = r"""<!doctype html>
 <html lang="th">
 <head>
@@ -15941,20 +15974,6 @@ GOD_HTML = r"""<!doctype html>
     button { cursor: pointer; }
     button:disabled { cursor: not-allowed; opacity: .55; }
     .hidden { display: none !important; }
-    .auth-view {
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 24px;
-      background: linear-gradient(135deg, #eef7f3 0 48%, #f7f9f8 48% 100%);
-    }
-    .login-panel {
-      width: min(100%, 400px);
-      padding: 34px;
-      background: var(--surface);
-      border: 1px solid var(--line);
-      box-shadow: var(--shadow);
-    }
     h1, h2, h3, p { margin-top: 0; }
     h1 { margin-bottom: 5px; font-size: 27px; letter-spacing: 0; }
     h2 { margin-bottom: 4px; font-size: 23px; letter-spacing: 0; }
@@ -15983,7 +16002,6 @@ GOD_HTML = r"""<!doctype html>
     .primary { color: #fff; background: var(--accent); }
     .secondary { color: var(--ink); background: #fff; border-color: var(--line); }
     .danger-button { color: var(--danger); background: #fff; border-color: #efb8b2; }
-    .login-panel .primary { width: 100%; margin-top: 22px; }
     .error { min-height: 22px; margin: 12px 0 0; color: var(--danger); }
     .topbar {
       min-height: 72px;
@@ -15996,6 +16014,7 @@ GOD_HTML = r"""<!doctype html>
       border-bottom: 1px solid var(--line);
     }
     .topbar-brand { min-width: 0; }
+    .topbar-actions { display: flex; flex: 0 0 auto; gap: 8px; }
     .topbar strong { display: block; font-size: 17px; }
     .topbar small { color: var(--muted); }
     .god-nav {
@@ -16219,7 +16238,7 @@ GOD_HTML = r"""<!doctype html>
     .check-row input { width: 18px; min-height: 18px; }
     .toast { position: fixed; right: 20px; bottom: 20px; z-index: 50; max-width: 420px; padding: 13px 16px; color: #fff; background: var(--ink); box-shadow: var(--shadow); }
     @media (max-width: 960px) {
-      .topbar { padding: 0 16px; }
+      .topbar { flex-wrap: wrap; row-gap: 8px; padding: 10px 16px; }
       .god-nav { padding: 0 12px; }
       .page { padding: 20px 14px; }
       .page-head { align-items: start; flex-direction: column; }
@@ -16238,21 +16257,13 @@ GOD_HTML = r"""<!doctype html>
   </style>
 </head>
 <body>
-  <section class="auth-view" id="loginView">
-    <form class="login-panel" id="loginForm">
-      <h1>LinePassport God</h1>
-      <p class="muted">User Management</p>
-      <label class="field">God login<input id="godUsername" autocomplete="username" autofocus required></label>
-      <label class="field">รหัสผ่าน<input id="godPassword" type="password" autocomplete="current-password" required></label>
-      <button class="primary" id="loginButton" type="submit">เข้าสู่ระบบ</button>
-      <p class="error" id="loginError" role="alert"></p>
-    </form>
-  </section>
-
   <div class="hidden" id="appView">
     <header class="topbar">
       <div class="topbar-brand"><strong>LinePassport God</strong><small>System Management</small></div>
-      <button class="secondary" id="logoutButton">ออกจากระบบ</button>
+      <div class="topbar-actions">
+        <button class="secondary" id="changePasswordButton" type="button">เปลี่ยนรหัสผ่าน</button>
+        <button class="secondary" id="logoutButton">ออกจากระบบ</button>
+      </div>
     </header>
     <nav class="god-nav" role="tablist" aria-label="เมนูจัดการระบบ">
       <button class="active" type="button" role="tab" aria-selected="true" data-god-page-target="members">สมาชิก</button>
@@ -16414,6 +16425,22 @@ GOD_HTML = r"""<!doctype html>
     <div class="dialog-body"><h2>ลบสมาชิก</h2><p id="deleteMessage"></p><p class="muted">บัญชี LINE, LINE OA และ Telegram, Pattern, งานบอท, Log และค่า AI ของสมาชิกจะถูกลบทั้งหมด</p></div>
     <div class="dialog-actions"><button class="secondary" data-close="deleteDialog">ยกเลิก</button><button class="danger-button" id="confirmDeleteButton">ลบสมาชิก</button></div>
   </dialog>
+
+  <dialog id="passwordDialog">
+    <form id="passwordForm">
+      <div class="dialog-body">
+        <h2>เปลี่ยนรหัสผ่าน God</h2>
+        <p class="muted">เปลี่ยนแล้ว อุปกรณ์อื่นที่เข้าสู่ระบบด้วยบัญชีนี้จะต้องเข้าสู่ระบบใหม่</p>
+        <label class="field">รหัสผ่านปัจจุบัน<input id="godCurrentPassword" type="password" autocomplete="current-password" required></label>
+        <div class="two-col">
+          <label class="field">รหัสผ่านใหม่<input id="godNewPassword" type="password" autocomplete="new-password" minlength="8" required></label>
+          <label class="field">ยืนยันรหัสผ่านใหม่<input id="godConfirmPassword" type="password" autocomplete="new-password" minlength="8" required></label>
+        </div>
+        <p class="error" id="passwordError" role="alert"></p>
+      </div>
+      <div class="dialog-actions"><button class="secondary" type="button" data-close="passwordDialog">ยกเลิก</button><button class="primary" id="savePasswordButton" type="submit">บันทึก</button></div>
+    </form>
+  </dialog>
   <div class="toast hidden" id="toast" role="status"></div>
 
   <script>
@@ -16435,21 +16462,23 @@ GOD_HTML = r"""<!doctype html>
       const response = await fetch(path, {credentials: "same-origin", ...options, headers: {"Content-Type": "application/json", ...(options.headers || {})}});
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (response.status === 401 && path !== "/api/god/login") showLogin();
-        throw new Error(data.error || "เกิดข้อผิดพลาด");
+        // A wrong current password is a 401 too; that one stays on the page.
+        if (response.status === 401 && data.code !== "current_password_incorrect") showLogin();
+        const error = new Error(data.error || "เกิดข้อผิดพลาด");
+        error.status = response.status;
+        error.code = data.code || "";
+        throw error;
       }
       return data;
     }
 
+    // God accounts sign in on the main page's form, which brings them back here.
     function showLogin() {
-      $("loginView").classList.remove("hidden");
       $("appView").classList.add("hidden");
-      closeDetail();
-      $("godUsername").focus({preventScroll: true});
+      window.location.replace("/?signin=god");
     }
 
     function showApp() {
-      $("loginView").classList.add("hidden");
       $("appView").classList.remove("hidden");
     }
 
@@ -16952,20 +16981,39 @@ GOD_HTML = r"""<!doctype html>
       $("deleteDialog").showModal();
     }
 
-    $("loginForm").addEventListener("submit", async (event) => {
+    $("changePasswordButton").addEventListener("click", () => {
+      $("passwordForm").reset();
+      $("passwordError").textContent = "";
+      $("passwordDialog").showModal();
+    });
+
+    $("passwordForm").addEventListener("submit", async (event) => {
       event.preventDefault();
-      $("loginError").textContent = "";
-      $("loginButton").disabled = true;
+      $("passwordError").textContent = "";
+      if ($("godNewPassword").value !== $("godConfirmPassword").value) {
+        $("passwordError").textContent = "รหัสผ่านใหม่ไม่ตรงกัน";
+        return;
+      }
+      $("savePasswordButton").disabled = true;
       try {
-        await api("/api/god/login", {method: "POST", body: JSON.stringify({username: $("godUsername").value.trim(), password: $("godPassword").value})});
-        $("godPassword").value = "";
-        showApp();
-        await setGodPage(state.page || "members");
-        loadGlobalAiSettings().catch(() => {});
+        await api("/api/god/change-password", {method: "POST", body: JSON.stringify({
+          currentPassword: $("godCurrentPassword").value,
+          newPassword: $("godNewPassword").value,
+          confirmPassword: $("godConfirmPassword").value
+        })});
+        $("passwordDialog").close();
+        $("passwordForm").reset();
+        toast("เปลี่ยนรหัสผ่านแล้ว");
       } catch (error) {
-        $("loginError").textContent = error.message;
+        const reasons = {
+          current_password_incorrect: "รหัสผ่านปัจจุบันไม่ถูกต้อง",
+          password_too_short: "รหัสผ่านใหม่ต้องยาวอย่างน้อย 8 ตัวอักษร",
+          password_too_long: "รหัสผ่านใหม่ต้องไม่เกิน 128 ตัวอักษร",
+          password_mismatch: "รหัสผ่านใหม่ไม่ตรงกัน"
+        };
+        $("passwordError").textContent = reasons[error.code] || error.message;
       } finally {
-        $("loginButton").disabled = false;
+        $("savePasswordButton").disabled = false;
       }
     });
 
@@ -17023,14 +17071,29 @@ GOD_HTML = r"""<!doctype html>
       input.type = revealing ? "text" : "password";
       $("toggleOllamaKeyButton").textContent = revealing ? "ซ่อน" : "แสดง";
     });
-    $("logoutButton").addEventListener("click", async () => { await api("/api/god/logout", {method: "POST", body: "{}"}); showLogin(); });
+    $("logoutButton").addEventListener("click", async () => {
+      try {
+        await api("/api/god/logout", {method: "POST", body: "{}"});
+      } catch (error) {
+        toast("ออกจากระบบไม่สำเร็จ ลองอีกครั้ง");
+        return;
+      }
+      // Done with the God page: the main page shows the workspace, if any, or its form.
+      window.location.replace("/");
+    });
 
     api("/api/god/status").then((data) => {
       if (!data.authenticated) return showLogin();
       showApp();
       loadGlobalAiSettings().catch(() => {});
       return setGodPage(state.page || "members");
-    }).catch(showLogin);
+    }).catch((error) => {
+      // api() has already gone to the sign-in form on a 401. A network error, a 5xx
+      // during a restart or a 429 is not a sign-out: stay here and say so.
+      if (error && error.status === 401) return;
+      showApp();
+      toast("โหลดข้อมูลไม่สำเร็จ ลองโหลดหน้านี้ใหม่");
+    });
   </script>
 </body>
 </html>
@@ -18153,14 +18216,25 @@ class WebAuth:
             return token
 
     def login(self, username: str, password: str, source: str = "") -> str:
-        return self._login_for_portal(username, password, god_only=False, source=source)
+        """Sign in a workspace user; a God account is refused here."""
+        return self._sign_in(username, password, god=False)[0]
 
-    def login_god(self, username: str, password: str, source: str = "") -> str:
-        return self._login_for_portal(username, password, god_only=True, source=source)
+    def sign_in(self, username: str, password: str, source: str = "") -> tuple[str, bool]:
+        """The one sign-in form: a session, and whether it belongs to a God account.
 
-    def _login_for_portal(
-        self, username: str, password: str, *, god_only: bool, source: str = ""
-    ) -> str:
+        A God session only works on the God page (its own cookie).
+        """
+        return self._sign_in(username, password, god=None)
+
+    @staticmethod
+    def _wrong_sign_in() -> WebError:
+        # One answer for an unknown name, a wrong password and the wrong kind of
+        # account, with its own code so pages don't word it as an expired session.
+        return WebError(
+            HTTPStatus.UNAUTHORIZED, "Invalid username or password.", "invalid_credentials"
+        )
+
+    def _sign_in(self, username: str, password: str, *, god: bool | None) -> tuple[str, bool]:
         # Sign-in lockouts are intentionally disabled. Invalid credentials still
         # receive the same generic response without blocking later valid logins.
         with self.lock:
@@ -18168,12 +18242,12 @@ class WebAuth:
                 raise WebError(HTTPStatus.BAD_REQUEST, "Web auth is not configured.")
             user = self._find_user_by_username(username)
             if user is None or not self._is_active_user(user):
-                raise WebError(HTTPStatus.UNAUTHORIZED, "Invalid username or password.")
+                raise self._wrong_sign_in()
             is_god = self._is_god(user)
-            if is_god != god_only:
-                raise WebError(HTTPStatus.UNAUTHORIZED, "Invalid username or password.")
+            if god is not None and is_god != god:
+                raise self._wrong_sign_in()
             if not self._password_matches(user, password or ""):
-                raise WebError(HTTPStatus.UNAUTHORIZED, "Invalid username or password.")
+                raise self._wrong_sign_in()
             if int(user.get("passwordIterations") or self.legacy_iterations) < self.iterations:
                 salt = secrets.token_hex(16)
                 user["salt"] = salt
@@ -18182,7 +18256,7 @@ class WebAuth:
                 user["updatedAt"] = _now_iso()
             token = self.create_session(str(user["id"]))
             self._save()
-            return token
+            return token, is_god
 
     def register(
         self, username: str, password: str, display_name: str = "", source: str = ""
@@ -18636,7 +18710,11 @@ class WebAuth:
             if stored is None:
                 raise WebError(HTTPStatus.NOT_FOUND, "User not found.")
             if not self._password_matches(stored, current_password or ""):
-                raise WebError(HTTPStatus.UNAUTHORIZED, "Current password is incorrect.")
+                raise WebError(
+                    HTTPStatus.UNAUTHORIZED,
+                    "Current password is incorrect.",
+                    "current_password_incorrect",
+                )
             new_salt = secrets.token_hex(16)
             stored["salt"] = new_salt
             stored["passwordHash"] = self._hash_password(new_password, new_salt)
@@ -18835,6 +18913,9 @@ class WebAuth:
 
     def _find_user_by_username(self, username: str) -> dict[str, Any] | None:
         normalized = (username or "").strip().lower()
+        if not normalized:
+            # A blank name must not match an account whose email or username is empty.
+            return None
         for user in self.data.get("users", []):
             if not isinstance(user, dict):
                 continue
@@ -28037,6 +28118,26 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             cookie_name=cookie_name, secure=self._secure_cookies()
         )
 
+    def _change_password(
+        self, user: dict[str, Any], *, cookie_name: str | None = None
+    ) -> WebResult:
+        """Change the signed-in person's own password; their other sessions end."""
+        body = self._read_json()
+        new_password = str(body.get("newPassword") or "")
+        if new_password != str(body.get("confirmPassword") or ""):
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "New password confirmation does not match.",
+                "password_mismatch",
+            )
+        token = self.state.web_auth.change_password(
+            user, str(body.get("currentPassword") or ""), new_password
+        )
+        return WebResult(
+            {"ok": True},
+            headers=[("Set-Cookie", self._cookie_header(token, cookie_name=cookie_name))],
+        )
+
     def _require_same_origin(self) -> None:
         if str(self.headers.get("sec-fetch-site") or "").lower() == "cross-site":
             raise WebError(HTTPStatus.FORBIDDEN, "Cross-site requests are not allowed.")
@@ -28062,6 +28163,17 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             if method == "GET" and parsed.path == "/healthz":
                 return self._json({"ok": True})
             if method == "GET" and parsed.path in {"/god", "/god/"}:
+                auth = self.state.web_auth
+                god = auth.current_user(
+                    self.headers.get("cookie"), cookie_name=WebAuth.god_cookie_name
+                )
+                if not auth._is_god(god):
+                    # God accounts sign in on the main page, which sends them back here.
+                    # The marker shows its form even over a workspace session.
+                    return self._bytes(
+                        b"", "text/html; charset=utf-8", HTTPStatus.FOUND,
+                        headers=[("Location", GOD_SIGN_IN_PATH)],
+                    )
                 return self._html(GOD_HTML)
             if parsed.path == "/favicon.ico":
                 return self._bytes(b"", "image/x-icon", HTTPStatus.NO_CONTENT)
@@ -28190,24 +28302,22 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 "user": auth.public_user(user),
             }
         if method == "POST" and path == "/api/god/login":
-            body = self._read_json()
-            token = self.state.web_auth.login_god(
-                str(body.get("username") or body.get("email") or ""),
-                str(body.get("password") or ""),
-                self._request_source(),
+            # A God page opened before sign-in moved to the main page still posts here
+            # and prints this message under its old form. The body is read so that
+            # answer arrives instead of a reset connection.
+            try:
+                self._read_json()
+            except WebError:
+                pass
+            raise WebError(
+                HTTPStatus.GONE,
+                "การเข้าสู่ระบบ God ย้ายไปหน้าหลักแล้ว โปรดโหลดหน้านี้ใหม่ "
+                "(God sign-in moved to the main page. Reload this page.)",
+                "god_login_moved",
             )
-            user = self.state.web_auth.current_user(
-                WebAuth.cookie_header(token, cookie_name=WebAuth.god_cookie_name),
-                cookie_name=WebAuth.god_cookie_name,
-            )
-            return WebResult(
-                {"ok": True, "authenticated": True, "user": WebAuth.public_user(user)},
-                headers=[
-                    (
-                        "Set-Cookie",
-                        self._cookie_header(token, cookie_name=WebAuth.god_cookie_name),
-                    )
-                ],
+        if method == "POST" and path == "/api/god/change-password":
+            return self._change_password(
+                cast(dict[str, Any], self.current_user), cookie_name=WebAuth.god_cookie_name
             )
         if method == "POST" and path == "/api/god/logout":
             self.state.web_auth.logout(
@@ -28323,11 +28433,24 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             )
         if method == "POST" and path == "/api/auth/login":
             body = self._read_json()
-            token = self.state.web_auth.login(
+            token, is_god = self.state.web_auth.sign_in(
                 str(body.get("email") or body.get("username") or ""),
                 str(body.get("password") or ""),
                 self._request_source(),
             )
+            if is_god:
+                # A God account signs in on this form too and works on the God page:
+                # its session goes in the God cookie and the page moves to /god. A
+                # workspace session in this browser stays, as it did with the old form.
+                return WebResult(
+                    {"ok": True, "authenticated": True, "portal": "god"},
+                    headers=[
+                        (
+                            "Set-Cookie",
+                            self._cookie_header(token, cookie_name=WebAuth.god_cookie_name),
+                        )
+                    ],
+                )
             return WebResult(
                 {
                     "ok": True,
@@ -28361,22 +28484,8 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 headers=[("Set-Cookie", self._cookie_header(token))],
             )
         if method == "POST" and path == "/api/auth/change-password":
-            user = self.state.web_auth.require_user(self.headers.get("cookie"))
-            body = self._read_json()
-            new_password = str(body.get("newPassword") or "")
-            if new_password != str(body.get("confirmPassword") or ""):
-                raise WebError(
-                    HTTPStatus.BAD_REQUEST,
-                    "New password confirmation does not match.",
-                    "password_mismatch",
-                )
-            token = self.state.web_auth.change_password(
-                user,
-                str(body.get("currentPassword") or ""),
-                new_password,
-            )
-            return WebResult(
-                {"ok": True}, headers=[("Set-Cookie", self._cookie_header(token))]
+            return self._change_password(
+                self.state.web_auth.require_user(self.headers.get("cookie"))
             )
         if method == "POST" and path == "/api/auth/logout":
             self.state.web_auth.logout(self.headers.get("cookie"))

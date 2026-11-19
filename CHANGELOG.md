@@ -201,6 +201,19 @@ All notable changes to OkLine are documented here. The format follows
   Only known browser push services are accepted as endpoints.
 
 ### Changed
+- **The God page signs in on the main page.** `/god` no longer has a sign-in
+  form of its own: signed out, it sends you to the main page's form
+  (`/?signin=god`), which also accepts a God account and then opens the God
+  page. The form shows even when the browser is signed in to a workspace,
+  says to sign in with the God account and offers a way back to the
+  workspace; that workspace session stays signed in next to the God page.
+  God accounts stay apart from workspace accounts (their session works on
+  `/god` only, in its own cookie). `POST /api/god/login` now answers 410 with
+  a message, so a God page opened before the update says to reload. The God
+  page has a **Change password** button for the God account's own password
+  (`POST /api/god/change-password`); changing it signs that account out
+  everywhere else. A blank name no longer signs in an account whose email is
+  empty.
 - **LINE and Telegram accounts are managed apart.** Settings → Account
   Management has a LINE section (QR sign-in, proxy, reconnect by QR) and a
   Telegram section (add a bot or a personal account, new token or sign in
@@ -212,6 +225,12 @@ All notable changes to OkLine are documented here. The format follows
   alerts".
 
 ### Fixed
+- **A wrong password said "Please sign in again".** Sign-in failures and a
+  wrong current password shared the error code of an expired session. The
+  sign-in form now says the email or password is wrong
+  (`invalid_credentials`), and a wrong current password in Change Password
+  says so (`current_password_incorrect`) instead of dropping a signed-in
+  person back to the sign-in screen.
 - **All chats showed one account after time away.** Coming back opened the
   remembered account's own Chat page instead of All chats, and signing in
   again on a tab left open kept "could not load" until the page reloaded. All
