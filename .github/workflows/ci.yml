@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: that is Ubuntu 26.04, for which setup-python has no
+    # Python 3.9 build, and pyproject.toml still supports 3.9.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
