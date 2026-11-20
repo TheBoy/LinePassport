@@ -64,20 +64,29 @@ in Settings → Account Management → Edit. HTTP, HTTPS, SOCKS5 and SOCKS5H are
 supported; the proxy is used only by that account and its password is stored
 encrypted.
 
-- **Where to get one:** Thai IP proxies from providers such as
-  [CORECASYS](https://www.corecasys.com/fix-ip.php),
-  [Bright Data](https://brightdata.com/locations/th),
-  [Oxylabs](https://oxylabs.io/location-proxy/thailand),
-  [Litport](https://litport.net/locations/asia/thailand),
-  [Shifter](https://shifter.io/location/thailand) or
-  [Decodo](https://decodo.com/proxies/list/thailand)
-  (examples, not endorsements).
 - **What to pick:** residential or ISP proxies with an IP in the account's
   country (Thailand for Thai accounts) that stays the same: a static IP or a
   sticky session. When the IP keeps changing or is abroad, LINE may sign the
   account out or ask to verify often. Give each account its own IP.
 - **Filling it in:** providers usually hand out `host:port:username:password`;
   put each part in its own field.
+- **Or pick a provider:** under **Proxy source**, choose Bright Data, Oxylabs,
+  Litport, Shifter or Decodo and type the proxy username and password from the
+  provider's dashboard (Litport also takes its hub host and pool; Bright Data
+  takes the zone's IP when a Thai IP is allocated). LinePassport fills in the
+  gateway, pins Thailand and keeps one IP as long as the provider allows
+  (up to 24 hours on Oxylabs, Litport and Decodo; Shifter uses the IP you
+  placed in Thailand in its panel). On Oxylabs, Litport, Decodo and Bright
+  Data without a zone IP, each account gets its own session, so its own IP.
+  A Shifter username or a Bright Data zone IP is one fixed IP, so give each
+  account a different one. On Decodo, Oxylabs, Litport and Bright Data, a
+  username copied with targeting already in it (`-country-…`, `-session-…`,
+  `_pool-…`) is cut back to the account name; a Bright Data `-ip-…` is used as
+  the zone IP when the zone IP box is empty (a broken one is refused).
+  **Test proxy** shows the IP and country the proxy exits from (Oxylabs and
+  Bright Data are checked with the provider's own IP checker), and the account
+  then keeps the IP the test showed. **Enter it myself** keeps the host and
+  port fields as before.
 - **Requiring one:** on the God page (`/god`) → System settings → Require a
   proxy, separately for LINE and LINE OA accounts. Then "Connect through
   proxy" is ticked and locked, and no account of that kind can be added or
@@ -101,7 +110,15 @@ it; change or remove it later with Edit. Telegram accounts don't use it
   active-time window.
 - **Tools** — look up a user by LINE ID, or call any endpoint directly.
 - **AI Settings** — store a Nano Banana (Google Gemini) API key so the bot can
-  generate images from a text prompt. See below.
+  generate images from a text prompt. See below. In Settings → AI, **Refresh
+  models** lists the chat and search models your Gemini key or Ollama server
+  offers for auto reply, and adds the Gemini image models your key can use to
+  the image model list.
+- **Deleting an account** (Settings → Account Management) also deletes the
+  customers who chatted only through it, with their tags, notes, tasks and
+  history; customers who also chat through another account stay. The dialog
+  says how many customers will go before you confirm.
+- **Times** show and are picked on a 24-hour clock (14:05), in English too.
 
 ## AI images (Nano Banana)
 

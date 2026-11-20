@@ -7,6 +7,39 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Refresh models in Settings → AI.** "AI for auto reply" has a **Refresh
+  models** button next to the chat model: it asks Gemini (with the key typed
+  in the form, else the saved one) or the Ollama server (the URL in the form)
+  which models it offers, and turns the chat and search model boxes into lists
+  to pick from; "Type a name…" still takes any model. The chat model now sits
+  next to the key instead of under Advanced options. In "AI image settings",
+  the same button adds the Gemini image models that section's key can use to
+  the Google model list, and a model picked from it stays listed after a
+  reload (`POST /api/ai/models`, needs the manage-accounts permission; nothing
+  is saved until Save). An API key pasted with invisible characters (from a
+  chat or a document) is cleaned when it is used or saved, and one with
+  characters no key has is refused with a message saying so.
+- **Pick a proxy provider and type its key.** The proxy fields (adding a LINE
+  account, Edit in Settings → Account Management, adding a LINE OA) have a
+  **Proxy source** choice next to the manual host and port: Bright Data,
+  Oxylabs, Litport, Shifter or Decodo. With the proxy username and password
+  from the provider's dashboard (plus the hub and pool for Litport, and
+  optionally an allocated IP for Bright Data), the server builds the proxy
+  itself: the provider's gateway and Thailand pinned. On Oxylabs, Litport,
+  Decodo and Bright Data without a zone IP each account gets a session of its
+  own that keeps one IP as long as the product allows (24 hours on Oxylabs,
+  Litport and Decodo residential); a Shifter ISP username (placed in Thailand
+  in its panel) or a Bright Data zone IP is one fixed IP. On Decodo, Oxylabs,
+  Litport and Bright Data, targeting copied along with a username
+  (`-country-…`, `-session-…`, `_pool-…`) is cut off, and a Bright Data
+  `-ip-…` becomes the zone IP when that box is empty. Every proxy field
+  error now has Thai and English text.
+  **Test proxy** (`POST /api/proxy/test`, needs the manage-accounts
+  permission) shows which IP and country a proxy exits from, or a saved
+  account's proxy when nothing new is typed; Oxylabs and Bright Data proxies
+  are checked with the provider's own IP checker, and Start or Save keeps the
+  session, so the IP, that the test showed. The formats follow each
+  provider's documentation.
 - **Rename a customer from the customer panel.** The pencil next to the name in
   the chat's customer panel (Chat and All chats) renames them in place: Enter
   saves, Escape cancels. The new name shows in chat lists, chat titles,
@@ -44,13 +77,11 @@ All notable changes to OkLine are documented here. The format follows
   LINE OA row changes or removes it, like for a LINE account, and restarts
   the OA's stream on the new route. A saved proxy that can't be read stops
   the OA rather than falling back to a direct connection.
-- **Where to get a proxy.** Under the proxy fields of a LINE account (adding
-  it, or Edit in Settings → Account Management) LinePassport now links the
-  Thailand pages of a few providers (CORECASYS, Bright Data, Oxylabs,
-  Litport, Shifter, Decodo; examples, not endorsements) and
-  what to pick: a residential or ISP proxy with a Thai IP that stays the same,
-  entered as host, port, username and password. The web guide and install.md
-  say the same.
+- **What proxy to use.** Under the proxy fields of a LINE account (adding
+  it, or Edit in Settings → Account Management) LinePassport now says what to
+  pick: a residential or ISP proxy with a Thai IP that stays the same, entered
+  as host, port, username and password. The web guide and install.md say the
+  same. It links no proxy providers.
 - **LINE OA accounts (through LINE Official Account Manager).** Settings →
   Account Management has a LINE OA section: "+ Add a LINE OA" shows a QR code
   to scan with LINE on the phone of an account that is a member of the OA,
@@ -202,6 +233,19 @@ All notable changes to OkLine are documented here. The format follows
   Only known browser push services are accepted as endpoints.
 
 ### Changed
+- **Deleting an account deletes its customers.** Deleting a LINE, LINE OA or
+  Telegram account in Settings → Account Management now also deletes every
+  customer who chatted only through that account, with their tags, notes,
+  tasks, history and broadcast entries. A customer who also chats through
+  another account stays, with their other chats. The delete dialog says first
+  how many customers will go (`GET /api/accounts/delete-impact`), and the
+  confirmation says how many went.
+- **Times use a 24-hour clock everywhere.** Times in chat lists, customer
+  panels, logs, the KPI calendar and auto-reply history show as 14:05 in
+  English too, never 2:05 PM. Every time box (the schedule wizard, KPI
+  business hours and shifts, a CRM task's due time) is picked from hour
+  (00–23) and minute lists, the way the scheduler always did, because a
+  browser in US English shows its own time boxes with AM/PM.
 - **The God page signs in on the main page.** `/god` no longer has a sign-in
   form of its own: signed out, it sends you to the main page's form
   (`/?signin=god`), which also accepts a God account and then opens the God
@@ -226,6 +270,11 @@ All notable changes to OkLine are documented here. The format follows
   alerts".
 
 ### Fixed
+- **A URL Python cannot parse broke log scrubbing.** An upstream error
+  holding such a URL (an unbalanced IPv6 bracket, for example) made the
+  scrubber that hides secrets in log details raise an error. Such a URL now
+  keeps only its scheme and a plain host: a user name and password, the
+  query and LINE media paths stay hidden, as for any other URL.
 - **A wrong password said "Please sign in again".** Sign-in failures and a
   wrong current password shared the error code of an expired session. The
   sign-in form now says the email or password is wrong

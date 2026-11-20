@@ -728,14 +728,34 @@ class CrmService:
             (account_id, chat_id, external_id),
         )
 
-    def purge_account(self, account_id: str) -> None:
+    def account_only_customers(self, account_id: str) -> int:
+        """How many customers chat through this account and no other one.
+
+        Deleting the account deletes them (see purge_account).
+        """
+        return _int(
+            self.db.scalar(
+                "SELECT COUNT(DISTINCT v.customer_id) FROM crm_conversations v "
+                "WHERE v.account_id = ? AND NOT EXISTS (SELECT 1 FROM crm_conversations o "
+                "WHERE o.customer_id = v.customer_id AND o.account_id <> ?)",
+                (account_id, account_id),
+            )
+        )
+
+    def purge_account(self, account_id: str) -> int:
+        """Delete what the CRM keeps of a removed account; returns the customers deleted.
+
+        Its chats and their messages go, and so does every customer who chatted only
+        through this account, with their identities, tags, notes, tasks, history and
+        broadcast entries. A customer who also chats through another account stays,
+        without this account's chat.
+        """
         with self.db.transaction():
-            ids = [
-                row["id"]
-                for row in self.db.query(
-                    "SELECT id FROM crm_conversations WHERE account_id = ?", (account_id,)
-                )
-            ]
+            rows = self.db.query(
+                "SELECT id, customer_id FROM crm_conversations WHERE account_id = ?",
+                (account_id,),
+            )
+            ids = [row["id"] for row in rows]
             for chunk_start in range(0, len(ids), 200):
                 chunk = ids[chunk_start : chunk_start + 200]
                 self.db.execute(
@@ -743,11 +763,30 @@ class CrmService:
                     chunk,
                 )
             self.db.execute("DELETE FROM crm_conversations WHERE account_id = ?", (account_id,))
+            # Customers left without any chat chatted only here.
+            customers = [
+                customer_id
+                for customer_id in dict.fromkeys(str(row["customer_id"]) for row in rows)
+                if customer_id
+                and self.db.scalar(
+                    "SELECT 1 FROM crm_conversations WHERE customer_id = ? LIMIT 1",
+                    (customer_id,),
+                )
+                is None
+            ]
+            for chunk_start in range(0, len(customers), 200):
+                chunk = customers[chunk_start : chunk_start + 200]
+                marks = _placeholders(chunk)
+                for table in ("crm_identities", "crm_customer_tags", "crm_notes", "crm_tasks",
+                              "crm_events", "crm_broadcast_recipients"):
+                    self.db.execute(f"DELETE FROM {table} WHERE customer_id IN ({marks})", chunk)
+                self.db.execute(f"DELETE FROM crm_customers WHERE id IN ({marks})", chunk)
             self.db.execute(
                 "UPDATE crm_broadcasts SET status = 'cancelled', error = 'account_removed' "
                 "WHERE account_id = ? AND status IN ('queued', 'running', 'paused')",
                 (account_id,),
             )
+        return len(customers)
 
     # -- customers -----------------------------------------------------------
     def _hydrate(

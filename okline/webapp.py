@@ -25,6 +25,7 @@ import socket
 import threading
 import time
 import traceback
+import unicodedata
 import uuid
 import webbrowser
 from collections.abc import Mapping
@@ -1155,8 +1156,14 @@ INDEX_HTML = r"""<!doctype html>
     .proxy-field-grid label { display: grid; gap: 5px; min-width: 0; }
     .proxy-field-grid .proxy-wide { grid-column: 1 / -1; }
     .proxy-field-grid .muted { grid-column: 1 / -1; }
-    .proxy-providers { font-size: 12px; line-height: 1.55; }
-    .proxy-providers a { color: var(--accent-ink); font-weight: 600; }
+    .proxy-hint { font-size: 12px; line-height: 1.55; }
+    .proxy-provider-note { font-size: 12px; line-height: 1.55; }
+    .proxy-test { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; grid-column: 1 / -1; }
+    .proxy-test button { width: auto; }
+    .proxy-test-result { font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+    .proxy-test-result.ok { color: var(--accent-ink); font-weight: 600; }
+    .proxy-test-result.warn { color: #b54708; font-weight: 600; }
+    .proxy-test-result.bad { color: var(--danger); }
 
     @media (max-width: 560px) {
       .proxy-field-grid { grid-template-columns: 1fr; }
@@ -3149,6 +3156,13 @@ INDEX_HTML = r"""<!doctype html>
     .ph-preview { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .hm-pick { display: flex; align-items: center; gap: 5px; }
     .hm-pick select { width: auto; flex: 1; }
+    /* useTime24 / useDateTime24: the lists keep their own width in a row. */
+    /* Slim lists so hour, minute and second fit one row in the wizard's narrowest
+       column (171px at a 981px window); they wrap rather than overlap below that. */
+    .hm-pick.time24 { flex-wrap: wrap; gap: 5px 3px; }
+    .hm-pick.time24 select { flex: 0 0 auto; padding-left: 6px; padding-right: 6px; }
+    .hm-pick.datetime24 { flex-wrap: wrap; }
+    .hm-pick.datetime24 > input[type="date"] { width: auto; flex: 1 1 10em; }
     .pattern-list {
       display: flex;
       flex-direction: column;
@@ -6008,8 +6022,12 @@ INDEX_HTML = r"""<!doctype html>
                     </label>
                     <label>
                       <span id="aiModelLabel">Image model</span>
-                      <select id="aiModel" data-requires-permission="manage_accounts"></select>
+                      <div class="row compact">
+                        <select id="aiModel" data-requires-permission="manage_accounts" style="flex:1"></select>
+                        <button type="button" id="aiModelRefresh" data-requires-permission="manage_accounts" data-i18n="brain.refresh_models">Refresh models</button>
+                      </div>
                       <span class="muted" id="aiModelPrice" aria-live="polite"></span>
+                      <span class="muted" id="aiModelRefreshNote" role="status"></span>
                     </label>
                     <label id="aiAspectRatioRow" class="hidden">
                       <span data-i18n="ai.lbl_size">Image size</span>
@@ -6493,11 +6511,56 @@ INDEX_HTML = r"""<!doctype html>
       "proxy.required_by_admin": {th: "ผู้ดูแลระบบกำหนดให้บัญชีประเภทนี้ต้องใช้พร็อกซี", en: "The system admin requires a proxy for this kind of account."},
       "proxy.missing_required": {th: "ต้องตั้งพร็อกซี (ผู้ดูแลระบบกำหนด)", en: "Needs a proxy (required by the admin)"},
       "errors.proxy_required": {th: "ผู้ดูแลระบบกำหนดให้บัญชีประเภทนี้ต้องใช้พร็อกซี กรอกพร็อกซีก่อน (ตั้งค่า → จัดการบัญชี → แก้ไข)", en: "The system admin requires a proxy for this kind of account. Enter one first (Settings → Account Management → Edit)."},
-      "proxy.where_lead": {th: "ยังไม่มีพร็อกซี? ดูพร็อกซี IP ประเทศไทยได้จาก", en: "No proxy yet? Thai IP proxies are offered by"},
-      "proxy.where_tips": {th: "(เป็นแค่ตัวอย่าง ไม่ได้รับรอง) เลือกแบบ Residential หรือ ISP ที่เป็น IP ประเทศไทย และใช้ IP เดิมตลอด (static หรือ sticky session) เพราะถ้า IP เปลี่ยนบ่อยหรืออยู่ต่างประเทศ LINE อาจให้ออกจากระบบหรือขอยืนยันตัวตนบ่อย จากนั้นนำ Host, Port, Username และ Password จากหน้าบัญชีของผู้ให้บริการมากรอกด้านบน (ส่วนมากให้มาในรูป host:port:username:password)", en: "(examples, not endorsements). Pick residential or ISP proxies with a Thai IP that stays the same (static, or a sticky session): when the IP keeps changing or is abroad, LINE may sign the account out or ask to verify often. Then copy the host, port, username and password from the provider's dashboard into the fields above (they usually come as host:port:username:password)."},
+      "proxy.pick_tips": {th: "เลือกพร็อกซีแบบ Residential หรือ ISP ที่เป็น IP ประเทศไทย และใช้ IP เดิมตลอด (static หรือ sticky session) เพราะถ้า IP เปลี่ยนบ่อยหรืออยู่ต่างประเทศ LINE อาจให้ออกจากระบบหรือขอยืนยันตัวตนบ่อย จากนั้นนำ Host, Port, Username และ Password จากหน้าบัญชีของผู้ให้บริการมากรอกด้านบน (ส่วนมากให้มาในรูป host:port:username:password)", en: "Pick residential or ISP proxies with a Thai IP that stays the same (static, or a sticky session): when the IP keeps changing or is abroad, LINE may sign the account out or ask to verify often. Then copy the host, port, username and password from the provider's dashboard into the fields above (they usually come as host:port:username:password)."},
       "proxy.configured": {th: "เปิดใช้ พร็อกซี", en: "Proxy enabled"},
       "proxy.keep_existing": {th: "เว้นว่างเพื่อใช้ พร็อกซี เดิม", en: "Leave blank to keep the current proxy"},
       "proxy.required": {th: "กรุณากรอก พร็อกซี URL", en: "Enter a proxy URL."},
+      "proxy.source": {th: "แหล่งพร็อกซี", en: "Proxy source"},
+      "proxy.source_manual": {th: "กรอกเอง (Host / Port)", en: "Enter it myself (host and port)"},
+      "proxy.bd_user": {th: "Username ของ zone (brd-customer-…-zone-…)", en: "Zone username (brd-customer-…-zone-…)"},
+      "proxy.bd_pass": {th: "Password ของ zone", en: "Zone password"},
+      "proxy.bd_ip": {th: "IP ของ zone (ถ้าจอง IP ไทยไว้)", en: "Zone IP (if a Thai IP is allocated)"},
+      "proxy.bd_note": {th: "ดูได้ที่ Bright Data → My proxies → zone → Access details ระบบจะเลือก IP ไทยและใช้ session เดิม ถ้าเป็น zone แบบ ISP ที่จอง IP ไทยไว้ ใส่ IP นั้นเพื่อใช้ IP เดียวตลอด", en: "Find these in Bright Data → My proxies → your zone → Access details. The app picks a Thai IP and keeps its session; for an ISP zone with a Thai IP allocated, enter that IP to always use it."},
+      "proxy.oxy_user": {th: "Username ของ proxy user (Residential)", en: "Proxy user's username (Residential)"},
+      "proxy.oxy_pass": {th: "Password ของ proxy user", en: "Proxy user's password"},
+      "proxy.oxy_note": {th: "ดูได้ที่ Oxylabs Dashboard → Residential → Users ระบบจะล็อก IP ไทยและใช้ IP เดิมนานสุด 24 ชั่วโมง", en: "Find these in the Oxylabs dashboard → Residential → Users. The app pins a Thai IP and keeps it for up to 24 hours."},
+      "proxy.lp_user": {th: "Username", en: "Username"},
+      "proxy.lp_pass": {th: "Password", en: "Password"},
+      "proxy.lp_hub": {th: "Hub host", en: "Hub host"},
+      "proxy.lp_pool": {th: "Pool", en: "Pool"},
+      "proxy.lp_note": {th: "ดูได้ที่ Litport → Pay-per-GB → Configure & export (Hub host และ Port อยู่หน้าเดียวกัน) ระบบจะล็อก IP ไทยและใช้ IP เดิมนานสุด 24 ชั่วโมง", en: "Find these in Litport → Pay-per-GB → Configure & export (the hub host and port are on the same page). The app pins a Thai IP and keeps it for up to 24 hours."},
+      "proxy.sh_user": {th: "Username ของ IP ไทย", en: "Username of the Thai IP"},
+      "proxy.sh_pass": {th: "Password ของแพ็กเกจ", en: "Plan password"},
+      "proxy.sh_note": {th: "ISP Proxies: วาง IP ไว้ที่เมืองในประเทศไทยในหน้าแพ็กเกจของ Shifter ก่อน แล้วคัดลอก username ของ IP นั้นมา IP จะอยู่ในไทยตลอดแพ็กเกจ", en: "ISP proxies: in your Shifter plan, place an IP on a city in Thailand first, then copy that IP's username. It stays in Thailand for the plan."},
+      "proxy.dc_user": {th: "Username ของ proxy user (Residential)", en: "Proxy user's username (Residential)"},
+      "proxy.dc_pass": {th: "Password ของ proxy user", en: "Proxy user's password"},
+      "proxy.dc_note": {th: "ดูได้ที่ Decodo Dashboard → Residential → Authentication ระบบจะล็อก IP ไทยและใช้ IP เดิมนานสุด 24 ชั่วโมง", en: "Find these in the Decodo dashboard → Residential → Authentication. The app pins a Thai IP and keeps it for up to 24 hours."},
+      "proxy.test": {th: "ทดสอบพร็อกซี", en: "Test proxy"},
+      "proxy.testing": {th: "กำลังทดสอบ…", en: "Testing…"},
+      "proxy.test_thai": {th: "ใช้ได้: IP {ip} อยู่ที่ {place} เป็น IP ไทย", en: "Works: IP {ip} is in {place}, a Thai IP."},
+      "proxy.test_not_thai": {th: "ต่อได้ แต่ IP {ip} อยู่ที่ {place} ไม่ใช่ประเทศไทย", en: "Connects, but IP {ip} is in {place}, not Thailand."},
+      "proxy.test_thai_place": {th: "ใช้ได้: ออกที่ {place} เป็น IP ไทย", en: "Works: it exits in {place}, a Thai IP."},
+      "proxy.test_not_thai_place": {th: "ต่อได้ แต่ออกที่ {place} ไม่ใช่ประเทศไทย", en: "Connects, but it exits in {place}, not Thailand."},
+      "proxy.credentials_required": {th: "กรุณากรอก username และ password ของผู้ให้บริการ", en: "Enter the provider's proxy username and password."},
+      "proxy.hub_required": {th: "กรุณากรอก Hub host ของ Litport", en: "Enter your Litport hub host."},
+      "errors.proxy_credentials_required": {th: "กรุณากรอก username และ password ของผู้ให้บริการ", en: "Enter the provider's proxy username and password."},
+      "errors.proxy_auth_failed": {th: "พร็อกซีไม่รับ username หรือ password นี้ หรือแพ็กเกจหมดแล้ว", en: "The proxy refused this username or password, or the plan has run out."},
+      "errors.proxy_forbidden": {th: "พร็อกซีไม่ยอมให้เชื่อมต่อ (403) ตรวจว่าแพ็กเกจยังใช้ได้", en: "The proxy blocked the connection (403). Check that the plan is active."},
+      "errors.proxy_unreachable": {th: "เชื่อมต่อผ่านพร็อกซีนี้ไม่ได้", en: "Could not connect through this proxy."},
+      "errors.proxy_check_failed": {th: "ตรวจ IP ผ่านพร็อกซีไม่สำเร็จ", en: "The IP check through the proxy failed."},
+      "errors.proxy_missing": {th: "กรอกพร็อกซีก่อน", en: "Fill in the proxy first."},
+      "errors.proxy_host_invalid": {th: "Host ของพร็อกซีไม่ถูกต้อง กรอกแค่ชื่อโฮสต์ (ไม่มี http://, :พอร์ต, / หรือชื่อผู้ใช้) แล้วใส่พอร์ตในช่อง Port", en: "The proxy host is invalid. Enter only the host name (no http://, :port, / or username) and put the port in the Port box."},
+      "errors.proxy_port_invalid": {th: "พอร์ตของพร็อกซีต้องเป็นตัวเลข 1 ถึง 65535", en: "The proxy port must be a number from 1 to 65535."},
+      "errors.proxy_credentials_invalid": {th: "username หรือ password ของพร็อกซียาวเกินไป หรือมีตัวอักษรที่ใช้ไม่ได้", en: "The proxy username or password is too long or has a character that cannot be used."},
+      "errors.proxy_scheme_invalid": {th: "ประเภทพร็อกซีต้องเป็น HTTP, HTTPS, SOCKS5 หรือ SOCKS5H", en: "The proxy type must be HTTP, HTTPS, SOCKS5 or SOCKS5H."},
+      "errors.invalid_proxy_url": {th: "URL ของพร็อกซีไม่ถูกต้อง ใช้ได้เฉพาะ HTTP, HTTPS, SOCKS5 หรือ SOCKS5H และต้องไม่มี path หรือ ?", en: "The proxy URL is invalid. Use HTTP, HTTPS, SOCKS5 or SOCKS5H, with no path or query."},
+      "errors.proxy_username_invalid": {th: "กรอกแค่ username ของพร็อกซีตามที่ผู้ให้บริการแสดง (ไม่มีช่องว่าง : หรือ @)", en: "Enter only the proxy username the provider shows (no spaces, : or @)."},
+      "errors.proxy_zone_username_invalid": {th: "กรอก username ของ zone รูปแบบ brd-customer-…-zone-… จากหน้า Access details ของ zone", en: "Enter the zone username, brd-customer-…-zone-…, from the zone's Access details."},
+      "errors.proxy_zone_ip_invalid": {th: "IP ของ zone ต้องเป็น IPv4 เช่น 203.0.113.10", en: "The zone's IP must be an IPv4 address, like 203.0.113.10."},
+      "errors.proxy_pool_invalid": {th: "เลือก pool ของ Litport ที่มี IP ไทย", en: "Choose a Litport pool with Thai IPs."},
+      "errors.proxy_provider_unknown": {th: "ไม่รู้จักผู้ให้บริการพร็อกซีนี้ โหลดหน้าใหม่แล้วเลือกอีกครั้ง", en: "Unknown proxy provider. Reload the page and choose again."},
+      "errors.ai_key_invalid": {th: "API key มีตัวอักษรที่ key ไม่มี คัดลอก key มาใหม่อีกครั้ง", en: "The API key has characters an API key cannot have. Copy it again."},
+      "errors.ollama_url_invalid": {th: "URL ของ Ollama ต้องขึ้นต้นด้วย http:// หรือ https:// และไม่มีชื่อผู้ใช้ รหัสผ่าน ? หรือ #", en: "The Ollama URL must start with http:// or https:// and have no username, password, ? or #."},
       "users.title": {th: "ผู้ใช้และสิทธิ์", en: "Users & Access"},
       "users.subtitle": {th: "กำหนดบทบาทและเลือกบัญชีที่ผู้ใช้แต่ละคนเข้าถึงได้", en: "Assign roles and choose which accounts each user can access."},
       "users.create": {th: "สร้างผู้ใช้", en: "Create User"},
@@ -6891,6 +6954,11 @@ INDEX_HTML = r"""<!doctype html>
       "toast.user_deleted": {th: "ลบผู้ใช้แล้ว", en: "User deleted"},
       "toast.account_updated": {th: "อัปเดตบัญชีแล้ว", en: "Account updated"},
       "toast.account_deleted": {th: "ลบบัญชีแล้ว", en: "Account deleted"},
+      "toast.account_deleted_customers": {th: "ลบบัญชีแล้ว พร้อมลูกค้า {n} คน", en: "Account deleted, with {n} customers"},
+      "toast.account_deleted_customers_one": {th: "ลบบัญชีแล้ว พร้อมลูกค้า 1 คน", en: "Account deleted, with 1 customer"},
+      "accounts.delete_customers": {th: "ลูกค้า {n} คนที่คุยกับบัญชีนี้บัญชีเดียวจะถูกลบไปด้วย พร้อมโน้ต งาน แท็ก และประวัติ ลบแล้วกู้คืนไม่ได้ ส่วนลูกค้าที่คุยกับบัญชีอื่นด้วยยังอยู่", en: "{n} customers who chat only with this account are deleted too, with their notes, tasks, tags and history. This cannot be undone. Customers who also chat with another account stay."},
+      "accounts.delete_customers_one": {th: "ลูกค้า 1 คนที่คุยกับบัญชีนี้บัญชีเดียวจะถูกลบไปด้วย พร้อมโน้ต งาน แท็ก และประวัติ ลบแล้วกู้คืนไม่ได้ ส่วนลูกค้าที่คุยกับบัญชีอื่นด้วยยังอยู่", en: "1 customer who chats only with this account is deleted too, with their notes, tasks, tags and history. This cannot be undone. Customers who also chat with another account stay."},
+      "accounts.delete_customers_some": {th: "ลูกค้าที่คุยกับบัญชีนี้บัญชีเดียวจะถูกลบไปด้วย พร้อมโน้ต งาน แท็ก และประวัติ ลบแล้วกู้คืนไม่ได้", en: "Customers who chat only with this account are deleted too, with their notes, tasks, tags and history. This cannot be undone."},
       "toast.schedule_created": {th: "สร้างตารางเวลาแล้ว", en: "Schedule created"},
       "toast.schedule_sent": {th: "ส่งตามตารางแล้ว", en: "Schedule sent"},
       "toast.stuck_jobs_cleared": {th: "เคลียร์งานค้างแล้ว {n} งาน", en: "Cleared {n} stuck job(s)"},
@@ -7072,6 +7140,10 @@ INDEX_HTML = r"""<!doctype html>
     const $ = (id) => document.getElementById(id);
 
     Object.assign(I18N, {
+      "time.hour": {th: "ชั่วโมง", en: "Hour"},
+      "time.minute": {th: "นาที", en: "Minute"},
+      "time.second": {th: "วินาที", en: "Second"},
+      "time.date": {th: "วันที่", en: "Date"},
       "password.confirm": {th: "ยืนยันรหัสผ่านใหม่", en: "Confirm new password"},
       "patterns.category": {th: "หมวดหมู่", en: "Category"},
       "patterns.categories_title": {th: "หมวดหมู่", en: "Categories"},
@@ -7119,43 +7191,229 @@ INDEX_HTML = r"""<!doctype html>
       return s;
     }
 
-    // Where to get a proxy: the Thailand pages of a few providers (examples, not
-    // endorsements). A LINE account needs a Thai IP that stays the same.
-    const PROXY_PROVIDERS = [
-      ["CORECASYS", "https://www.corecasys.com/fix-ip.php"],
-      ["Bright Data", "https://brightdata.com/locations/th"],
-      ["Oxylabs", "https://oxylabs.io/location-proxy/thailand"],
-      ["Litport", "https://litport.net/locations/asia/thailand"],
-      ["Shifter", "https://shifter.io/location/thailand"],
-      ["Decodo", "https://decodo.com/proxies/list/thailand"]
-    ];
-
-    function proxyProvidersHint() {
+    // What proxy a LINE account needs (a Thai IP that stays the same) and how to
+    // enter it. No provider links: the owner took them out.
+    function proxyHint() {
       const box = document.createElement("div");
-      box.className = "proxy-providers muted";
-      box.appendChild(document.createTextNode(t("proxy.where_lead") + " "));
-      PROXY_PROVIDERS.forEach(([name, url], index) => {
-        if (index) box.appendChild(document.createTextNode(", "));
-        const link = document.createElement("a");
-        link.href = url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.textContent = `${name} (${new URL(url).hostname.replace(/^www\./, "")})`;
-        box.appendChild(link);
-      });
-      box.appendChild(document.createTextNode(" " + t("proxy.where_tips")));
+      box.className = "proxy-hint muted";
+      box.textContent = t("proxy.pick_tips");
       return box;
     }
 
-    function renderLoginProxyProviders() {
+    function renderLoginProxyHint() {
       const wrap = $("loginProxyFieldsWrap");
-      wrap.querySelectorAll(".proxy-providers").forEach((el) => el.remove());
-      wrap.appendChild(proxyProvidersHint());
+      wrap.querySelectorAll(".proxy-hint").forEach((el) => el.remove());
+      wrap.appendChild(proxyHint());
+      if (state.loginProxyPicker) state.loginProxyPicker.sync();
     }
+
+    // Providers the server can set up from the customer's own proxy credentials
+    // (PROXY_PROVIDERS in webapp.py): it adds the gateway, pins Thailand and keeps
+    // one IP as long as the product allows. "" is the manual host and port.
+    const PROXY_PROVIDER_FORMS = {
+      "": {user: "proxy.username", pass: "proxy.password"},
+      brightdata: {name: "Bright Data", user: "proxy.bd_user", pass: "proxy.bd_pass", ip: true, note: "proxy.bd_note"},
+      oxylabs: {name: "Oxylabs", user: "proxy.oxy_user", pass: "proxy.oxy_pass", note: "proxy.oxy_note"},
+      litport: {name: "Litport", user: "proxy.lp_user", pass: "proxy.lp_pass", hub: true, note: "proxy.lp_note"},
+      shifter: {name: "Shifter", user: "proxy.sh_user", pass: "proxy.sh_pass", note: "proxy.sh_note"},
+      decodo: {name: "Decodo", user: "proxy.dc_user", pass: "proxy.dc_pass", note: "proxy.dc_note"}
+    };
+    const LITPORT_THAI_POOLS = ["residential-kilo", "residential-lima"];
+
+    function setProxyText(element, key) {
+      element.dataset.i18n = key;
+      element.textContent = t(key);
+    }
+
+    // Adds "Proxy source" to a proxy form: the manual host and port (as before) or a
+    // provider, plus a button that shows which IP and country the proxy exits from.
+    // parts: {grid, scheme, host, port, username, password} as {label, input, text}
+    // (scheme has no text), tips (the manual advice), account() (whose saved proxy to
+    // test when nothing is typed), base() (the form's own values).
+    function attachProxyProviderPicker(parts) {
+      const sourceLabel = document.createElement("label");
+      sourceLabel.className = "proxy-wide";
+      const sourceText = textSpan(t("proxy.source"));
+      sourceText.dataset.i18n = "proxy.source";
+      const source = document.createElement("select");
+      for (const [value, form] of Object.entries(PROXY_PROVIDER_FORMS)) {
+        const option = document.createElement("option");
+        option.value = value;
+        if (value) option.textContent = form.name;
+        else setProxyText(option, "proxy.source_manual");
+        source.appendChild(option);
+      }
+      sourceLabel.append(sourceText, source);
+      parts.grid.prepend(sourceLabel);
+
+      const ip = labeledInput(t("proxy.bd_ip"), "text");
+      ip.label.firstChild.dataset.i18n = "proxy.bd_ip";
+      ip.input.autocomplete = "off";
+      ip.input.spellcheck = false;
+      ip.input.inputMode = "decimal";
+      ip.input.placeholder = "203.0.113.10";
+      const poolLabel = document.createElement("label");
+      const poolText = textSpan(t("proxy.lp_pool"));
+      poolText.dataset.i18n = "proxy.lp_pool";
+      const pool = document.createElement("select");
+      for (const value of LITPORT_THAI_POOLS) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        pool.appendChild(option);
+      }
+      poolLabel.append(poolText, pool);
+      parts.password.label.after(ip.label, poolLabel);
+
+      const note = textSpan("", "muted proxy-provider-note");
+      const test = document.createElement("div");
+      test.className = "proxy-test";
+      const testButton = document.createElement("button");
+      testButton.type = "button";
+      setProxyText(testButton, "proxy.test");
+      const result = textSpan("", "proxy-test-result");
+      result.setAttribute("role", "status");
+      test.append(testButton, result);
+      poolLabel.after(note, test);
+      // A verdict and its session belong to the values tested: any change drops
+      // both, and a test still running for older values is ignored.
+      let testRun = 0;
+      let testedSession = "";
+      const clearResult = () => {
+        testRun += 1;
+        testedSession = "";
+        result.className = "proxy-test-result";
+        result.textContent = "";
+      };
+
+      const payload = () => {
+        const provider = source.value;
+        const values = {...parts.base(), proxyProvider: provider};
+        if (provider && provider !== "litport") {
+          values.proxyScheme = "http";
+          values.proxyHost = "";
+          values.proxyPort = "";
+        }
+        if (provider === "brightdata") values.proxyProviderIp = ip.input.value.trim();
+        if (provider === "litport") values.proxyProviderPool = pool.value;
+        // The session Test proxy used, so the account keeps the IP the test showed.
+        if (provider && testedSession) values.proxyProviderSession = testedSession;
+        return values;
+      };
+
+      const sync = () => {
+        const provider = source.value;
+        const form = PROXY_PROVIDER_FORMS[provider] || PROXY_PROVIDER_FORMS[""];
+        const manual = !provider;
+        parts.scheme.label.classList.toggle("hidden", !manual);
+        parts.host.label.classList.toggle("hidden", !(manual || form.hub));
+        parts.port.label.classList.toggle("hidden", !(manual || form.hub));
+        setProxyText(parts.host.text, form.hub ? "proxy.lp_hub" : "proxy.host");
+        parts.host.input.placeholder = form.hub ? "hub-eu-1.litport.net" : "proxy.example.com";
+        parts.port.input.placeholder = form.hub ? "1337" : "8080";
+        // Litport's default port fills an empty box and goes away again when you switch.
+        if (form.hub && !parts.port.input.value) {
+          parts.port.input.value = "1337";
+          parts.port.input.dataset.autoPort = "1";
+        } else if (!form.hub && parts.port.input.dataset.autoPort && parts.port.input.value === "1337") {
+          parts.port.input.value = "";
+        }
+        if (!form.hub) delete parts.port.input.dataset.autoPort;
+        setProxyText(parts.username.text, form.user);
+        setProxyText(parts.password.text, form.pass);
+        ip.label.classList.toggle("hidden", !form.ip);
+        poolLabel.classList.toggle("hidden", !form.hub);
+        note.classList.toggle("hidden", !form.note);
+        if (form.note) setProxyText(note, form.note);
+        else delete note.dataset.i18n;
+        if (parts.tips()) parts.tips().classList.toggle("hidden", !manual);
+      };
+      source.addEventListener("change", sync);
+      parts.grid.addEventListener("input", clearResult);
+      parts.grid.addEventListener("change", clearResult);
+
+      testButton.addEventListener("click", async () => {
+        clearResult();
+        const run = testRun;
+        testButton.disabled = true;
+        result.textContent = t("proxy.testing");
+        try {
+          const data = await post("/api/proxy/test", {
+            ...payload(), proxyEnabled: true, accountId: parts.account() || ""
+          });
+          if (run !== testRun) return;
+          testedSession = data.session || "";
+          const place = [data.city, data.country].filter(Boolean).join(", ") || "?";
+          const key = data.thai ? "proxy.test_thai" : "proxy.test_not_thai";
+          result.classList.add(data.thai ? "ok" : "warn");
+          // Bright Data's checker may leave the IP out.
+          result.textContent = data.ip ? t(key, {ip: data.ip, place}) : t(key + "_place", {place});
+        } catch (err) {
+          if (run !== testRun) return;
+          result.classList.add("bad");
+          result.textContent = err.code && I18N["errors." + err.code]
+            ? t("errors." + err.code)
+            : (err.message || t("errors.proxy_check_failed"));
+        } finally {
+          testButton.disabled = false;
+        }
+      });
+      // Back to manual entry with nothing tested, for the next account.
+      const reset = () => {
+        source.value = "";
+        ip.input.value = "";
+        pool.value = LITPORT_THAI_POOLS[0];
+        clearResult();
+        sync();
+      };
+      sync();
+      return {payload, sync, reset, provider: () => source.value};
+    }
+
+    // What a switched-on proxy still lacks before it can be saved ("" when nothing),
+    // as an i18n key. With a saved proxy and nothing typed, the saved one is kept.
+    function proxyProblem(values, configured) {
+      if (!values.proxyEnabled) return "";
+      // A provider's port is filled in for you (Litport's 1337), so only a manual port counts.
+      const typed = [values.proxyHost, values.proxyProvider ? "" : values.proxyPort, values.proxyUsername,
+        values.proxyPassword, values.proxyProviderIp].some(Boolean);
+      if (configured && !typed) return "";
+      if (values.proxyProvider) {
+        if (!values.proxyUsername || !values.proxyPassword) return "proxy.credentials_required";
+        if (values.proxyProvider === "litport" && !values.proxyHost) return "proxy.hub_required";
+        return "";
+      }
+      return values.proxyHost && values.proxyPort ? "" : "proxy.host_port_required";
+    }
+
+    // The add-account wizard's proxy fields are in the page markup.
+    function wizardProxyField(id) {
+      const input = $(id);
+      const label = input.closest("label");
+      return {label, input, text: label.querySelector("span")};
+    }
+    state.loginProxyPicker = attachProxyProviderPicker({
+      grid: $("loginProxyFieldsWrap"),
+      scheme: wizardProxyField("loginProxyScheme"),
+      host: wizardProxyField("loginProxyHost"),
+      port: wizardProxyField("loginProxyPort"),
+      username: wizardProxyField("loginProxyUsername"),
+      password: wizardProxyField("loginProxyPassword"),
+      tips: () => $("loginProxyFieldsWrap").querySelector(".proxy-hint"),
+      account: () => state.reconnectAccountId || "",
+      base: () => ({
+        proxyEnabled: $("loginProxyEnabled").checked,
+        proxyScheme: $("loginProxyScheme").value,
+        proxyHost: $("loginProxyHost").value.trim(),
+        proxyPort: $("loginProxyPort").value.trim(),
+        proxyUsername: $("loginProxyUsername").value.trim(),
+        proxyPassword: $("loginProxyPassword").value
+      })
+    });
 
     function applyI18n() {
       document.documentElement.lang = state.lang;
-      renderLoginProxyProviders();
+      renderLoginProxyHint();
       document.querySelectorAll("[data-i18n]").forEach((el) => {
         el.textContent = t(el.dataset.i18n);
       });
@@ -8059,7 +8317,8 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     // The proxy checkbox and fields, for adding or editing a LINE or LINE OA account.
-    function buildProxyForm(configured, required = false) {
+    // accountId: whose saved proxy "Test proxy" checks when nothing new is typed.
+    function buildProxyForm(configured, required = false, accountId = "") {
       const row = document.createElement("label");
       row.className = "checkbox-row";
       const enabled = document.createElement("input");
@@ -8098,7 +8357,27 @@ INDEX_HTML = r"""<!doctype html>
       fields.append(schemeLabel, port.label, host.label, username.label, password.label);
       if (configured) fields.appendChild(textSpan(t("proxy.keep_existing"), "muted"));
       fields.appendChild(textSpan(t("proxy.hint"), "muted"));
-      fields.appendChild(proxyProvidersHint());
+      const tips = proxyHint();
+      fields.appendChild(tips);
+      const base = () => ({
+        proxyEnabled: enabled.checked,
+        proxyScheme: scheme.value,
+        proxyHost: host.input.value.trim(),
+        proxyPort: port.input.value.trim(),
+        proxyUsername: username.input.value.trim(),
+        proxyPassword: password.input.value
+      });
+      const picker = attachProxyProviderPicker({
+        grid: fields,
+        scheme: {label: schemeLabel},
+        host: {...host, text: host.label.firstChild},
+        port: {...port, text: port.label.firstChild},
+        username: {...username, text: username.label.firstChild},
+        password: {...password, text: password.label.firstChild},
+        tips: () => tips,
+        account: () => accountId,
+        base
+      });
       const sync = () => {
         fields.classList.toggle("hidden", !enabled.checked);
         fields.querySelectorAll("input, select").forEach((field) => {
@@ -8107,24 +8386,7 @@ INDEX_HTML = r"""<!doctype html>
       };
       enabled.addEventListener("change", sync);
       sync();
-      return {
-        row,
-        fields,
-        values: () => ({
-          proxyEnabled: enabled.checked,
-          proxyScheme: scheme.value,
-          proxyHost: host.input.value.trim(),
-          proxyPort: port.input.value.trim(),
-          proxyUsername: username.input.value.trim(),
-          proxyPassword: password.input.value
-        })
-      };
-    }
-
-    // A proxy that is switched on needs a host and port, unless the saved one is kept.
-    function proxyValuesMissing(values, configured) {
-      const typed = !!(values.proxyHost || values.proxyPort || values.proxyUsername || values.proxyPassword);
-      return values.proxyEnabled && (!configured || typed) && (!values.proxyHost || !values.proxyPort);
+      return {row, fields, values: picker.payload};
     }
 
     async function editLineAccount(account) {
@@ -8133,15 +8395,16 @@ INDEX_HTML = r"""<!doctype html>
         build: (body) => {
           const li = labeledInput(t("accounts.name"), "text");
           li.input.value = account.label || account.id;
-          const proxy = buildProxyForm(account.proxyConfigured, proxyRequiredFor(account));
+          const proxy = buildProxyForm(account.proxyConfigured, proxyRequiredFor(account), account.id);
           body.append(li.label, proxy.row, proxy.fields);
           return () => ({label: li.input.value.trim(), ...proxy.values()});
         },
         confirmKey: "common.save"
       });
       if (!res || !res.label) return;
-      if (proxyValuesMissing(res, account.proxyConfigured)) {
-        toast(t("proxy.host_port_required"), true);
+      const problem = proxyProblem(res, account.proxyConfigured);
+      if (problem) {
+        toast(t(problem), true);
         return;
       }
       await post("/api/accounts/update", {accountId: account.id, ...res});
@@ -8150,10 +8413,34 @@ INDEX_HTML = r"""<!doctype html>
       await loadAccountManagement();
     }
 
+    // The warning a delete dialog shows: how many customers go with the account
+    // (null when none would). If the count cannot be read, the warning still shows.
+    async function accountDeleteImpact(account) {
+      let text = t("accounts.delete_customers_some");
+      try {
+        const data = await api("/api/accounts/delete-impact?accountId=" + encodeURIComponent(account.id));
+        const n = Number(data.customers) || 0;
+        if (!n) return null;
+        text = t(n === 1 ? "accounts.delete_customers_one" : "accounts.delete_customers", {n});
+      } catch (_) { /* keep the general warning */ }
+      const warning = document.createElement("div");
+      warning.className = "ux-warning";
+      warning.textContent = text;
+      return warning;
+    }
+
+    function accountDeletedToast(result) {
+      const n = Number(result && result.customersDeleted) || 0;
+      const key = n === 1 ? "toast.account_deleted_customers_one" : "toast.account_deleted_customers";
+      toast(n ? t(key, {n}) : t("toast.account_deleted"));
+    }
+
     async function deleteLineAccount(account) {
+      const impact = await accountDeleteImpact(account);
       const res = await openModal({
         title: t("accounts.delete_title", {name: account.label || account.id}),
         build: (body) => {
+          if (impact) body.appendChild(impact);
           body.appendChild(textSpan(t("accounts.delete_note"), "muted"));
           const label = document.createElement("label");
           label.className = "checkbox-row";
@@ -8167,10 +8454,11 @@ INDEX_HTML = r"""<!doctype html>
         danger: true
       });
       if (!res) return;
-      if (res.logout) await post("/api/logout", {accountId: account.id});
-      else await post("/api/accounts/delete", {accountId: account.id});
+      const result = res.logout
+        ? await post("/api/logout", {accountId: account.id})
+        : await post("/api/accounts/delete", {accountId: account.id});
       if (state.activeAccountId === account.id) state.activeAccountId = null;
-      toast(t("toast.account_deleted"));
+      accountDeletedToast(result);
       await refreshStatus(false);
       await loadAccountManagement();
     }
@@ -9219,8 +9507,113 @@ INDEX_HTML = r"""<!doctype html>
       const d = new Date(Number(ms));
       if (isNaN(d.getTime())) return "";
       return d.toLocaleString(state.lang === "th" ? "th-TH" : "en-US", {
-        day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
+        day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
       });
+    }
+
+    // A browser draws <input type="time"> in its own locale, so en-US shows AM/PM.
+    // useTime24 puts hour and minute lists (00-23, 00-59; seconds too for step="1")
+    // in its place, the way the scheduler picks a time. The input stays, hidden, with
+    // its id and value: setting .value or .disabled moves the lists, and picking from
+    // them fires input and change on the input.
+    function useTime24(input) {
+      if (input.dataset.time24) return input;
+      input.dataset.time24 = "1";
+      const counts = input.step === "1" ? [24, 60, 60] : [24, 60];
+      const pick = document.createElement("span");
+      pick.className = "hm-pick time24";
+      const lists = counts.map((count, index) => {
+        const select = document.createElement("select");
+        // A title through data-i18n-title follows a language switch.
+        select.dataset.i18nTitle = ["time.hour", "time.minute", "time.second"][index];
+        select.title = t(select.dataset.i18nTitle);
+        for (let n = 0; n < count; n++) {
+          const option = document.createElement("option");
+          option.value = String(n).padStart(2, "0");
+          option.textContent = option.value;
+          select.appendChild(option);
+        }
+        if (index) pick.appendChild(textSpan(":"));
+        pick.appendChild(select);
+        return select;
+      });
+      const value = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      const disabled = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "disabled");
+      const picked = () => lists.map((list) => list.value).join(":");
+      const show = () => {
+        const parts = value.get.call(input).split(":");
+        lists.forEach((list, index) => {
+          const n = Number(parts[index]);
+          list.value = String(Number.isInteger(n) && n >= 0 && n < counts[index] ? n : 0).padStart(2, "0");
+        });
+        // An empty box shows 00:00, so it holds 00:00 too.
+        if (!value.get.call(input)) value.set.call(input, picked());
+      };
+      Object.defineProperty(input, "value", {
+        configurable: true,
+        get: () => value.get.call(input),
+        set: (next) => { value.set.call(input, next); show(); }
+      });
+      Object.defineProperty(input, "disabled", {
+        configurable: true,
+        get: () => disabled.get.call(input),
+        set: (next) => {
+          disabled.set.call(input, next);
+          lists.forEach((list) => { list.disabled = Boolean(next); });
+        }
+      });
+      for (const list of lists) {
+        list.disabled = input.disabled;
+        list.addEventListener("change", () => {
+          value.set.call(input, picked());
+          input.dispatchEvent(new Event("input", {bubbles: true}));
+          input.dispatchEvent(new Event("change", {bubbles: true}));
+        });
+      }
+      input.hidden = true;
+      // In front of the hidden input: a <label> labels its first control, so the
+      // label text still names (and clicking it focuses) the hour list.
+      input.before(pick);
+      show();
+      return input;
+    }
+
+    // The same for <input type="datetime-local">: a date box, then a 24-hour time.
+    function useDateTime24(input) {
+      if (input.dataset.time24) return input;
+      input.dataset.time24 = "1";
+      const value = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      const date = document.createElement("input");
+      date.type = "date";
+      date.dataset.i18nTitle = "time.date";
+      date.title = t("time.date");
+      const time = document.createElement("input");
+      time.type = "time";
+      const box = document.createElement("span");
+      box.className = "hm-pick datetime24";
+      box.append(date, time);
+      input.hidden = true;
+      input.before(box);
+      useTime24(time);
+      const show = () => {
+        const [day, clock] = value.get.call(input).split("T");
+        date.value = day || "";
+        time.value = (clock || "").slice(0, 5);
+      };
+      const store = () => {
+        value.set.call(input, date.value ? `${date.value}T${time.value || "00:00"}` : "");
+        input.dispatchEvent(new Event("input", {bubbles: true}));
+        input.dispatchEvent(new Event("change", {bubbles: true}));
+      };
+      Object.defineProperty(input, "value", {
+        configurable: true,
+        get: () => value.get.call(input),
+        set: (next) => { value.set.call(input, next); show(); }
+      });
+      date.addEventListener("change", store);
+      time.addEventListener("change", store);
+      show();
+      return input;
     }
 
     function chatEventLabel(m) {
@@ -9737,6 +10130,7 @@ INDEX_HTML = r"""<!doctype html>
       $("loginProxyUsername").value = "";
       $("loginProxyPassword").value = "";
       syncLoginProxyInput();
+      state.loginProxyPicker.reset();
     }
 
     function syncLoginProxyInput() {
@@ -9806,17 +10200,17 @@ INDEX_HTML = r"""<!doctype html>
 
     async function startLogin() {
       const proxyEnabled = $("loginProxyEnabled").checked;
-      const proxySettings = {
-        proxyEnabled,
-        proxyScheme: $("loginProxyScheme").value,
-        proxyHost: proxyEnabled ? $("loginProxyHost").value.trim() : "",
-        proxyPort: proxyEnabled ? $("loginProxyPort").value.trim() : "",
-        proxyUsername: proxyEnabled ? $("loginProxyUsername").value.trim() : "",
-        proxyPassword: proxyEnabled ? $("loginProxyPassword").value : ""
-      };
-      if (proxyEnabled && (!proxySettings.proxyHost || !proxySettings.proxyPort)) {
-        toast(t("proxy.host_port_required"), true);
-        $(proxySettings.proxyHost ? "loginProxyPort" : "loginProxyHost").focus();
+      // A provider choice turns into that provider's gateway, pinned to Thailand.
+      const proxySettings = proxyEnabled ? state.loginProxyPicker.payload() : {proxyEnabled: false};
+      // A reconnect with nothing typed keeps the account's saved proxy, and its IP.
+      const reconnecting = (state.accounts || []).find((account) => account.id === state.reconnectAccountId);
+      const problem = proxyProblem(proxySettings, Boolean(reconnecting && reconnecting.proxyConfigured));
+      if (problem) {
+        toast(t(problem), true);
+        const focusId = problem === "proxy.credentials_required"
+          ? (proxySettings.proxyUsername ? "loginProxyPassword" : "loginProxyUsername")
+          : (proxySettings.proxyHost ? "loginProxyPort" : "loginProxyHost");
+        $(focusId).focus();
         return;
       }
       $("beginAddAccountButton").disabled = true;
@@ -10940,7 +11334,12 @@ INDEX_HTML = r"""<!doctype html>
       $("aiModelLabel").textContent = t("ai.lbl_model");
       const sel = $("aiModel");
       sel.replaceChildren();
-      const models = (p.models && p.models.length) ? p.models : [p.defaultModel || ""];
+      const models = (p.models && p.models.length) ? [...p.models] : [p.defaultModel || ""];
+      // A model picked from Refresh models stays listed after a reload.
+      if (p.model && !models.includes(p.model)) models.push(p.model);
+      // Only Google's models can be listed from the provider.
+      $("aiModelRefresh").classList.toggle("hidden", name !== "google");
+      $("aiModelRefreshNote").textContent = "";
       for (const m of models) {
         const o = document.createElement("option");
         o.value = m;
@@ -10982,6 +11381,35 @@ INDEX_HTML = r"""<!doctype html>
       const p = (cfg.providers || {})[state.aiProvider || cfg.provider || "google"] || {};
       const price = (p.modelPrices || {})[$("aiModel").value] || "";
       $("aiModelPrice").textContent = price ? price + " · " + t("ai.price_note") : "";
+    }
+
+    // Adds the Gemini image models this key can use to the list; the choice stays.
+    async function refreshAiImageModels() {
+      const provider = state.aiProvider;
+      const button = $("aiModelRefresh");
+      const note = $("aiModelRefreshNote");
+      button.disabled = true;
+      note.textContent = t("brain.refreshing_models");
+      try {
+        // purpose "image": a saved key means this section's own Google key.
+        const data = await post("/api/ai/models", {provider: "gemini", purpose: "image", apiKey: $("aiApiKey").value.trim()});
+        if (state.aiProvider !== provider) return;
+        const select = $("aiModel");
+        const listed = new Set([...select.options].map((option) => option.value));
+        for (const name of data.imageModels || []) {
+          if (listed.has(name)) continue;
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          select.appendChild(option);
+        }
+        note.textContent = t("brain.models_loaded", {n: (data.imageModels || []).length});
+      } catch (err) {
+        if (state.aiProvider !== provider) return;
+        note.textContent = t("brain.models_failed") + " " + aiModelError(err);
+      } finally {
+        button.disabled = false;
+      }
     }
 
     async function loadAiSettings() {
@@ -11251,7 +11679,8 @@ INDEX_HTML = r"""<!doctype html>
         month: "short",
         hour: "2-digit",
         minute: "2-digit",
-        second: "2-digit"
+        second: "2-digit",
+        hourCycle: "h23"
       });
     }
 
@@ -11783,7 +12212,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         month: "short",
         year: "numeric",
         hour: "2-digit",
-        minute: "2-digit"
+        minute: "2-digit",
+        hourCycle: "h23"
       });
     }
 
@@ -12469,7 +12899,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
     $("aiClearButton").addEventListener("click", () => clearAiKey().catch(toastError));
     $("aiTestButton").addEventListener("click", () => testAiImage().catch(toastError));
     $("aiApiKeyToggle").addEventListener("click", toggleAiKeyVisibility);
+    $("aiModelRefresh").addEventListener("click", () => refreshAiImageModels().catch(toastError));
     initTimeSelects();
+    document.querySelectorAll('input[type="time"]').forEach(useTime24);
     ["scheduleRunAtDate", "scheduleRunAtH", "scheduleRunAtM", "scheduleInterval", "scheduleWindowStartH", "scheduleWindowStartM", "scheduleWindowEndH", "scheduleWindowEndM", "scheduleMaxRuns"].forEach((id) => {
       $(id).addEventListener("input", updateScheduleSummary);
     });
@@ -13555,6 +13987,65 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       return t("brain.summary_ollama", {model: data.chatModel, url: data.baseUrl});
     }
 
+    // A model box with the provider's list beside it once Refresh models has run:
+    // picking a model fills the box; "Type a name" shows the box for any other model.
+    // pickFirst fills an empty box with the first model (a chat model is required).
+    // Builds the field's <label>, which names (and a click on it focuses) whichever of
+    // the two is in use: a label would otherwise name its first control, the hidden list.
+    function aiModelChoice(input, pickFirst, labelText) {
+      aiModelChoice.count = (aiModelChoice.count || 0) + 1;
+      const select = document.createElement("select");
+      select.id = `aiModelList${aiModelChoice.count}`;
+      select.hidden = true;
+      // The list keeps a name of its own while the label names the text box.
+      select.setAttribute("aria-label", labelText);
+      input.id = `aiModelName${aiModelChoice.count}`;
+      const label = document.createElement("label");
+      label.append(textSpan(labelText), select, input);
+      // The text box while there is no list or "Type a name…" is chosen, else the list.
+      const point = () => {
+        label.htmlFor = select.hidden || select.value === "" ? input.id : select.id;
+      };
+      point();
+      select.addEventListener("change", () => {
+        const typing = select.value === "";
+        input.hidden = !typing;
+        point();
+        if (typing) input.focus();
+        else input.value = select.value;
+      });
+      const fill = (names) => {
+        let current = input.value.trim();
+        if (!current && pickFirst && names.length) current = input.value = names[0];
+        select.replaceChildren();
+        for (const name of current && !names.includes(current) ? [current, ...names] : names) {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          select.appendChild(option);
+        }
+        const other = document.createElement("option");
+        other.value = "";
+        other.textContent = t("brain.model_other");
+        select.appendChild(other);
+        select.value = current;
+        select.hidden = false;
+        input.hidden = select.value !== "";
+        point();
+      };
+      const clear = () => {
+        select.hidden = true;
+        select.replaceChildren();
+        input.hidden = false;
+        point();
+      };
+      return {label, select, fill, clear};
+    }
+
+    function aiModelError(err) {
+      return err.code && I18N["errors." + err.code] ? t("errors." + err.code) : err.message;
+    }
+
     function renderBrainForm(slot) {
       const data = state.assistantBrain || {};
       slot.replaceChildren();
@@ -13584,11 +14075,20 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const urlLabel = document.createElement("label");
       urlLabel.append(textSpan(t("brain.ollama_url")), urlInput);
       const modelInput = document.createElement("input");
-      const modelLabel = document.createElement("label");
-      modelLabel.append(textSpan(t("brain.model")), modelInput);
+      const modelChoice = aiModelChoice(modelInput, true, t("brain.model"));
+      const modelLabel = modelChoice.label;
       const embedInput = document.createElement("input");
-      const embedLabel = document.createElement("label");
-      embedLabel.append(textSpan(t("brain.embedding_model")), embedInput);
+      const embedChoice = aiModelChoice(embedInput, false, t("brain.embedding_model"));
+      const embedLabel = embedChoice.label;
+      // Refresh models: which models this Gemini key or Ollama server offers.
+      const refresh = document.createElement("button");
+      refresh.type = "button";
+      refresh.textContent = t("brain.refresh_models");
+      const refreshNote = textSpan("", "ux-muted");
+      refreshNote.setAttribute("role", "status");
+      const refreshRow = document.createElement("div");
+      refreshRow.className = "ux-row";
+      refreshRow.append(refresh, refreshNote);
       const advanced = document.createElement("details");
       advanced.className = "ux-advanced";
       const summary = document.createElement("summary");
@@ -13599,7 +14099,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const strictLabel = document.createElement("label");
       strictLabel.className = "checkbox-row";
       strictLabel.append(strict, textSpan(t("brain.strict")));
-      advanced.append(summary, modelLabel, embedLabel, strictLabel);
+      advanced.append(summary, embedLabel, strictLabel);
 
       function syncFields() {
         cards.querySelectorAll(".choice-card").forEach((card) => card.setAttribute("aria-pressed", String(card.dataset.provider === provider)));
@@ -13607,6 +14107,13 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         keyHint.hidden = provider !== "gemini";
         urlLabel.hidden = provider !== "ollama";
         advanced.hidden = provider === "global";
+        modelLabel.hidden = provider === "global";
+        refreshRow.hidden = provider === "global";
+        // A list belongs to the provider it came from.
+        modelChoice.clear();
+        embedChoice.clear();
+        refreshNote.className = "ux-muted";
+        refreshNote.textContent = "";
         const defaults = data.defaults || {};
         if (provider === "gemini") {
           modelInput.value = data.provider === "gemini" && data.source === "tenant" ? data.chatModel : defaults.geminiChatModel || "";
@@ -13628,6 +14135,27 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         card.addEventListener("click", () => { provider = value; syncFields(); });
         cards.appendChild(card);
       }
+      refresh.addEventListener("click", async () => {
+        const asked = provider;
+        refresh.disabled = true;
+        refreshNote.className = "ux-muted";
+        refreshNote.textContent = t("brain.refreshing_models");
+        try {
+          const data = await post("/api/ai/models", {
+            provider: asked, apiKey: keyInput.value.trim(), baseUrl: urlInput.value.trim()
+          });
+          if (asked !== provider) return;
+          modelChoice.fill(data.chatModels || []);
+          embedChoice.fill(data.embeddingModels || []);
+          refreshNote.textContent = t("brain.models_loaded", {n: (data.chatModels || []).length});
+        } catch (err) {
+          if (asked !== provider) return;
+          refreshNote.className = "badge bad";
+          refreshNote.textContent = t("brain.models_failed") + " " + aiModelError(err);
+        } finally {
+          refresh.disabled = false;
+        }
+      });
       const save = document.createElement("button");
       save.type = "button";
       save.className = "primary";
@@ -13659,7 +14187,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
           save.disabled = false;
         }
       });
-      fields.append(keyLabel, keyHint, urlLabel, advanced);
+      fields.append(keyLabel, keyHint, urlLabel, modelLabel, refreshRow, advanced);
       const actions = document.createElement("div");
       actions.className = "ux-row";
       actions.append(save, result);
@@ -13711,6 +14239,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         end.value = rule ? rule.end : "18:00";
         end.style.width = "auto";
         row.append(enabled, textSpan(member.name, "strong"), dayRoot, start, textSpan("–"), end);
+        useTime24(start);
+        useTime24(end);
         list.appendChild(row);
         state.kpiShiftReaders.push(() => [member.id, enabled.checked ? [{days: readDays(), start: start.value, end: end.value}] : []]);
       }
@@ -14244,7 +14774,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
           row.className = "calendar-row" + ((hourCounts.get(at.getHours()) || 0) > 3 ? " busy" : "");
           const names = event.targetNames.slice(0, 2).join(", ") + (event.targetNames.length > 2 ? ` +${event.targetNames.length - 2}` : "");
           row.append(
-            textSpan(at.toLocaleTimeString(state.lang === "th" ? "th-TH" : "en-US", {hour: "2-digit", minute: "2-digit"}), "calendar-time"),
+            textSpan(at.toLocaleTimeString(state.lang === "th" ? "th-TH" : "en-US", {hour: "2-digit", minute: "2-digit", hourCycle: "h23"}), "calendar-time"),
             textSpan(event.name || "-", "strong"),
             textSpan(names, "ux-muted")
           );
@@ -15203,6 +15733,12 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "brain.model": {th: "โมเดลสำหรับตอบ", en: "Chat model"},
       "brain.embedding_model": {th: "โมเดลสำหรับค้นข้อมูลร้าน (ไม่บังคับ)", en: "Search model (optional)"},
       "brain.advanced": {th: "ตัวเลือกขั้นสูง", en: "Advanced options"},
+      "brain.refresh_models": {th: "รีเฟรชรายชื่อโมเดล", en: "Refresh models"},
+      "brain.refreshing_models": {th: "กำลังโหลดรายชื่อโมเดล…", en: "Loading models…"},
+      "brain.models_loaded": {th: "พบ {n} โมเดล", en: "{n} models found"},
+      "brain.models_failed": {th: "โหลดรายชื่อโมเดลไม่สำเร็จ:", en: "Could not load the models:"},
+      "brain.model_other": {th: "พิมพ์ชื่อเอง…", en: "Type a name…"},
+      "errors.ai_key_required": {th: "กรอก API key ของ Gemini ก่อน", en: "Enter the Gemini API key first."},
       "brain.strict": {th: "ตอบเฉพาะจากข้อมูลร้าน (ถ้าไม่มีให้ส่งต่อให้คน)", en: "Answer only from shop info (otherwise hand over to staff)"},
       "brain.save_test": {th: "บันทึกและทดสอบ", en: "Save and test"},
       "brain.testing": {th: "กำลังทดสอบ…", en: "Testing…"},
@@ -17215,6 +17751,8 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("GET", "/api/kpi"): (30, 60.0),
     ("POST", "/api/team/create"): (10, 60.0),
     ("POST", "/api/schedules/test"): (6, 60.0),
+    ("POST", "/api/proxy/test"): (10, 60.0),
+    ("POST", "/api/ai/models"): (12, 60.0),
     **crm_routes.RATE_LIMITS,
     **telegram_routes.RATE_LIMITS,
     ("POST", "/api/lineoa/login/start"): (6, 300.0),
@@ -17316,6 +17854,32 @@ AI_AUTO_REPLY_FALLBACK = (
     "ทีมงานจะเข้ามาตอบเพิ่มเติม"
 )
 PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
+# Providers the proxy form can set up from the customer's own proxy credentials: the
+# app adds the gateway, pins Thailand and keeps one IP as long as the product allows.
+# Formats follow each provider's documentation (checked 2026-11-20).
+PROXY_PROVIDERS = ("brightdata", "oxylabs", "litport", "shifter", "decodo")
+# Litport pay-per-GB residential pools that have Thai IPs.
+LITPORT_THAI_POOLS = ("residential-kilo", "residential-lima")
+# Where a proxy test asks which IP and country the proxy exits from. Oxylabs
+# residential refuses third-party IP checkers and Bright Data may answer them from its
+# super proxy, so a proxy through their gateways asks the provider's own checker.
+PROXY_CHECK_URL = "https://ipinfo.io/json"
+PROXY_CHECK_URLS = (
+    ("oxylabs.io", "https://ip.oxylabs.io/location"),
+    ("superproxy.io", "https://brdtest.com/myip.json"),
+)
+# Targeting a pasted gateway username may already carry. The app sets these itself,
+# so only the account name before them is kept.
+DECODO_PARAMETERS = (
+    "country", "city", "state", "zip", "asn", "continent", "session", "sessionduration"
+)
+OXYLABS_PARAMETERS = (
+    "cc", "city", "st", "state", "zip", "postalcode", "asn", "continent", "sessid", "sesstime"
+)
+LITPORT_PARAMETERS = ("pool", "country", "region", "state", "city", "sid", "sttl")
+BRIGHTDATA_PARAMETERS = (
+    "country", "state", "city", "zip", "asn", "session", "ip", "os", "carrier", "dns"
+)
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
     "You are LinePassport Assistant. Answer clearly and concisely in the same "
@@ -17360,7 +17924,9 @@ def _validate_http_url_shape(url: str) -> str:
 def _validate_proxy_url(url: str) -> str:
     value = str(url or "").strip()
     if not value or len(value) > MAX_PROXY_URL_LENGTH:
-        raise WebError(HTTPStatus.BAD_REQUEST, "Proxy URL is missing or too long.")
+        raise WebError(
+            HTTPStatus.BAD_REQUEST, "Proxy URL is missing or too long.", "invalid_proxy_url"
+        )
     parsed = urlparse(value)
     if parsed.scheme.lower() not in PROXY_SCHEMES or not parsed.hostname:
         raise WebError(
@@ -17383,14 +17949,229 @@ def _validate_proxy_url(url: str) -> str:
     return value
 
 
+def _proxy_setting_error(message: str, code: str = "invalid_proxy_setting") -> WebError:
+    return WebError(HTTPStatus.BAD_REQUEST, message, code)
+
+
+def _proxy_host_value(host: str) -> str:
+    """A proxy host as it goes into the URL (IDNA, IPv6 in brackets), or a 400."""
+    if not host or len(host) > MAX_PROXY_HOST_LENGTH:
+        raise _proxy_setting_error("Proxy host is required or too long.", "proxy_host_invalid")
+    if any(char.isspace() for char in host) or any(
+        marker in host for marker in ("://", "/", "?", "#", "@")
+    ):
+        raise _proxy_setting_error(
+            "Enter only the proxy host, without protocol, path, or credentials.",
+            "proxy_host_invalid",
+        )
+    host_value = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        address = ipaddress.ip_address(host_value)
+        return f"[{address.compressed}]" if address.version == 6 else str(address)
+    except ValueError:
+        pass
+    try:
+        encoded_host = host_value.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise _proxy_setting_error("Proxy host is invalid.", "proxy_host_invalid") from exc
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9._-]{0,251}[a-z0-9])?", encoded_host):
+        # Also "host:port" pasted into the host box.
+        raise _proxy_setting_error("Proxy host is invalid.", "proxy_host_invalid")
+    return encoded_host
+
+
+def _proxy_port_value(port_raw: str) -> int:
+    message = "Proxy port must be a number from 1 to 65535."
+    try:
+        port = int(port_raw)
+    except ValueError as exc:
+        raise _proxy_setting_error(message, "proxy_port_invalid") from exc
+    if not 1 <= port <= 65535:
+        raise _proxy_setting_error(message, "proxy_port_invalid")
+    return port
+
+
+def _proxy_credentials(username: str, password: str) -> str:
+    """The percent-encoded ``user:pass@`` part of a proxy URL ("" without credentials)."""
+    if len(username) > MAX_PROXY_USERNAME_LENGTH:
+        raise _proxy_setting_error("Proxy username is too long.", "proxy_credentials_invalid")
+    if len(password) > MAX_PROXY_PASSWORD_LENGTH or "\x00" in password:
+        raise _proxy_setting_error(
+            "Proxy password is invalid or too long.", "proxy_credentials_invalid"
+        )
+    if not (username or password):
+        return ""
+    return f"{quote(username, safe='')}:{quote(password, safe='')}@"
+
+
+def _without_prefix(value: str, prefix: str) -> str:
+    return value[len(prefix):] if value.lower().startswith(prefix) else value
+
+
+def _bare_username(value: str, separator: str, parameters: tuple[str, ...]) -> str:
+    """The provider username without the targeting the app adds itself; never empty.
+
+    Cuts at the first known parameter, so a name that itself holds the separator
+    (a Litport token like ``acme_line``) stays whole.
+    """
+    pattern = re.escape(separator) + "(?:" + "|".join(parameters) + ")-"
+    base = re.split(pattern, value, maxsplit=1, flags=re.IGNORECASE)[0]
+    if not base:
+        raise _proxy_setting_error(
+            "Enter only the proxy username the provider shows.", "proxy_username_invalid"
+        )
+    return base
+
+
+def _proxy_session_id(body: Mapping[str, Any]) -> str:
+    """The sticky session a provider proxy gets: the one Test proxy used, else a new one.
+
+    Reusing the tested session keeps the IP the test showed. Lowercase letters and
+    digits are valid in every provider's username.
+    """
+    tested = str(body.get("proxyProviderSession") or "")
+    return tested if re.fullmatch(r"[0-9a-f]{10}", tested) else secrets.token_hex(5)
+
+
+def _proxy_check_url(proxy_url: str) -> str:
+    """The IP checker Test proxy asks through this proxy (see PROXY_CHECK_URLS)."""
+    host = (urlparse(proxy_url).hostname or "").lower()
+    for domain, url in PROXY_CHECK_URLS:
+        if host == domain or host.endswith("." + domain):
+            return url
+    return PROXY_CHECK_URL
+
+
+def _proxy_check_reply(data: Mapping[str, Any]) -> dict[str, str]:
+    """IP, country, city and network from ipinfo.io, ip.oxylabs.io or brdtest.com."""
+    place: Mapping[str, Any] = data
+    providers = data.get("providers")
+    if isinstance(providers, dict):
+        # ip.oxylabs.io answers once per geo database; Oxylabs targets by MaxMind.
+        place = next(
+            (
+                providers[name]
+                for name in ("maxmind", "ipinfo", "dbip", "ip2location")
+                if isinstance(providers.get(name), dict) and providers[name].get("country")
+            ),
+            {},
+        )
+    raw_geo = data.get("geo")
+    geo: Mapping[str, Any] = raw_geo if isinstance(raw_geo, dict) else {}
+    raw_asn = data.get("asn")
+    asn: Mapping[str, Any] = raw_asn if isinstance(raw_asn, dict) else {}
+    return {
+        # brdtest.com may leave the IP out.
+        "ip": str(data.get("ip") or "")[:64],
+        "country": str(place.get("country") or "").upper()[:2],
+        "city": str(place.get("city") or geo.get("city") or "")[:80],
+        "org": str(
+            place.get("org") or place.get("org_name") or asn.get("org_name") or ""
+        )[:120],
+    }
+
+
+def _provider_proxy_url(provider: str, body: Mapping[str, Any]) -> str | None:
+    """A Thai proxy URL for one of PROXY_PROVIDERS, built from the customer's credentials.
+
+    None when nothing was typed, so an edit keeps the saved proxy. On Oxylabs, Litport,
+    Decodo and Bright Data without a zone IP every build gets its own session id, so
+    accounts sharing one provider key exit from different IPs. A Shifter username or a
+    Bright Data zone IP is one fixed IP whichever account uses it.
+    """
+    if provider not in PROXY_PROVIDERS:
+        raise _proxy_setting_error("Unknown proxy provider.", "proxy_provider_unknown")
+    username = str(body.get("proxyUsername") or "").strip()
+    password = str(body.get("proxyPassword") or "")
+    # Only Litport takes a host (the customer's hub); the others have one gateway.
+    host = str(body.get("proxyHost") or "").strip() if provider == "litport" else ""
+    static_ip = str(body.get("proxyProviderIp") or "").strip() if provider == "brightdata" else ""
+    if not any((username, password, host, static_ip)):
+        return None
+    if not username or not password:
+        raise _proxy_setting_error(
+            "Enter the proxy username and password from the provider.",
+            "proxy_credentials_required",
+        )
+    if any(char.isspace() or char in ":@" for char in username):
+        raise _proxy_setting_error(
+            "Enter only the proxy username the provider shows.", "proxy_username_invalid"
+        )
+    session = _proxy_session_id(body)
+    if provider == "brightdata":
+        # The zone username from the zone's Access details: brd-customer-<id>-zone-<zone>.
+        # One copied from the code-example generator carries targeting after the zone:
+        # that is cut, and an -ip-... there is the zone IP when that box is empty (a
+        # broken one is refused below like a broken IP typed in the box).
+        zone = re.match(r"brd-customer-[A-Za-z0-9_]+-zone-[A-Za-z0-9_]+", username)
+        rest = username[zone.end():] if zone else ""
+        named_ip = re.search(r"-ip-([^-]*)", rest, re.IGNORECASE)
+        if named_ip and not static_ip:
+            static_ip = named_ip.group(1)
+            if not static_ip:
+                raise _proxy_setting_error(
+                    "The zone's IP must be an IPv4 address.", "proxy_zone_ip_invalid"
+                )
+        targeting = "-(?:" + "|".join(BRIGHTDATA_PARAMETERS) + ")-"
+        if zone and rest and re.match(targeting, rest, re.IGNORECASE):
+            username = zone.group(0)
+        if not re.fullmatch(r"brd-customer-[A-Za-z0-9_]+-zone-[A-Za-z0-9_]+", username):
+            raise _proxy_setting_error(
+                "Enter the zone username, brd-customer-...-zone-..., from the zone's "
+                "Access details.",
+                "proxy_zone_username_invalid",
+            )
+        if static_ip:
+            # An ISP or datacenter zone with a Thai IP allocated: always that IP.
+            try:
+                pinned = ipaddress.IPv4Address(static_ip)
+            except ValueError as exc:
+                raise _proxy_setting_error(
+                    "The zone's IP must be an IPv4 address.", "proxy_zone_ip_invalid"
+                ) from exc
+            user = f"{username}-ip-{pinned}"
+        else:
+            user = f"{username}-country-th-session-{session}"
+        host_value, port = "brd.superproxy.io", 44445
+    elif provider == "oxylabs":
+        # Residential: Thailand, one IP for the longest sticky time (24 hours).
+        base = _bare_username(_without_prefix(username, "customer-"), "-", OXYLABS_PARAMETERS)
+        user = f"customer-{base}-cc-TH-sessid-{session}-sesstime-1440"
+        host_value, port = "pr.oxylabs.io", 7777
+    elif provider == "litport":
+        # Pay-per-GB residential through the customer's hub; the session lasts 24 hours.
+        pool = str(body.get("proxyProviderPool") or LITPORT_THAI_POOLS[0])
+        if pool not in LITPORT_THAI_POOLS:
+            raise _proxy_setting_error("Choose a Litport pool with Thai IPs.", "proxy_pool_invalid")
+        host_value = _proxy_host_value(host)
+        port = _proxy_port_value(str(body.get("proxyPort") or "1337").strip())
+        # An exported username carries _pool-... suffixes; keep the part before them.
+        base = _bare_username(username, "_", LITPORT_PARAMETERS)
+        user = f"{base}_pool-{pool}_country-th_sid-{session}_sttl-86400"
+    elif provider == "shifter":
+        # ISP proxies: each username is one IP the customer placed in Thailand in
+        # Shifter's panel, so the username is used as it is.
+        user, host_value, port = username, "isp.shifter.io", 443
+    else:
+        # Decodo residential: Thailand, one IP for the longest sticky time (24 hours).
+        base = _bare_username(_without_prefix(username, "user-"), "-", DECODO_PARAMETERS)
+        user = f"user-{base}-country-th-session-{session}-sessionduration-1440"
+        host_value, port = "gate.decodo.com", 7000
+    return _validate_proxy_url(f"http://{_proxy_credentials(user, password)}{host_value}:{port}")
+
+
 def _proxy_url_from_fields(body: Mapping[str, Any]) -> str | None:
     """Build a validated proxy URL from separate form fields.
 
     ``proxyUrl`` remains accepted for older clients. New clients send the
     structured fields so credentials never need to be manually URL-encoded.
+    With ``proxyProvider`` the server builds a Thai proxy for that provider instead.
     """
     if body.get("proxyEnabled") is False:
         return None
+    provider = str(body.get("proxyProvider") or "").strip()
+    if provider:
+        return _provider_proxy_url(provider, body)
     legacy_url = str(body.get("proxyUrl") or "").strip()
     field_keys = {
         "proxyScheme",
@@ -17400,7 +18181,7 @@ def _proxy_url_from_fields(body: Mapping[str, Any]) -> str | None:
         "proxyPassword",
     }
     if not any(key in body for key in field_keys):
-        return legacy_url or None
+        return _validate_proxy_url(legacy_url) if legacy_url else None
 
     scheme = str(body.get("proxyScheme") or "http").strip().lower()
     host = str(body.get("proxyHost") or "").strip()
@@ -17408,77 +18189,14 @@ def _proxy_url_from_fields(body: Mapping[str, Any]) -> str | None:
     username = str(body.get("proxyUsername") or "").strip()
     password = str(body.get("proxyPassword") or "")
     if not any((host, port_raw, username, password)):
-        return legacy_url or None
+        return _validate_proxy_url(legacy_url) if legacy_url else None
     if scheme not in PROXY_SCHEMES:
-        raise WebError(
-            HTTPStatus.BAD_REQUEST,
-            "Proxy type must be HTTP, HTTPS, SOCKS5, or SOCKS5H.",
-            "invalid_proxy_setting",
+        raise _proxy_setting_error(
+            "Proxy type must be HTTP, HTTPS, SOCKS5, or SOCKS5H.", "proxy_scheme_invalid"
         )
-    if not host or len(host) > MAX_PROXY_HOST_LENGTH:
-        raise WebError(
-            HTTPStatus.BAD_REQUEST,
-            "Proxy host is required or too long.",
-            "invalid_proxy_setting",
-        )
-    if any(char.isspace() for char in host) or any(
-        marker in host for marker in ("://", "/", "?", "#", "@")
-    ):
-        raise WebError(
-            HTTPStatus.BAD_REQUEST,
-            "Enter only the proxy host, without protocol, path, or credentials.",
-            "invalid_proxy_setting",
-        )
-    try:
-        port = int(port_raw)
-    except ValueError as exc:
-        raise WebError(
-            HTTPStatus.BAD_REQUEST,
-            "Proxy port must be a number from 1 to 65535.",
-            "invalid_proxy_setting",
-        ) from exc
-    if not 1 <= port <= 65535:
-        raise WebError(
-            HTTPStatus.BAD_REQUEST,
-            "Proxy port must be a number from 1 to 65535.",
-            "invalid_proxy_setting",
-        )
-    if len(username) > MAX_PROXY_USERNAME_LENGTH:
-        raise WebError(
-            HTTPStatus.BAD_REQUEST,
-            "Proxy username is too long.",
-            "invalid_proxy_setting",
-        )
-    if len(password) > MAX_PROXY_PASSWORD_LENGTH or "\x00" in password:
-        raise WebError(
-            HTTPStatus.BAD_REQUEST,
-            "Proxy password is invalid or too long.",
-            "invalid_proxy_setting",
-        )
-
-    host_value = host[1:-1] if host.startswith("[") and host.endswith("]") else host
-    try:
-        address = ipaddress.ip_address(host_value)
-        encoded_host = f"[{address.compressed}]" if address.version == 6 else str(address)
-    except ValueError:
-        try:
-            encoded_host = host_value.encode("idna").decode("ascii").lower()
-        except UnicodeError as exc:
-            raise WebError(
-                HTTPStatus.BAD_REQUEST,
-                "Proxy host is invalid.",
-                "invalid_proxy_setting",
-            ) from exc
-        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9._-]{0,251}[a-z0-9])?", encoded_host):
-            raise WebError(
-                HTTPStatus.BAD_REQUEST,
-                "Proxy host is invalid.",
-                "invalid_proxy_setting",
-            ) from None
-
-    credentials = ""
-    if username or password:
-        credentials = f"{quote(username, safe='')}:{quote(password, safe='')}@"
+    encoded_host = _proxy_host_value(host)
+    port = _proxy_port_value(port_raw)
+    credentials = _proxy_credentials(username, password)
     return _validate_proxy_url(f"{scheme}://{credentials}{encoded_host}:{port}")
 
 
@@ -20687,10 +21405,11 @@ class WebState:
                 except Exception as exc:
                     server_error = _safe_log_detail(exc, 500)
             self.close_api(account_id)
-            self._commit_account_removal(account_id)
+            removed = self._commit_account_removal(account_id)
         return {
             "ok": True,
             "serverError": server_error,
+            "customersDeleted": int(removed.get("customersDeleted") or 0),
             "accounts": {
                 "accounts": self.account_store.list_accounts(
                     self.web_auth.allowed_account_ids(user)
@@ -20709,6 +21428,7 @@ class WebState:
         return {
             "ok": True,
             "removed": removed,
+            "customersDeleted": int(removed.get("customersDeleted") or 0),
             "accounts": {
                 "accounts": self.account_store.list_accounts(
                     self.web_auth.allowed_account_ids(user)
@@ -20790,7 +21510,8 @@ class WebState:
                 traceback.print_exc()
         self.crm_cursors.pop(account_id, None)
         try:
-            self.crm.purge_account(account_id)
+            # Its chats go, and the customers who chatted only through it.
+            removed["customersDeleted"] = self.crm.purge_account(account_id)
         except Exception:
             traceback.print_exc()
         if _account_channel(removed) != "line":
@@ -20807,6 +21528,60 @@ class WebState:
             self.store.set(f"lineoa_runtime:{account_id}", {})
         with self.room_state_lock:
             self.room_states_cache.pop(account_id, None)
+
+    def test_proxy(self, proxy_url: str | None) -> dict[str, Any]:
+        """Which IP and country a proxy exits from, so the form can confirm a Thai IP.
+
+        Errors never repeat the proxy URL or the client's message: both can hold the
+        password.
+        """
+        if not proxy_url:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Fill in the proxy first.", "proxy_missing")
+        proxy_url = _validate_proxy_url(proxy_url)
+        # 422, not 502: Cloudflare swaps a 502 for its own page and the JSON is lost.
+        failed = HTTPStatus.UNPROCESSABLE_ENTITY
+        refused = WebError(
+            failed,
+            "The proxy refused this username or password, or the plan has run out.",
+            "proxy_auth_failed",
+        )
+        forbidden = WebError(
+            failed,
+            "The proxy blocked the connection (403). Check that the plan is active.",
+            "proxy_forbidden",
+        )
+        unreachable = WebError(failed, "Could not connect through this proxy.", "proxy_unreachable")
+        try:
+            response = requests.get(
+                _proxy_check_url(proxy_url),
+                proxies={"http": proxy_url, "https": proxy_url},
+                timeout=20,
+            )
+        except requests.exceptions.ProxyError as exc:
+            # The proxy's answer to CONNECT. Only this exact text: the host and port in
+            # other errors may contain the same digits.
+            detail = str(exc)
+            if "Tunnel connection failed: 407" in detail:
+                raise refused from None
+            if "Tunnel connection failed: 403" in detail:
+                raise forbidden from None
+            raise unreachable from None
+        except requests.RequestException:
+            raise unreachable from None
+        if response.status_code == 407:
+            raise refused
+        try:
+            data = response.json() if response.status_code == 200 else None
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise WebError(
+                failed,
+                f"The IP check through the proxy answered HTTP {response.status_code}.",
+                "proxy_check_failed",
+            )
+        reply = _proxy_check_reply(data)
+        return {"ok": True, **reply, "thai": reply["country"] == "TH"}
 
     # -- System settings set on the God page ----------------------------------
     def proxy_policy(self) -> dict[str, bool]:
@@ -25439,14 +26214,14 @@ class WebState:
             provider = requested if requested in AI_PROVIDERS else self._active_provider(data)
             meta = _ai_provider_meta(provider)
             current = self._ai_provider_view(data, provider)
-            raw_key = body.get("apiKey")
+            raw_key = _api_key_value(body.get("apiKey"))
             if body.get("clearApiKey"):
                 api_key = ""
-            elif raw_key is None or not str(raw_key).strip():
+            elif not raw_key:
                 # Blank key on save keeps the stored one (edit model without re-typing).
                 api_key = current["apiKey"]
             else:
-                api_key = str(raw_key).strip()
+                api_key = raw_key
             model = str(body.get("model") or current["model"]).strip() or meta["model"]
             record = {
                 "apiKey": self._encrypt_secret(api_key),
@@ -25770,7 +26545,7 @@ class WebState:
                 tenant.pop("settings", None)
             else:
                 current = self._global_ai_private_settings({"settings": previous or {}})
-                raw_key = str(body.get("apiKey") or "").strip()
+                raw_key = _api_key_value(body.get("apiKey"))
                 if body.get("clearApiKey"):
                     api_key = ""
                 elif raw_key:
@@ -25904,6 +26679,68 @@ class WebState:
         except OllamaError as exc:
             raise WebError(HTTPStatus.BAD_GATEWAY, str(exc), "ollama_unavailable") from exc
         return {"ok": True, "baseUrl": settings["baseUrl"], "models": models}
+
+    def ai_models(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+        """The models a shop's Gemini key or Ollama server offers (Refresh models).
+
+        Uses the key or URL typed in the form, else the saved one, so the lists can be
+        refreshed before saving. Nothing is saved. With purpose "image" (the AI image
+        section) the saved Gemini key tried first is that section's own Google key, the
+        one it shows; otherwise it is the auto-reply key.
+        """
+        provider = str(body.get("provider") or "").strip().lower()
+        if provider not in {"gemini", "ollama"}:
+            raise WebError(HTTPStatus.BAD_REQUEST, "Choose Gemini or Ollama.", "ai_settings_invalid")
+        settings = self._assistant_settings_for(self._global_ai_all(), user)
+        saved = (
+            settings
+            if settings["source"] == "tenant" and settings["provider"] == provider
+            else {}
+        )
+        key = ""
+        if provider == "gemini":
+            brain_key = str(saved.get("apiKey") or "")
+            if body.get("purpose") == "image":
+                # The same user /api/ai/settings reads, so the key the section shows.
+                saved_keys = [self._ai_provider_view(self._ai_all(user), "google")["apiKey"], brain_key]
+            else:
+                saved_keys = [
+                    brain_key,
+                    self._ai_provider_view(self._ai_all(self.tenant_user(user) or {}), "google")[
+                        "apiKey"
+                    ],
+                ]
+            key = next(
+                (item for item in (_api_key_value(body.get("apiKey")), *saved_keys) if item), ""
+            )
+            if not key:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST, "Enter the Gemini API key first.", "ai_key_required"
+                )
+        else:
+            try:
+                base_url = normalize_ollama_base_url(
+                    str(body.get("baseUrl") or saved.get("baseUrl") or DEFAULT_OLLAMA_BASE_URL)
+                )
+            except ValueError as exc:
+                raise WebError(HTTPStatus.BAD_REQUEST, str(exc), "ollama_url_invalid") from exc
+        try:
+            if provider == "gemini":
+                models = GeminiClient(key, timeout=30).list_models()
+            else:
+                models = OllamaClient(base_url, timeout=30).list_models()
+        except (OllamaError, ValueError, TypeError) as exc:
+            # A client error may repeat what it was given (a header echoes the key).
+            # Only a key long enough to be a secret is hidden: a stray "a" typed by
+            # mistake would otherwise garble every word of the reason.
+            detail = str(exc).replace(key, "[API key]") if len(key) >= 8 else str(exc)
+            # 422, not 502, so the message gets through Cloudflare.
+            raise WebError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                _safe_log_detail(detail, 300) or "The models could not be loaded.",
+                "ai_models_unavailable",
+            ) from None
+        return {"ok": True, "provider": provider, **_ai_model_lists(provider, models)}
 
     @staticmethod
     def _knowledge_source_view(source: dict[str, Any]) -> dict[str, Any]:
@@ -28517,6 +29354,9 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/api/assistant/settings":
             self._require_permission("manage_accounts")
             return self.state.save_assistant_settings(self._read_json(), self.current_user)
+        if method == "POST" and path == "/api/ai/models":
+            self._require_permission("manage_accounts")
+            return self.state.ai_models(self._read_json(), self.current_user)
         if method == "POST" and path == "/api/assistant/knowledge/faq":
             self._require_permission("ask_ai")
             return self.state.add_knowledge_faq(self._read_json(), self.current_user)
@@ -28594,6 +29434,25 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.switch_account(
                 str(body.get("accountId") or ""), self.current_user
             )
+        if method == "POST" and path == "/api/proxy/test":
+            self._require_permission("manage_accounts")
+            body = self._read_json()
+            # The page sends this session back with Start or Save, so the account
+            # keeps the IP the test showed.
+            session = _proxy_session_id(body)
+            proxy_url = _proxy_url_from_fields({**body, "proxyProviderSession": session})
+            account_id = str(body.get("accountId") or "").strip()
+            if not proxy_url and account_id:
+                # Nothing typed: check the proxy that account already uses.
+                self._require_account_access(account_id)
+                proxy_url = self.state._proxy_url_for_account(
+                    self.state.account_store.get(account_id)
+                )
+                return self.state.test_proxy(proxy_url)
+            result = self.state.test_proxy(proxy_url)
+            if str(body.get("proxyProvider") or "").strip():
+                result["session"] = session
+            return result
         if method == "POST" and path == "/api/accounts/update":
             self._require_permission("manage_accounts")
             body = self._read_json()
@@ -28605,6 +29464,12 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 proxy_url=_proxy_url_from_fields(body),
                 user=self.current_user,
             )
+        if method == "GET" and path == "/api/accounts/delete-impact":
+            # What deleting the account takes with it, for the confirmation.
+            self._require_permission("manage_accounts")
+            account_id = _query_one(query, "accountId", "")
+            self._require_account_access(account_id)
+            return {"ok": True, "customers": self.state.crm.account_only_customers(account_id)}
         if method == "POST" and path == "/api/accounts/delete":
             self._require_permission("manage_accounts")
             body = self._read_json()
@@ -30760,8 +31625,50 @@ def _download_image(url: str) -> tuple[bytes, str]:
     return raw, _name_from_url(final_url)
 
 
+# What urlsplit itself strips before parsing: leading controls and spaces.
+_URL_LEADING_JUNK = "".join(map(chr, range(0x21)))
+# A host worth showing from a URL urlparse refused: a name or IPv4 with an optional
+# port (and the "]" an error text may close it with), or a bracketed IPv6 address
+# whose "]" may be missing.
+_PLAIN_URL_HOST_RE = re.compile(
+    r"[^\[\]:@/?#\s]+(?::\d{0,5})?\]?|\[[0-9A-Fa-f:.]*(?:%[\w.~-]*)?(?:\](?::\d{0,5})?)?"
+)
+
+
+def _unparsed_url_text(url: str) -> str:
+    """A URL urlparse refuses (e.g. unbalanced IPv6 brackets in an error text).
+
+    Fails closed. Only the scheme and a host that looks plain are kept, never what
+    comes before an "@" in the authority (a user:password); the path stays only
+    while it has no "@", is cut at the first "?" or "#", and a LINE host keeps no
+    path. Anything else becomes "scheme://...". Fullwidth "@" and "/" count as
+    delimiters, as they do for urlparse.
+    """
+    text = re.sub(r"[\t\r\n]", "", url.lstrip(_URL_LEADING_JUNK))
+    text = unicodedata.normalize("NFKC", text)
+    match = re.match(r"((?:[A-Za-z][A-Za-z0-9+.-]*:)?//)([^/?#]*)(.*)", text, re.S)
+    if not match:
+        return "[URL hidden]"
+    prefix, authority, rest = match.groups()
+    host = authority.rpartition("@")[2]
+    if not _PLAIN_URL_HOST_RE.fullmatch(host):
+        return prefix + "..."
+    if "line-apps.com" in authority.lower():
+        return _short_text(prefix + host + "/...", 180)
+    cut = re.search(r"[?#]", rest)
+    if cut:
+        rest = rest[: cut.start()] + "?..."
+    if "@" in rest:
+        rest = "/..."
+    return _short_text(prefix + host + rest, 180)
+
+
 def _safe_url(url: str) -> str:
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        # e.g. "http://10.0.0.5:11434]" from an error text: unbalanced IPv6 brackets.
+        return _unparsed_url_text(url)
     if not parsed.scheme or not parsed.netloc:
         return _short_text(url, 180)
     hostname = str(parsed.hostname or "")
@@ -30784,6 +31691,64 @@ def _safe_url(url: str) -> str:
 def _name_from_url(url: str) -> str:
     name = os.path.basename(urlparse(url).path)
     return name or "image.jpg"
+
+
+# Invisible characters that copying a key from a chat or a document can bring along.
+API_KEY_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
+
+
+def _api_key_value(raw: Any) -> str:
+    """An API key as typed, without spaces or invisible characters around it.
+
+    A key travels in an HTTP header, so anything but printable ASCII is refused here
+    instead of failing deep inside the HTTP client.
+    """
+    key = str(raw or "").translate(API_KEY_INVISIBLE).strip()
+    if key and not all("!" <= char <= "~" for char in key):
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "The API key has characters an API key cannot have. Copy it again.",
+            "ai_key_invalid",
+        )
+    return key
+
+
+# Gemini models that answer generateContent but not with text in a chat.
+AI_CHAT_MODEL_SKIP = ("tts", "audio", "live", "embedding", "imagen", "veo", "aqa", "robotics")
+
+
+def _ai_model_lists(provider: str, models: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Chat, embedding and image model names for the Settings -> AI lists, sorted.
+
+    Gemini says what each model can do; Ollama does not, so its embedding models are
+    told apart by name or by a BERT family.
+    """
+    chat: set[str] = set()
+    embedding: set[str] = set()
+    image: set[str] = set()
+    for item in models:
+        name = str(item.get("name") or "").strip()
+        lowered = name.lower()
+        if not name:
+            continue
+        if provider == "gemini":
+            if item.get("embedding"):
+                embedding.add(name)
+            if not item.get("chat"):
+                continue
+            if "image" in lowered:
+                image.add(name)
+            elif not any(word in lowered for word in AI_CHAT_MODEL_SKIP):
+                chat.add(name)
+        elif "embed" in lowered or str(item.get("family") or "").lower() in {"bert", "nomic-bert"}:
+            embedding.add(name)
+        else:
+            chat.add(name)
+    return {
+        "chatModels": sorted(chat),
+        "embeddingModels": sorted(embedding),
+        "imageModels": sorted(image),
+    }
 
 
 # --- AI image providers -----------------------------------------------------

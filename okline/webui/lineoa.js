@@ -90,8 +90,9 @@
       if (!start) {
         const proxy = await lineOaLoginSettings();
         if (!proxy) return;
-        if (proxyValuesMissing(proxy, false)) {
-          toast(t("proxy.host_port_required"), true);
+        const problem = proxyProblem(proxy, false);
+        if (problem) {
+          toast(t(problem), true);
           return;
         }
         start = proxy;
@@ -317,9 +318,11 @@
     }
 
     async function deleteLineOaAccount(account) {
+      const impact = await accountDeleteImpact(account);
       const confirmed = await openModal({
         title: t("accounts.delete_title", {name: account.label || account.id}),
         build(body) {
+          if (impact) body.appendChild(impact);
           body.appendChild(textSpan(t("oa.delete_note"), "muted"));
           return () => true;
         },
@@ -327,9 +330,9 @@
         danger: true
       });
       if (!confirmed) return;
-      await post("/api/accounts/delete", {accountId: account.id});
+      const result = await post("/api/accounts/delete", {accountId: account.id});
       if (state.activeAccountId === account.id) state.activeAccountId = null;
-      toast(t("toast.account_deleted"));
+      accountDeletedToast(result);
       await refreshStatus(false);
       await loadAccountManagement();
     }

@@ -254,6 +254,48 @@ def test_proxy_credentials_are_redacted_from_log_details():
     assert "socks5://proxy.example:1080" in detail
 
 
+def test_a_url_the_parser_refuses_keeps_no_secrets_in_log_details():
+    # An error text from an upstream server can hold a URL with an unbalanced bracket.
+    for text, kept in (
+        ("proxy said http://user:secret@10.0.0.5:8080] refused", "http://10.0.0.5:8080]"),
+        ("upstream [http://admin:s3cret@10.0.0.5:11434] timed out", "http://10.0.0.5:11434]"),
+        ("see http://[fd00::1/v1/models?token=SECRET123 now", "http://[fd00::1/v1/models?..."),
+        ("[https://gw.example.test]/v1?token=TOPSECRET", "https://gw.example.test]/v1?..."),
+        ("[https://u:p@ss@gw.example.test]/x#frag-SECRET", "https://gw.example.test]/x?..."),
+        ("https://obs.line-apps.com]/r/talk/m/123?x=1", "https://obs.line-apps.com]/..."),
+        # An "@" after the host (an e-mail in the query, a nested URL) hides nothing.
+        ("see http://[fd00::1/cb?email=a@b.com&token=QSECRET1 now", "see http://[fd00::1/cb?... now"),
+        ("GET https://[2001:db8::1:8443/data?email=me@shop.example&apikey=QSECRET2 failed",
+         "https://[2001:db8::1:8443/data?..."),
+        ("upstream [http://10.0.0.5:11434]#state=1&mail=a@FSECRET3", "http://10.0.0.5:11434]?..."),
+        ("https://obs.line-apps.com]/r/talk/m/x@y/MEDIASECRET6", "https://obs.line-apps.com]/..."),
+        ("see [https://api.example.com](https://api.example.com/v1?email=a@b.com&key=MDSECRET7) ok",
+         "see [https://...) ok"),
+        # A password cut short by ",", ")", ">" or a space next to a bracket.
+        ("proxy http://us[er:PWHEAD8,PWTAIL8@10.0.0.5:8080 failed", "proxy http://...,"),
+        ("proxy http://user:PW[HEAD9)PWTAIL9@10.0.0.5:8080 failed", "proxy http://...)"),
+        ("proxy socks5h://user:PW[HEAD11>PWTAIL11@10.0.0.5:1080 failed", "proxy socks5h://...>"),
+        # Fullwidth "@" and "/" are delimiters too.
+        ("proxy http://user:PWSECRET13\uff20proxy.example:8080 refused", "proxy http://proxy.example:8080 refused"),
+        ("proxy http://user:PWSECRET14\ufe6bproxy.example:8080 refused", "proxy http://proxy.example:8080 refused"),
+        ("https://obs.line-apps.com\uff0fr\uff0ftalk\uff0fMEDIASECRET15", "https://obs.line-apps.com/..."),
+    ):
+        detail = webapp_module._safe_log_detail(text)
+        assert kept in detail, (text, detail)
+        for secret in ("user:", "secret", "s3cret", "SECRET", "u:p", "/r/talk", "PWHEAD", "HEAD9",
+                       "HEAD11", "MEDIA"):
+            assert secret not in detail, (text, detail)
+    # A direct caller gets a hidden URL rather than a crash for anything odd.
+    for odd in ("ht\ttps://user:Pa55word@[2001:db8::1/feed", "http://user:PW\nTAIL@[fd00::1/x",
+                "\ud800://x", "http://[" + "@" * 5000):
+        assert "Pa55word" not in webapp_module._safe_url(odd)
+        assert "PW" not in webapp_module._safe_url(odd).replace("http", "")
+    # A URL that parses is shown exactly as before.
+    assert webapp_module._safe_log_detail("see http://user:pw@10.0.0.5:8080/x?y=1 now") == (
+        "see http://10.0.0.5:8080/x?... now"
+    )
+
+
 def test_web_ui_configures_proxy_per_line_account():
     assert 'id="loginProxyEnabled"' in INDEX_HTML
     assert 'id="loginProxyScheme"' in INDEX_HTML

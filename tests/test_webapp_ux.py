@@ -465,6 +465,240 @@ def test_owner_configures_gemini_without_god(web_state, monkeypatch):
     assert web_state.assistant_settings(staff_user)["configured"] is True
 
 
+GEMINI_MODELS = [
+    {"name": "gemini-2.5-flash", "chat": True, "embedding": False},
+    {"name": "gemini-2.5-pro", "chat": True, "embedding": False},
+    {"name": "gemini-2.5-flash-preview-tts", "chat": True, "embedding": False},
+    {"name": "gemini-2.5-flash-image", "chat": True, "embedding": False},
+    {"name": "gemini-3-pro-image-preview", "chat": True, "embedding": False},
+    {"name": "gemini-embedding-001", "chat": False, "embedding": True},
+    {"name": "imagen-4.0-generate-001", "chat": False, "embedding": False},
+]
+
+
+def test_refresh_models_lists_what_the_key_or_server_offers(web_state, monkeypatch):
+    seen = []
+
+    class _ListingGemini(_FakeGemini):
+        def list_models(self):
+            seen.append(("gemini", self.api_key))
+            return GEMINI_MODELS
+
+    class _ListingOllama:
+        def __init__(self, base_url, **kwargs):
+            self.base_url = base_url
+
+        def list_models(self):
+            seen.append(("ollama", self.base_url))
+            return [
+                {"name": "qwen2.5:7b", "family": "qwen2"},
+                {"name": "nomic-embed-text:latest", "family": "nomic-bert"},
+                {"name": "bge-m3:latest", "family": "bert"},
+            ]
+
+    monkeypatch.setattr(webapp_module, "GeminiClient", _ListingGemini)
+    monkeypatch.setattr(webapp_module, "OllamaClient", _ListingOllama)
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    with pytest.raises(WebError) as no_key:
+        web_state.ai_models({"provider": "gemini"}, owner)
+    assert no_key.value.code == "ai_key_required" and not seen
+
+    # The key typed in the form, before anything is saved.
+    listed = web_state.ai_models({"provider": "gemini", "apiKey": " AIza-typed "}, owner)
+    assert seen[-1] == ("gemini", "AIza-typed")
+    assert listed["chatModels"] == ["gemini-2.5-flash", "gemini-2.5-pro"]  # no TTS, no image
+    assert listed["embeddingModels"] == ["gemini-embedding-001"]
+    assert listed["imageModels"] == ["gemini-2.5-flash-image", "gemini-3-pro-image-preview"]
+    # Nothing typed: a saved key, and each section starts with its own.
+    web_state.save_ai_settings({"provider": "google", "apiKey": "AIza-image"}, owner)
+    web_state.ai_models({"provider": "gemini"}, owner)
+    assert seen[-1] == ("gemini", "AIza-image")  # no auto-reply key yet
+    web_state.save_assistant_settings({"provider": "gemini", "apiKey": "AIza-brain", "test": False}, owner)
+    web_state.ai_models({"provider": "gemini"}, owner)
+    assert seen[-1] == ("gemini", "AIza-brain")
+    web_state.ai_models({"provider": "gemini", "purpose": "image"}, owner)
+    assert seen[-1] == ("gemini", "AIza-image")  # the key the image section shows
+    web_state.ai_models({"provider": "gemini", "purpose": "image", "apiKey": "AIza-typed"}, owner)
+    assert seen[-1] == ("gemini", "AIza-typed")
+    # Invisible characters copied along with a key are dropped.
+    for invisible in ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"):
+        web_state.ai_models({"provider": "gemini", "apiKey": f"{invisible}AIza-typed{invisible}"}, owner)
+        assert seen[-1] == ("gemini", "AIza-typed"), repr(invisible)
+    # With no image key, the image section falls back to the auto-reply key.
+    web_state.save_ai_settings({"provider": "google", "clearApiKey": True}, owner)
+    web_state.ai_models({"provider": "gemini", "purpose": "image"}, owner)
+    assert seen[-1] == ("gemini", "AIza-brain")
+    web_state.save_ai_settings({"provider": "google", "apiKey": "AIza-image"}, owner)
+
+    ollama = web_state.ai_models({"provider": "ollama", "baseUrl": "http://ollama.test:11434/api"}, owner)
+    assert seen[-1] == ("ollama", "http://ollama.test:11434")
+    assert ollama["chatModels"] == ["qwen2.5:7b"]
+    assert ollama["embeddingModels"] == ["bge-m3:latest", "nomic-embed-text:latest"]
+    # With the auto reply on Ollama: its saved URL, and Gemini falls back to the image key.
+    web_state.save_assistant_settings(
+        {"provider": "ollama", "baseUrl": "http://saved-ollama.test:11434", "chatModel": "qwen2.5:7b",
+         "test": False},
+        owner,
+    )
+    web_state.ai_models({"provider": "ollama"}, owner)
+    assert seen[-1] == ("ollama", "http://saved-ollama.test:11434")
+    web_state.ai_models({"provider": "gemini"}, owner)
+    assert seen[-1] == ("gemini", "AIza-image")
+    for body, code in (
+        ({"provider": "ollama", "baseUrl": "ftp://ollama.test"}, "ollama_url_invalid"),
+        ({"provider": "global"}, "ai_settings_invalid"),
+    ):
+        with pytest.raises(WebError) as refused:
+            web_state.ai_models(body, owner)
+        assert refused.value.code == code
+
+
+def test_refresh_models_says_why_a_list_could_not_be_loaded(web_state, monkeypatch):
+    calls = []
+
+    class _RefusingGemini(_FakeGemini):
+        def list_models(self):
+            calls.append(self.api_key)
+            # A client error can repeat its input: requests echoes a bad header value.
+            raise webapp_module.OllamaError(f"Gemini error 400: API key not valid: {self.api_key}", 400)
+
+    monkeypatch.setattr(webapp_module, "GeminiClient", _RefusingGemini)
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    with pytest.raises(WebError) as failed:
+        web_state.ai_models({"provider": "gemini", "apiKey": "AIza-wrong-key"}, owner)
+    assert failed.value.code == "ai_models_unavailable"
+    assert failed.value.status == 422  # a 502 would lose its message behind Cloudflare
+    assert "API key not valid" in failed.value.message
+    assert "AIza-wrong-key" not in failed.value.message and "[API key]" in failed.value.message
+    # A key with characters no key has is refused before any request.
+    for bad in ("AIza-test\u2019", "AIza\u0e01test", "AIza test"):
+        with pytest.raises(WebError) as refused:
+            web_state.ai_models({"provider": "gemini", "apiKey": bad}, owner)
+        assert (refused.value.code, refused.value.status) == ("ai_key_invalid", 400)
+    assert calls == ["AIza-wrong-key"]
+
+    # An Ollama server that answers something odd could not be listed; its URL is fine.
+    class _OddOllama:
+        def __init__(self, base_url, **kwargs):
+            pass
+
+        def list_models(self):
+            raise ValueError("invalid literal for int() with base 10: 'big'")
+
+    monkeypatch.setattr(webapp_module, "OllamaClient", _OddOllama)
+    with pytest.raises(WebError) as odd:
+        web_state.ai_models({"provider": "ollama", "baseUrl": "http://ollama.test:11434"}, owner)
+    assert (odd.value.code, odd.value.status) == ("ai_models_unavailable", 422)
+
+    # Any reason the server gives stays a 422, even with a URL the parser cannot read.
+    reasons = iter([
+        webapp_module.OllamaError("Ollama error 502: upstream [http://10.0.0.5:11434] timed out", 502),
+        webapp_module.OllamaError("see http://[fd00::1 for details"),
+        TypeError("'NoneType' object is not subscriptable"),
+    ])
+
+    class _GatewayOllama:
+        def __init__(self, base_url, **kwargs):
+            pass
+
+        def list_models(self):
+            raise next(reasons)
+
+    monkeypatch.setattr(webapp_module, "OllamaClient", _GatewayOllama)
+    for expected in ("upstream", "fd00", "NoneType"):
+        with pytest.raises(WebError) as failed_gateway:
+            web_state.ai_models({"provider": "ollama", "baseUrl": "http://ollama.test:11434"}, owner)
+        assert (failed_gateway.value.code, failed_gateway.value.status) == ("ai_models_unavailable", 422)
+        assert expected in failed_gateway.value.message
+
+    # A stray short key is not a secret: the reason is shown as Google wrote it.
+    class _ShortKeyGemini(_FakeGemini):
+        def list_models(self):
+            raise webapp_module.OllamaError("Gemini error 400: API key not valid. Please pass a valid API key.", 400)
+
+    monkeypatch.setattr(webapp_module, "GeminiClient", _ShortKeyGemini)
+    with pytest.raises(WebError) as short:
+        web_state.ai_models({"provider": "gemini", "apiKey": "a"}, owner)
+    assert "API key not valid. Please pass a valid API key." in short.value.message
+
+
+def test_saved_api_keys_drop_invisible_characters_and_refuse_odd_ones(web_state, monkeypatch):
+    monkeypatch.setattr(webapp_module, "GeminiClient", _FakeGemini)
+    owner = _seed_owned_account(web_state, _owner(web_state))
+    web_state.save_assistant_settings(
+        {"provider": "gemini", "apiKey": "\u200bAIza-clean\ufeff", "test": False}, owner
+    )
+    assert web_state._assistant_settings_for(web_state._global_ai_all(), owner)["apiKey"] == "AIza-clean"
+    with pytest.raises(WebError) as refused:
+        web_state.save_assistant_settings({"provider": "gemini", "apiKey": "AIza\u2019x", "test": False}, owner)
+    assert refused.value.code == "ai_key_invalid"
+    web_state.save_ai_settings({"provider": "google", "apiKey": "AIza-image\u200b"}, owner)
+    assert web_state._ai_provider_view(web_state._ai_all(owner), "google")["apiKey"] == "AIza-image"
+    with pytest.raises(WebError) as spaced:
+        web_state.save_ai_settings({"provider": "google", "apiKey": "AIza image"}, owner)
+    assert spaced.value.code == "ai_key_invalid"
+    # A blank key still keeps the saved one.
+    web_state.save_ai_settings({"provider": "google", "apiKey": "  "}, owner)
+    assert web_state._ai_provider_view(web_state._ai_all(owner), "google")["apiKey"] == "AIza-image"
+
+
+def test_refresh_models_needs_the_manage_accounts_permission(live, monkeypatch):
+    base, state = live
+
+    class _ListingGemini(_FakeGemini):
+        def list_models(self):
+            return GEMINI_MODELS
+
+    monkeypatch.setattr(webapp_module, "GeminiClient", _ListingGemini)
+    state.web_auth.setup("owner@example.com", "owner-pass")
+    state.web_auth.create_user("viewer@example.com", "viewer-pass", "viewer", [])
+    body = {"provider": "gemini", "apiKey": "AIza-typed"}
+    assert requests.post(f"{base}/api/ai/models", json=body, timeout=5).status_code == 401
+    viewer = requests.Session()
+    viewer.post(f"{base}/api/auth/login",
+                json={"email": "viewer@example.com", "password": "viewer-pass"},
+                timeout=5).raise_for_status()
+    assert viewer.post(f"{base}/api/ai/models", json=body, timeout=5).status_code == 403
+    owner = requests.Session()
+    owner.post(f"{base}/api/auth/login",
+               json={"email": "owner@example.com", "password": "owner-pass"},
+               timeout=5).raise_for_status()
+    listed = owner.post(f"{base}/api/ai/models", json=body, timeout=5)
+    assert listed.status_code == 200 and "gemini-2.5-flash" in listed.json()["chatModels"]
+
+
+def test_deleting_an_account_says_first_how_many_customers_go_with_it(live):
+    base, state = live
+    state.web_auth.setup("owner@example.com", "owner-pass")
+    owner = state.web_auth._find_user(state.web_auth.data["users"][0]["id"])
+    _seed_owned_account(state, owner)
+    state.crm.ingest(
+        owner_id=owner["id"], account_id="acct", channel="line", chat_id=_CUSTOMER_MID,
+        contact={"externalId": _CUSTOMER_MID, "name": "Somchai"},
+        messages=[{"externalId": "m1", "direction": "in", "senderKind": "customer",
+                   "text": "hi", "contentType": 0, "at": int(time.time() * 1000)}],
+    )
+    session = requests.Session()
+    session.post(f"{base}/api/auth/login",
+                 json={"email": "owner@example.com", "password": "owner-pass"},
+                 timeout=5).raise_for_status()
+    impact = session.get(f"{base}/api/accounts/delete-impact?accountId=acct", timeout=5)
+    assert impact.status_code == 200 and impact.json()["customers"] == 1
+
+    # Only someone who manages that account may ask.
+    for email, role in (("viewer@example.com", "viewer"), ("member@example.com", "member")):
+        state.web_auth.create_user(email, "other-pass", role, [])
+        other = requests.Session()
+        other.post(f"{base}/api/auth/login", json={"email": email, "password": "other-pass"},
+                   timeout=5).raise_for_status()
+        assert other.get(f"{base}/api/accounts/delete-impact?accountId=acct",
+                         timeout=5).status_code == 403
+
+    deleted = session.post(f"{base}/api/accounts/delete", json={"accountId": "acct"}, timeout=5)
+    assert deleted.status_code == 200 and deleted.json()["customersDeleted"] == 1
+    assert state.crm.db.scalar("SELECT COUNT(*) FROM crm_customers") == 0
+
+
 def test_shop_topics_cite_sources_and_collect_faq(web_state, monkeypatch):
     monkeypatch.setattr(webapp_module, "GeminiClient", _FakeGemini)
     owner = _seed_owned_account(web_state, _owner(web_state))

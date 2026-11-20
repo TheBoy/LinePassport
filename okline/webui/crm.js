@@ -1096,6 +1096,7 @@
       title.maxLength = 200;
       title.value = task ? task.title : "";
       const {label: dueLabel, input: due} = labeledInput(t("crm.task_due"), "datetime-local");
+      useDateTime24(due);
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       tomorrow.setHours(10, 0, 0, 0);

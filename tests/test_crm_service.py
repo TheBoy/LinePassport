@@ -487,6 +487,54 @@ def test_delete_and_purge_account(crm):
     assert service.db.scalar("SELECT COUNT(*) FROM crm_messages") == 0
 
 
+MID_3 = "u" + "3" * 32
+
+
+def test_deleting_an_account_deletes_the_customers_only_it_chatted_with(crm):
+    service, _ctx = crm
+    now = _now()
+    # Only through acct-b: goes with the account, with everything kept about them.
+    only_b = _ingest(service, account="acct-b", chat=MID_2, messages=[_msg("m1", "in", now)],
+                     name="Only B")["customerId"]
+    service.add_note(OWNER, {"customerId": only_b, "body": "VIP"})
+    service.tag_customers(OWNER, {"customerIds": [only_b], "add": ["loyal"]})
+    service.create_task(OWNER, {"customerId": only_b, "title": "Call back"})
+    service.db.execute(
+        "INSERT INTO crm_broadcast_recipients (broadcast_id, customer_id) VALUES (?, ?)",
+        ("bc1", only_b),
+    )
+    # Through acct-a and acct-b (one person, one customer): stays, with acct-a's chat.
+    both = _ingest(service, account="acct-a", chat=MID_1, messages=[_msg("m2", "in", now)],
+                   name="Both")["customerId"]
+    assert _ingest(service, account="acct-b", chat=MID_1,
+                   messages=[_msg("m3", "in", now)])["customerId"] == both
+    service.add_note(OWNER, {"customerId": both, "body": "keeps this"})
+    # Elsewhere: untouched.
+    only_a = _ingest(service, account="acct-a", chat=MID_3, messages=[_msg("m4", "in", now)])["customerId"]
+    walk_in = service.create_customer(OWNER, {"displayName": "Walk-in"})["customer"]["id"]
+
+    assert service.account_only_customers("acct-b") == 1
+    assert service.account_only_customers("acct-a") == 1
+    assert service.purge_account("acct-b") == 1
+
+    left = {row["id"] for row in service.db.query("SELECT id FROM crm_customers")}
+    assert left == {both, only_a, walk_in}
+    for table in ("crm_identities", "crm_customer_tags", "crm_notes", "crm_tasks", "crm_events",
+                  "crm_broadcast_recipients"):
+        assert service.db.scalar(
+            f"SELECT COUNT(*) FROM {table} WHERE customer_id = ?", (only_b,)
+        ) == 0, table
+    chats = service.db.query("SELECT account_id, customer_id FROM crm_conversations ORDER BY account_id")
+    assert [(row["account_id"], row["customer_id"]) for row in chats] == [
+        ("acct-a", both), ("acct-a", only_a)
+    ]
+    assert service.db.scalar("SELECT COUNT(*) FROM crm_notes WHERE customer_id = ?", (both,)) == 1
+    assert service.db.scalar("SELECT COUNT(*) FROM crm_messages") == 2  # acct-a's two
+    # Nothing left to take: deleting it again removes no one.
+    assert service.purge_account("acct-b") == 0
+    assert service.account_only_customers("acct-b") == 0
+
+
 def test_normalize_filter_drops_unknown_values():
     flt = normalize_filter(
         {"q": "  a   b ", "channels": ["line", "fax"], "statuses": ["open", "lost"],
