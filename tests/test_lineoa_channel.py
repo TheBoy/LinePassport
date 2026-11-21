@@ -298,8 +298,13 @@ def test_signing_in_adds_the_only_oa_or_offers_a_choice(state, monkeypatch):
     assert [(b["botId"], b["connected"], b["chatOff"]) for b in login["bots"]] == [
         (BOT, True, False), (BOT2, False, True)]
     assert COOKIE_VALUE not in str(login)
+    # The worker clears chat_off once its first sync works, which can come before the
+    # pick answers: keep it from starting, so the answer shows the account as added.
+    started: list[str] = []
+    monkeypatch.setattr(state.line_oa, "start", started.append)
     picked = state.oa_login_pick({"botIds": [BOT2]}, owner)
     assert picked["state"] == "done" and picked["account"]["channel"] == "line_oa"
+    assert started == [picked["account"]["id"]]
     # Chat mode is off for that OA in OA Manager: the account says so until it works.
     assert picked["account"]["channelProblem"] == "chat_off"
     state.oa_problem(picked["account"]["id"], "")
