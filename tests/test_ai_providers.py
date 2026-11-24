@@ -1614,7 +1614,11 @@ def test_gemini_chat_request_and_answer():
     assert config["responseMimeType"] == "application/json"
     assert config["responseSchema"]["required"] == ["answer", "canAnswer", "confidence"]
     assert config["temperature"] == 0.2
-    assert call["max_bytes"] == MAX_AI_RESPONSE_BYTES and call["timeout"] == 60
+    assert call["max_bytes"] == MAX_AI_RESPONSE_BYTES
+    # What is left of the 60 seconds as the request goes out: all of it on a clock
+    # that ticks every 16 ms (Windows, where rounding can add a few picoseconds), a
+    # moment less on a finer one (Linux).
+    assert 59.0 < call["timeout"] <= 60 + 1e-6
     assert result["answer"] == ANSWER["answer"] and result["promptEvalCount"] == 5
     assert result["model"] == "gemini-3.8-flash"
 

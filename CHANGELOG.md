@@ -305,6 +305,18 @@ All notable changes to OkLine are documented here. The format follows
   to them. To use the new default, the owner picks `gemini-3.8-flash` (or
   clears the chat model box) in Settings → AI → "AI for auto reply" and
   presses Save and test.
+- **A Gemini model that refuses the temperature still answers.** Google
+  ignores `temperature` on Gemini 3.6 and later and says that later models
+  will answer it with an error (HTTP 400). When a Gemini model refuses a
+  question that way, the question now goes out once more without the
+  temperature, inside the same 60 seconds, and that model gets no temperature
+  again until LinePassport restarts. Auto reply, Try a conversation and Save
+  and test all get this. Every other error stays an error, and a question
+  that timed out or lost its connection is still never sent again. Google
+  has not published that error's wording, so it is recognised by an HTTP 400
+  that names `temperature` or the sampling parameters, or that calls a
+  `generationConfig` field unknown or unsupported without being about the
+  JSON output.
 - **Auto replies share the workers fairly.** The four auto-reply workers that
   every workspace shares run at most two replies of one workspace at a time.
   Further Telegram and LINE OA messages of that workspace wait in a queue of

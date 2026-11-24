@@ -11,9 +11,7 @@ subclasses.
 from __future__ import annotations
 
 import copy
-import threading
 import time
-from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -48,7 +46,9 @@ from .assistant import (
     _decode_json,
     _error_detail,
     _float_vector,
+    _learned_flags,
     _parse_json_object,
+    _remember_flags,
     _safe_float,
     _safe_int,
     _scrub_secret,
@@ -56,6 +56,7 @@ from .assistant import (
     _structured_answer,
     _vector_size_problem,
     default_transport,
+    reset_negotiation_cache,
 )
 
 __all__ = [
@@ -425,35 +426,14 @@ class AIClient(Protocol):
 #   drop:<key>          leave out that extra_body key
 #   json_object         json_object instead of json_schema
 #   json_none           no response_format at all
+# The memory (_learned_flags, _remember_flags, reset_negotiation_cache) is in
+# okline.assistant: the Gemini client there keeps its no_temperature in it too.
 
 MAX_NEGOTIATION_RETRIES = 3
 REASONING_MAX_TOKENS = 4096
 """Output token cap when a model may reason: reasoning tokens count toward it."""
-_NEGOTIATED: OrderedDict[tuple[str, str, str], frozenset[str]] = OrderedDict()
-_NEGOTIATED_LOCK = threading.Lock()
-_NEGOTIATED_LIMIT = 512
 _EFFORT_LOW_PROVIDERS = frozenset({"openai", "mistral"})
 _REASONING_KEYS = ("reasoning_effort", "enable_thinking", "thinking", "reasoning")
-
-
-def reset_negotiation_cache() -> None:
-    """Forget every parameter a provider refused (for tests)."""
-    with _NEGOTIATED_LOCK:
-        _NEGOTIATED.clear()
-
-
-def _learned_flags(key: tuple[str, str, str]) -> frozenset[str]:
-    with _NEGOTIATED_LOCK:
-        return _NEGOTIATED.get(key, frozenset())
-
-
-def _remember_flags(key: tuple[str, str, str], flags: frozenset[str]) -> None:
-    with _NEGOTIATED_LOCK:
-        # Merged, not replaced: another call may have learned a different step meanwhile.
-        _NEGOTIATED[key] = _NEGOTIATED.get(key, frozenset()) | flags
-        _NEGOTIATED.move_to_end(key)
-        while len(_NEGOTIATED) > _NEGOTIATED_LIMIT:
-            _NEGOTIATED.popitem(last=False)
 
 
 def _mentions_quoted_none(text: str) -> bool:

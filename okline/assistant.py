@@ -6,7 +6,9 @@ provider registry and the ``make_ai_client`` factory) has the same surface:
 ``list_models(timeout=None)``, ``embed(model, texts)`` and ``chat(...)`` returning
 ``{answer, canAnswer, confidence, model, promptEvalCount, evalCount}``.
 Every failure surfaces as an :class:`AssistantError` subclass with a short
-message that never contains the API key.
+message that never contains the API key. The Gemini and OpenAI-compatible
+clients share one memory of the request settings a model refused
+(:func:`reset_negotiation_cache` clears it).
 
 The knowledge helpers split shop text into chunks and rank them for a question,
 by embedding vectors when they exist and by keyword overlap otherwise.
@@ -25,6 +27,7 @@ import re
 import socket
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Mapping
 from types import TracebackType
 from typing import Any, Protocol, TypeVar, cast
@@ -689,6 +692,40 @@ def _float_vector(values: Any) -> list[float] | None:
     return vector
 
 
+# --- request settings a model refused -----------------------------------------
+# A chat client whose request was refused over one of its settings sends a
+# smaller request and remembers that step here, per (provider id, base URL,
+# model), for the life of the process (for the 512 keys that learned something
+# last; an older one costs one refused request to learn again). A step only
+# ever adds a flag, so flags learned by concurrent calls can be merged. The
+# flags are listed with the clients that learn them: "capability negotiation" in
+# okline.ai_providers, and GeminiClient below (its one flag is no_temperature).
+
+_NEGOTIATED: OrderedDict[tuple[str, str, str], frozenset[str]] = OrderedDict()
+_NEGOTIATED_LOCK = threading.Lock()
+_NEGOTIATED_LIMIT = 512
+
+
+def reset_negotiation_cache() -> None:
+    """Forget every parameter a provider refused (for tests)."""
+    with _NEGOTIATED_LOCK:
+        _NEGOTIATED.clear()
+
+
+def _learned_flags(key: tuple[str, str, str]) -> frozenset[str]:
+    with _NEGOTIATED_LOCK:
+        return _NEGOTIATED.get(key, frozenset())
+
+
+def _remember_flags(key: tuple[str, str, str], flags: frozenset[str]) -> None:
+    with _NEGOTIATED_LOCK:
+        # Merged, not replaced: another call may have learned a different step meanwhile.
+        _NEGOTIATED[key] = _NEGOTIATED.get(key, frozenset()) | flags
+        _NEGOTIATED.move_to_end(key)
+        while len(_NEGOTIATED) > _NEGOTIATED_LIMIT:
+            _NEGOTIATED.popitem(last=False)
+
+
 # --- Gemini -------------------------------------------------------------------
 
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com"
@@ -700,15 +737,64 @@ _GEMINI_BLOCKED_FINISH = frozenset(
 )
 """finishReason values that mean Gemini's filters stopped the answer."""
 
+# How an HTTP 400 that refuses the sampling parameters is recognised. Google
+# documents the error body ({"error": {"code", "message", "status", "details"}})
+# and that temperature, top_p and top_k, ignored since Gemini 3.6, will get an
+# HTTP 400 from later models (Gemini 4 Neon and Hydrogen already answer 400 to a
+# value out of range), but not that error's wording. So the match is on the
+# names Google uses for them, anywhere in the error body's text (the message, a
+# field violation's field and description).
+_GEMINI_SAMPLING_WORDS = ("temperature", "sampling")
+# A generationConfig field called unknown or unsupported without its name is
+# taken for the temperature too, unless the text is about the JSON output: those
+# are the only other fields this client sends, and leaving the temperature out
+# would not help with them.
+_GEMINI_CONFIG_WORDS = ("generation_config", "generationconfig", "generation config")
+_GEMINI_REFUSED_WORDS = (
+    "unknown",
+    "cannot find field",
+    "unsupported",
+    "not support",
+    "no longer support",
+    "not allowed",
+    "deprecated",
+)
+_GEMINI_JSON_OUTPUT_WORDS = ("mime", "schema", "structured")
+
+
+def _gemini_degrade(
+    body: Mapping[str, Any], flags: frozenset[str], text: str
+) -> frozenset[str] | None:
+    """The flags for the next try after an HTTP 400 whose error text is ``text``.
+
+    ``None`` when the request had no temperature to leave out, or the text (lower
+    case, as :func:`_error_detail` gives it) does not blame the sampling parameters.
+    """
+    config = body.get("generationConfig")
+    if not isinstance(config, Mapping) or "temperature" not in config:
+        return None
+    if any(word in text for word in _GEMINI_SAMPLING_WORDS):
+        return flags | {"no_temperature"}
+    if (
+        any(word in text for word in _GEMINI_CONFIG_WORDS)
+        and any(word in text for word in _GEMINI_REFUSED_WORDS)
+        and not any(word in text for word in _GEMINI_JSON_OUTPUT_WORDS)
+    ):
+        return flags | {"no_temperature"}
+    return None
+
 
 class GeminiClient:
     """Google Gemini chat and embeddings over the generativelanguage API.
 
     Chat calls generateContent with a response schema. The key goes in the
     ``x-goog-api-key`` header, never in the URL. ``timeout`` is the total time
-    for one chat call; embeddings and model lists get at least 120 seconds per
-    request, unless ``embed(timeout=...)`` or ``list_models(timeout=...)`` sets
-    their own deadline.
+    for one chat call, its second request included: when a model answers HTTP
+    400 to the temperature, the question is sent once more without it and the
+    model is remembered for the life of the process. A request that timed out or
+    lost its connection is never sent again. Embeddings and model lists get at
+    least 120 seconds per request, unless ``embed(timeout=...)`` or
+    ``list_models(timeout=...)`` sets their own deadline.
     """
 
     label = "Gemini"
@@ -729,7 +815,7 @@ class GeminiClient:
         self.transport: Transport = transport or default_transport
         self.embed_batch = max(1, _safe_int(embed_batch) or GEMINI_EMBED_BATCH)
 
-    def _request(
+    def _send(
         self,
         method: str,
         path: str,
@@ -737,7 +823,12 @@ class GeminiClient:
         *,
         timeout: float,
         max_bytes: int,
-    ) -> dict[str, Any]:
+    ) -> tuple[int, Any]:
+        """One request: the HTTP status and the decoded body, whatever the status.
+
+        A request that failed on the way (no connection, a timeout, an answer
+        that broke off or is too large) raises instead.
+        """
         if not self.api_key:
             raise GeminiError("Gemini API key is not configured.", code="ai_key_required")
         url = f"{self.base_url}/v1beta/{path.lstrip('/')}"
@@ -760,23 +851,40 @@ class GeminiClient:
             ) from exc
         except Exception as exc:
             raise GeminiError(f"Gemini request failed ({type(exc).__name__}).") from exc
-        data = _decode_json(raw)
+        return status, _decode_json(raw)
+
+    def _http_error(self, status: int, data: Any) -> GeminiError:
+        short, _full = _error_detail(data)
+        detail = short or _status_phrase(status)
+        lowered = detail.lower()
+        code = None
+        if status == 401 or (
+            "api key" in lowered
+            and any(word in lowered for word in ("not valid", "invalid", "expired"))
+        ):
+            code = "ai_key_invalid"
+        return GeminiError(
+            _scrub_secret(f"Gemini error {status}: {detail}", self.api_key), status, code
+        )
+
+    def _ok_json(self, status: int, data: Any) -> dict[str, Any]:
         if not 200 <= status < 300:
-            short, _full = _error_detail(data)
-            detail = short or _status_phrase(status)
-            lowered = detail.lower()
-            code = None
-            if status == 401 or (
-                "api key" in lowered
-                and any(word in lowered for word in ("not valid", "invalid", "expired"))
-            ):
-                code = "ai_key_invalid"
-            raise GeminiError(
-                _scrub_secret(f"Gemini error {status}: {detail}", self.api_key), status, code
-            )
+            raise self._http_error(status, data)
         if not isinstance(data, dict):
             raise GeminiError(f"Gemini returned invalid JSON (HTTP {status}).", status)
         return data
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout: float,
+        max_bytes: int,
+    ) -> dict[str, Any]:
+        status, data = self._send(method, path, payload, timeout=timeout, max_bytes=max_bytes)
+        return self._ok_json(status, data)
 
     def list_models(self, timeout: float | None = None) -> list[dict[str, Any]]:
         data = self._request(
@@ -845,6 +953,29 @@ class GeminiClient:
                 vectors.append(vector)
         return vectors
 
+    @staticmethod
+    def _chat_body(
+        prompt: str, system_prompt: str, temperature: float, flags: frozenset[str]
+    ) -> dict[str, Any]:
+        config: dict[str, Any] = {}
+        if "no_temperature" not in flags:
+            config["temperature"] = max(0.0, min(_safe_float(temperature, 0.2), 2.0))
+        config["responseMimeType"] = "application/json"
+        config["responseSchema"] = {
+            "type": "OBJECT",
+            "properties": {
+                "answer": {"type": "STRING"},
+                "canAnswer": {"type": "BOOLEAN"},
+                "confidence": {"type": "NUMBER"},
+            },
+            "required": ["answer", "canAnswer", "confidence"],
+        }
+        return {
+            "systemInstruction": {"parts": [{"text": (system_prompt or "").strip()}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": config,
+        }
+
     def chat(
         self,
         *,
@@ -857,29 +988,35 @@ class GeminiClient:
     ) -> dict[str, Any]:
         model = ((model or "").strip() or DEFAULT_GEMINI_CHAT_MODEL).removeprefix("models/")
         prompt = _assistant_prompt(question, context, strict_knowledge)
-        data = self._request(
-            "POST",
-            f"models/{model}:generateContent",
-            {
-                "systemInstruction": {"parts": [{"text": (system_prompt or "").strip()}]},
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": max(0.0, min(_safe_float(temperature, 0.2), 2.0)),
-                    "responseMimeType": "application/json",
-                    "responseSchema": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "answer": {"type": "STRING"},
-                            "canAnswer": {"type": "BOOLEAN"},
-                            "confidence": {"type": "NUMBER"},
-                        },
-                        "required": ["answer", "canAnswer", "confidence"],
-                    },
-                },
-            },
-            timeout=self.timeout,
-            max_bytes=MAX_AI_RESPONSE_BYTES,
-        )
+        key = ("gemini", self.base_url, model)
+        flags = _learned_flags(key)
+        deadline = time.monotonic() + self.timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining < 1.0:
+                raise GeminiError("Gemini did not answer in time.")
+            body = self._chat_body(prompt, system_prompt, temperature, flags)
+            # A request that timed out or lost its connection raises here and is
+            # not sent again: it may already have been answered and billed.
+            status, reply = self._send(
+                "POST",
+                f"models/{model}:generateContent",
+                body,
+                timeout=remaining,
+                max_bytes=MAX_AI_RESPONSE_BYTES,
+            )
+            if status != 400:
+                break
+            _short, text = _error_detail(reply)
+            degraded = _gemini_degrade(body, flags, text)
+            if degraded is None or degraded == flags:
+                break
+            # The model refused the request over its sampling parameters, so it
+            # answered nothing: once more without them, in what is left of the
+            # time. The next body has none to leave out, so this happens once.
+            flags = degraded
+            _remember_flags(key, flags)
+        data = self._ok_json(status, reply)
         candidates = data.get("candidates")
         first = candidates[0] if isinstance(candidates, list) and candidates else {}
         content = first.get("content") if isinstance(first, dict) else None
