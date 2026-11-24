@@ -114,8 +114,12 @@ chcp 65001
 - **LINE OA** — เพิ่ม LINE Official Account ผ่าน OA Manager ด้วยการสแกน QR ด้วยบัญชี LINE
   ที่เป็นสมาชิกของ OA แชทของ OA ขึ้นในหน้าแชทและแชทรวมแบบสด ตอบข้อความ รูป และไฟล์ได้
   รวมถึงเห็นข้อความที่ทีมตอบจาก OA Manager ด้วย
+- **AI ตอบอัตโนมัติ** — แต่ละร้านเลือกผู้ให้บริการ AI และใช้ API key ของตัวเอง: Gemini, Claude,
+  ChatGPT, GLM, DeepSeek, Qwen, Grok, Mistral, Kimi, OpenRouter หรือเซิร์ฟเวอร์ที่รองรับ API
+  แบบ OpenAI ผ่านที่อยู่ `https://` สาธารณะ (Custom API) ส่วน Claude ต้องใช้ Python 3.10 ขึ้นไป
+  (`pip install -e ".[claude]"`)
 
-รายละเอียดการตั้งค่าอยู่ใน [install.md](install.md) หัวข้อ "ลูกค้า (CRM) และ Telegram" และ "LINE OA"
+รายละเอียดการตั้งค่าอยู่ใน [install.md](install.md) หัวข้อ "ลูกค้า (CRM) และ Telegram", "AI สำหรับตอบอัตโนมัติ" และ "LINE OA"
 
 ## อ่านต่อ (ภาษาอังกฤษ)
 

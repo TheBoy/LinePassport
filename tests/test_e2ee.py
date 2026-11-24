@@ -142,6 +142,35 @@ def test_e2ee_export_empty_when_not_ready():
     api.close()
 
 
+def test_e2ee_public_keys_are_asked_of_line_once_per_key_id():
+    from types import SimpleNamespace
+
+    asked = []
+
+    def get_e2ee_public_key(mid, key_version=1, key_id=0):
+        asked.append((mid, key_id))
+        return {"keyData": f"pub-{mid}-{key_id}", "keyId": key_id}
+
+    bridge = SimpleNamespace(e2ee_create_channel_with_pubkey=lambda handle, pub: (handle, pub))
+    api = SimpleNamespace(
+        tokens=SimpleNamespace(mid="Ume"),
+        get_e2ee_public_key=get_e2ee_public_key,
+        transport=SimpleNamespace(bridge=bridge),
+    )
+    manager = E2EEManager(api)
+    manager.my_keys, manager.latest_key_id = {5: 50}, 5
+    # Every sealed message needs its sender's key: LINE is asked for it once.
+    for _ in range(3):
+        assert manager._channel_for_receive("Usender", 7, 5) == (50, "pub-Usender-7")
+    assert manager._user_pub("Usender", 7) == "pub-Usender-7"
+    assert manager._channel_for_self("Usender", 5, 7) == (50, "pub-Usender-7")
+    assert asked == [("Usender", 7)]
+    # Key id 0 names no key (the current one is meant): asked each time.
+    manager._channel_for_receive("Uother", 0, 5)
+    manager._channel_for_receive("Uother", 0, 5)
+    assert asked[1:] == [("Uother", 0), ("Uother", 0)]
+
+
 # --- group vs 1:1 routing --------------------------------------------------
 def test_e2ee_is_group_routing():
     g = __import__("okline.e2ee", fromlist=["E2EEManager"]).E2EEManager._is_group

@@ -111,14 +111,109 @@ it; change or remove it later with Edit. Telegram accounts don't use it
 - **Tools** — look up a user by LINE ID, or call any endpoint directly.
 - **AI Settings** — store a Nano Banana (Google Gemini) API key so the bot can
   generate images from a text prompt. See below. In Settings → AI, **Refresh
-  models** lists the chat and search models your Gemini key or Ollama server
-  offers for auto reply, and adds the Gemini image models your key can use to
-  the image model list.
+  models** lists the chat and search models the chosen auto reply provider
+  offers for your key (see [AI for auto reply](#ai-for-auto-reply)), and adds
+  the Gemini image models your key can use to the image model list.
 - **Deleting an account** (Settings → Account Management) also deletes the
   customers who chatted only through it, with their tags, notes, tasks and
   history; customers who also chat through another account stay. The dialog
   says how many customers will go before you confirm.
 - **Times** show and are picked on a 24-hour clock (14:05), in English too.
+
+## AI for auto reply
+
+Auto reply answers customers with an AI service the shop owner picks in
+**Settings → AI → AI for auto reply** (or in step 1 of the auto reply setup).
+Each workspace uses its own API key; there is no shared AI.
+
+| Group | Providers |
+|-------|-----------|
+| Popular | Gemini (Google), Claude (Anthropic), ChatGPT (OpenAI) |
+| More providers | GLM (Z.ai), DeepSeek, Qwen (Alibaba Cloud), Grok (xAI), Mistral AI, Kimi (Moonshot AI), OpenRouter |
+| Your own API | Custom API (OpenAI-compatible) |
+
+1. **Pick the provider** and paste its **API key**; the line under the box says
+   where to get one (for GLM (Z.ai), a Standard API key: Coding Plan keys do
+   not work). Each provider keeps its own key: switching providers clears the
+   box and never sends one provider's key to another, and a saved key shows
+   only as `••••abcd`, or `••••` when it is shorter than 16 characters (leave
+   the box blank to keep it). Staff see neither the preview nor a Custom API
+   address. A Gemini key saved for AI images is used when the Gemini box is
+   left blank.
+2. **Chat model** — leave the suggested model, or press **Refresh models** to
+   pick from the models your key can use ("Type a name…" takes any other).
+   Refresh models waits at most 30 seconds for the provider. Under *Advanced
+   options*, providers that offer embeddings also have a **search model**
+   (optional), and "Answer only from shop info".
+3. **Save and test** saves the settings and sends the provider a short check.
+   If the check fails, the reason stays next to the button, and step 1 of the
+   auto reply setup stays open until a check passes.
+
+**Custom API** works with any server that speaks the OpenAI chat completions
+API (`POST {base URL}/chat/completions`, and `GET {base URL}/models` for
+Refresh models). Enter its **base URL** (for example
+`https://api.example.com/v1`), the **model name** (required) and, if the server
+needs one, its key. The LinePassport server itself calls that address, so it
+must be a public `https://` address: private, loopback, link-local and other
+reserved addresses are refused, a host that does not exist is reported as not
+found, and a domain name in Thai (or another script) is typed in its `xn--`
+form. The key is only sent to the saved address: once you type another
+server's address, the form says to type that server's key. Each call has one
+time limit for the whole request (looking up the host included), an answer
+has a size cap and may not be compressed, and search vectors longer than 8192
+numbers are refused. One workspace keeps at most 1,000,000 vector numbers,
+and all workspaces together 4,000,000 (first come, first served); past that
+the shop info is found by keyword search, with the reason shown. A search
+model is optional; without one the shop info is found by keyword search.
+
+**Claude** uses the official `anthropic` package, which needs **Python 3.10 or
+newer** on the server: `pip install "okline[claude]"`. The Docker image
+installs it. On a server without it, Claude is listed as "not available".
+
+The God page's **Knowledge / RAG** text is used by every workspace too: it is
+searched by keyword matching (an English word matches whole words or longer
+and shorter forms of it, never letters inside another word), and only the
+parts that are about the customer's question (at most three) are sent, after
+the shop's own info, to that workspace's provider. A workspace sees it cited
+as "Shared info from the system administrator".
+
+Each workspace runs at most two auto replies at a time on the four workers
+that every workspace shares. Further Telegram and LINE OA messages wait in a
+queue of 20 per workspace, and when it is full the oldest one is dropped with
+an activity log line. Further LINE messages wait too, without using up the
+reply limits: a place that frees up goes to the one that has waited longest
+of those the latest check found (up to 8 per account, a workspace's accounts
+in turn) and to the queue in turn, and the rest wait for the next check. A
+chat that wrote more at once than the 10 messages LINE shows of it (a photo
+album, say) goes after the chats that were waiting at the last check that
+found it with nothing to answer, though not always after one that began to
+wait a few seconds before it. In an account with more than 500 chats it can
+still go ahead of chats that waited longer when its customer's last message
+before got no reply (and, with 1,000 chats or more, when the customer is new
+to the account or not among its 1,000 newest chats). A LINE account that has
+used its 20 auto replies
+of the last minute (failed replies count too) leaves its further chats
+waiting until the minute is over.
+
+> **Upgrading from Ollama or the shared AI:** back up before updating
+> (PostgreSQL: `pg_dump`; file storage: the `--state-dir` folder, at least
+> `global_ai.json`, `ai_auto_reply.json` and `bot_logs.json`). The first start
+> changes the AI records one way: each workspace's AI settings move to a new
+> shape and the shared AI's settings are deleted. An earlier version cannot
+> read them (a workspace's own Gemini key looks missing, and the shared AI is
+> gone), so going back to it needs that backup restored too.
+> LinePassport no longer supports Ollama or a shared AI set up on the God page.
+> Auto replies that used them are switched off once, and their owners see a
+> notice asking them to pick a provider and add a key; each account switched
+> off this way says so until it is switched on again. A workspace that relied
+> on a shared AI set to "Answer only from shop info" keeps that setting. A
+> self-hosted install that used a local Ollama needs a cloud provider's key,
+> or a public `https://` OpenAI-compatible endpoint as a Custom API.
+>
+> Workspaces that set up Gemini before this release keep the chat model they
+> saved, usually `gemini-2.5-flash` (the old form always sent it), which Google
+> reroutes from 2026-12-01. To use the new default, `gemini-3.8-flash`, pick it
+> (or clear the chat model box) and press **Save and test**.
 
 ## AI images (Nano Banana)
 

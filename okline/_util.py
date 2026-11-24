@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+import traceback
 from typing import Any
 
 # A LINE mid is a one-letter kind prefix (u=user, c=chat/group, r=room)
@@ -36,3 +37,45 @@ def reconfigure_stdout_utf8(stream: Any = None) -> None:
         reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+
+def print_exc_quietly() -> None:
+    """traceback.print_exc() for a fallback that must not fail itself: writing to
+    stderr fails too when it is a file on a full disk, or a pipe whose reader has
+    gone. (A pipe that nobody drains does not fail: a write to it waits, as any write
+    to stderr then does.)"""
+    try:
+        traceback.print_exc()
+    except Exception:
+        pass
+
+
+def print_quietly(message: str, *, stdout: bool = False) -> None:
+    """A line for the server log (stderr, or stdout) that must not fail (see
+    print_exc_quietly)."""
+    try:
+        print(message, file=sys.stdout if stdout else sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+# PostgreSQL error classes (SQLSTATE) that say the database cannot take writes now:
+# connection (08), a read-only database (25006), no rights to write (42501, as when a
+# provider takes them away over a quota), out of resources such as a full disk (53),
+# shut down or restarting (57) and system errors (58).
+_UNAVAILABLE_SQLSTATES = ("08", "25006", "42501", "53", "57", "58")
+
+
+def storage_unavailable(exc: BaseException) -> bool:
+    """Whether ``exc`` says the place data is kept in cannot be used now (a file that
+    cannot be written, a database that is down, refused the connection or takes no
+    writes), so the same write can work later, rather than that this data itself was
+    refused (say, a NUL byte PostgreSQL does not store)."""
+    if isinstance(exc, OSError):
+        return True
+    if any(
+        cls.__name__ in {"OperationalError", "InterfaceError"} for cls in type(exc).__mro__
+    ):
+        return True  # sqlite3 and psycopg: a database that is down, locked or read-only
+    sqlstate = str(getattr(exc, "sqlstate", "") or "")
+    return bool(sqlstate) and sqlstate.startswith(_UNAVAILABLE_SQLSTATES)

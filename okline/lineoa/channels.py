@@ -13,10 +13,10 @@ from __future__ import annotations
 import re
 import threading
 import time
-import traceback
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from .._util import print_exc_quietly, print_quietly
 from .client import OAManagerClient, OAManagerError
 from .stream import OAManagerStream
 
@@ -164,7 +164,7 @@ class OAChannelWorker:
         if now - self.logged.get(text, -FAILURE_LOG_SECONDS) < FAILURE_LOG_SECONDS:
             return
         self.logged[text] = now
-        print(f"[lineoa] {self.account_id}: {text}", flush=True)
+        print_quietly(f"[lineoa] {self.account_id}: {text}", stdout=True)
 
     def _name_for(self, chat_id: str) -> str:
         if chat_id not in self.names:
@@ -252,7 +252,7 @@ class OAChannelWorker:
                     try:
                         self._handle(event)
                     except Exception:
-                        traceback.print_exc()
+                        print_exc_quietly()
                     if stream.last_event_id and seen % CURSOR_SAVE_EVERY == 0:
                         cursor = stream.last_event_id
                         host.oa_save_cursor(self.account_id, cursor)
@@ -284,7 +284,7 @@ class OAChannelWorker:
                 needs_sync = needs_sync or failures >= 3
                 self.stop_event.wait(delay)
             except Exception:
-                traceback.print_exc()
+                print_exc_quietly()
                 self.stop_event.wait(30)
 
 

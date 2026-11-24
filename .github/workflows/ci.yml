@@ -25,7 +25,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[dev,web,qr]"
+      - run: python -m pip install -e ".[dev,web,qr,claude]"
       - run: python -m ruff check .
       - run: python -m mypy okline
       - run: python -m pytest

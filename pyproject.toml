@@ -33,6 +33,10 @@ classifiers = [
 ]
 dependencies = [
     "requests>=2.32.2",
+    # urllib3 2.6 inflates a compressed answer at most a read's worth at a time, so a
+    # small compressed body cannot expand past the AI answer size cap in one read.
+    # 2.7 needs Python 3.10; the Python 3.9 install keeps whatever requests pulls in.
+    "urllib3>=2.6.0; python_version >= '3.10'",
     "cryptography>=41.0",
     "PySocks>=1.7.1",
 ]
@@ -44,6 +48,9 @@ qr = ["qrcode>=7.0"]
 web = ["psycopg[binary]>=3.1"]
 # Personal Telegram accounts as a chat channel (MTProto). Bots need nothing extra.
 telegram = ["telethon>=1.36"]
+# Claude (Anthropic) for the auto-reply AI. The SDK needs Python 3.10 or newer;
+# without it the Claude provider shows as unavailable.
+claude = ["anthropic>=2.12,<3; python_version >= '3.10'"]
 test = ["pytest>=7.0"]
 dev = [
     "pytest>=7.0",
@@ -53,6 +60,7 @@ dev = [
     "pre-commit>=3.5",
     "build>=1.0",
     "twine>=5.0",
+    "anthropic>=2.12,<3; python_version >= '3.10'",
 ]
 
 [project.urls]

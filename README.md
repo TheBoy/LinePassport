@@ -41,7 +41,11 @@ Prefer Python? Jump to [Quick start](#quick-start) below.
 - **Response recording** — capture, redact and export every request/response.
 - **CLI** — `python -m okline …` to call any endpoint from the shell.
 - **LinePassport web app** — team inbox with KPI, AI auto-reply and scheduled
-  sends, an **All chats** page with every LINE, LINE OA and Telegram account in one list
+  sends (auto-reply uses each shop's own key for Gemini, Claude, ChatGPT, GLM,
+  DeepSeek, Qwen, Grok, Mistral, Kimi, OpenRouter or any OpenAI-compatible
+  `https://` endpoint; Claude needs Python 3.10+ and `pip install "okline[claude]"`;
+  see [docs/web.md](docs/web.md#ai-for-auto-reply)),
+  an **All chats** page with every LINE, LINE OA and Telegram account in one list
   (each chat labelled with its channel and account), plus
   **Customers (CRM)**: customer cards across accounts, renaming customers
   from the chat (their own name stays visible), chat assignment and status,

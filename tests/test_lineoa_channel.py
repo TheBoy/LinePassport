@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -470,3 +471,29 @@ def test_chat_routes_serve_line_oa_accounts(live):
     inbox = session.get(f"{base}/api/inbox", timeout=5).json()
     row = next(chat for chat in inbox["chats"] if chat["accountId"] == account_id)
     assert row["channel"] == "line" and row["name"] == "Toon"
+
+
+def test_a_sign_in_that_fails_shows_its_error_when_the_log_cannot_be_written(
+    state, monkeypatch
+):
+    # The QR expires while the server log is a file on a full disk: the page shows the
+    # error, instead of the expired QR (the sign-in ended on its log line before).
+    monkeypatch.setattr(webapp, "OAManagerQrLogin", FakeLogin)
+    owner = _owner(state)
+
+    class FullDisk:
+        def write(self, text):
+            raise OSError(28, "No space left on device")
+
+        def flush(self):
+            raise OSError(28, "No space left on device")
+
+    FakeLogin.result = _result(HOTMAN)
+    FakeLogin.error = OAManagerLoginError("The QR code expired. Try again.", "expired")
+    monkeypatch.setattr(sys, "stdout", FullDisk())
+    try:
+        state.oa_login_start({}, owner)
+        login = _wait_for(state, owner, {"error"})
+    finally:
+        FakeLogin.error = None
+    assert login["errorCode"] == "line_oa_expired" and login["qrImage"] is None

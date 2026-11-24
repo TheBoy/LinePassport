@@ -13,7 +13,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY . .
 
-RUN pip install --no-cache-dir ".[web,qr,telegram]" \
+RUN pip install --no-cache-dir ".[web,qr,telegram,claude]" \
     && useradd --create-home --uid 10001 linepassport \
     && mkdir -p /data \
     && chown -R linepassport:linepassport /data

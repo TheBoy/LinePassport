@@ -296,3 +296,92 @@ def test_client_errors_never_include_the_token():
     with pytest.raises(TelegramApiError):
         client.download("../../etc/passwd")
     assert TOKEN not in repr(client)
+
+
+def test_a_button_pressed_while_the_store_is_down_is_answered_and_not_done_later(
+    state, monkeypatch
+):
+    # The chat a button points at cannot be looked up (the database is down): the
+    # press is answered at once with a note to press again, and nothing is done later.
+    owner = _owner_with_account(state)
+    state.staff_notifier.configure(owner["id"], TOKEN)
+    chat = _link(state, owner)
+    now = int(time.time() * 1000)
+    state.crm.ingest(
+        owner_id=owner["id"], account_id="acct", channel="line", chat_id=CUSTOMER,
+        contact={"externalId": CUSTOMER, "name": "Nok"},
+        messages=[{"externalId": "m1", "direction": "in", "text": "มีของไหมคะ", "at": now}],
+    )
+    FakeBot.outbox.clear()
+    state._dispatch_push("acct", [CUSTOMER])
+    _flush(state)
+    claim = FakeBot.outbox[-1]["buttons"][0][0]["callback_data"]
+    real_get = state.store.get
+    down = {"on": True}
+
+    def store_get(key, default):
+        if down["on"] and key.startswith("telegram_notify_map:"):
+            raise OSError("connection to the database was lost")
+        return real_get(key, default)
+
+    monkeypatch.setattr(state.store, "get", store_get)
+    press = {"update_id": 3, "callback_query": {"id": "cb1", "data": claim, "from": {"id": chat}}}
+    state.staff_notifier.handle_update(owner["id"], FakeBot(TOKEN), press)  # no raise
+    assert FakeBot.answers[-1] == ("cb1", "ตอนนี้ยังทำไม่ได้ ลองกดอีกครั้งในอีกสักครู่")
+    assert state.crm.conversation_for_chat("acct", CUSTOMER)["assigned_to"] == ""
+    down["on"] = False
+    state.staff_notifier.handle_update(owner["id"], FakeBot(TOKEN), {**press, "update_id": 4})
+    assert FakeBot.answers[-1][1].startswith("รับเรื่องแล้ว")
+
+
+def test_a_button_pressed_behind_a_held_reply_is_not_done_later(state, monkeypatch):
+    # The press waited behind a staff reply the bot could not handle (the database was
+    # down): when it comes it is not done, since its chat may have changed, and the
+    # staff member is told to press it again.
+    owner = _owner_with_account(state)
+    state.staff_notifier.configure(owner["id"], TOKEN)
+    chat = _link(state, owner)
+    now = int(time.time() * 1000)
+    state.crm.ingest(
+        owner_id=owner["id"], account_id="acct", channel="line", chat_id=CUSTOMER,
+        contact={"externalId": CUSTOMER, "name": "Nok"},
+        messages=[{"externalId": "m1", "direction": "in", "text": "มีของไหมคะ", "at": now}],
+    )
+    FakeBot.outbox.clear()
+    state._dispatch_push("acct", [CUSTOMER])
+    _flush(state)
+    close = FakeBot.outbox[-1]["buttons"][0][1]["callback_data"]
+    FakeBot.outbox.clear()
+    press = {"update_id": 7, "callback_query": {"id": "cb7", "data": close, "from": {"id": chat}}}
+    state.staff_notifier.handle_update(owner["id"], FakeBot(TOKEN), press, waited=120.0)
+    assert FakeBot.answers[-1] == ("cb7", "ตอนนี้ยังทำไม่ได้ ลองกดอีกครั้งในอีกสักครู่")
+    assert FakeBot.outbox and FakeBot.outbox[-1]["chat"] == chat
+    assert state.crm.conversation_for_chat("acct", CUSTOMER)["status"] != "closed"
+
+
+def test_a_button_pressed_while_the_chats_cannot_be_written_says_to_press_again(
+    state, monkeypatch
+):
+    import sqlite3
+
+    owner = _owner_with_account(state)
+    state.staff_notifier.configure(owner["id"], TOKEN)
+    chat = _link(state, owner)
+    now = int(time.time() * 1000)
+    state.crm.ingest(
+        owner_id=owner["id"], account_id="acct", channel="line", chat_id=CUSTOMER,
+        contact={"externalId": CUSTOMER, "name": "Nok"},
+        messages=[{"externalId": "m1", "direction": "in", "text": "มีของไหมคะ", "at": now}],
+    )
+    FakeBot.outbox.clear()
+    state._dispatch_push("acct", [CUSTOMER])
+    _flush(state)
+    claim = FakeBot.outbox[-1]["buttons"][0][0]["callback_data"]
+
+    def locked(user, account_id, chat_id):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(state, "notify_claim", locked)
+    press = {"update_id": 8, "callback_query": {"id": "cb8", "data": claim, "from": {"id": chat}}}
+    state.staff_notifier.handle_update(owner["id"], FakeBot(TOKEN), press)
+    assert FakeBot.answers[-1] == ("cb8", "ตอนนี้ยังทำไม่ได้ ลองกดอีกครั้งในอีกสักครู่")

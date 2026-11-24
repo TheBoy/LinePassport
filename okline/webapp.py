@@ -8,6 +8,7 @@ so it can run from a source checkout without adding a web framework dependency.
 from __future__ import annotations
 
 import base64
+import bisect
 import copy
 import datetime as _dt
 import hashlib
@@ -24,10 +25,10 @@ import secrets
 import socket
 import threading
 import time
-import traceback
 import unicodedata
 import uuid
 import webbrowser
+from collections import deque
 from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -39,21 +40,37 @@ from typing import Any, Callable, Optional, cast
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
+import urllib3
 from cryptography.fernet import Fernet, InvalidToken
 from requests.adapters import HTTPAdapter
+from requests.structures import CaseInsensitiveDict
 from urllib3 import HTTPConnectionPool, HTTPSConnectionPool
 
 from . import __version__
 from . import e2ee_crypto as e2ee_frame
 from ._util import is_mid
+from ._util import print_exc_quietly as _print_exc_quietly
+from ._util import print_quietly as _print_quietly
+from .ai_providers import (
+    AIClient,
+    AIProvider,
+    Transport,
+    get_provider,
+    make_ai_client,
+    normalize_custom_base_url,
+    provider_available,
+    provider_registry,
+)
 from .assistant import (
-    DEFAULT_GEMINI_CHAT_MODEL,
-    DEFAULT_GEMINI_EMBEDDING_MODEL,
-    GeminiClient,
-    OllamaClient,
-    OllamaError,
+    CHAT_DEADLINE_SECONDS,
+    CONNECT_TIMEOUT_SECONDS,
+    MAX_AI_EMBEDDING_BYTES,
+    MAX_AI_RESPONSE_BYTES,
+    MAX_EMBEDDING_DIMENSIONS,
+    AssistantError,
+    DeadlineWatchdog,
+    _read_limited,
     chunk_markdown,
-    normalize_ollama_base_url,
     rank_chunks,
 )
 from .client import OkLine
@@ -3748,6 +3765,21 @@ INDEX_HTML = r"""<!doctype html>
       color: var(--warn);
       font-size: 13px;
     }
+    /* AI for auto reply: one column at every width; the key box keeps Show beside it. */
+    .brain-field { display: grid; gap: 5px; min-width: 0; }
+    .brain-key-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .brain-key-row > input { flex: 1 1 auto; min-width: 0; }
+    .brain-key-row > button { flex: 0 0 auto; width: auto; }
+    /* A test or Refresh models result can hold a long provider message: it wraps
+       inside the card instead of running off it as a one-line badge. */
+    .brain-status {
+      display: inline-block;
+      max-width: 100%;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      border-radius: 8px;
+      text-align: start;
+    }
     .stepper { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
     .stepper button {
       display: flex;
@@ -4688,7 +4720,7 @@ INDEX_HTML = r"""<!doctype html>
                 <div class="section-head">
                   <div>
                     <h2 data-i18n="assistant.title">Ask LinePassport AI</h2>
-                    <span class="muted" data-i18n="assistant.subtitle">Answers use global knowledge and your private Knowledge / RAG.</span>
+                    <span class="muted" data-i18n="assistant.subtitle">Answers use your shop info and the shared info the system administrator added.</span>
                   </div>
                   <div class="row compact">
                     <span class="pill" id="assistantStatusPill" data-i18n="assistant.checking">Checking</span>
@@ -4725,6 +4757,7 @@ INDEX_HTML = r"""<!doctype html>
               </div>
 
               <div id="assistantAutoReplyView" data-assistant-view="auto-reply">
+                <div class="ux-warning hidden" id="assistantAiNotice" style="margin-bottom:12px" data-i18n="brain.notice">LinePassport no longer offers the shared AI or AI installed on your own computer. Pick an AI provider and add your own API key. If auto reply was on, it has been switched off for now: save, then switch it on again.</div>
                 <section class="ux-card hidden" id="assistantSetup">
                   <div class="ux-row space">
                     <div>
@@ -4734,7 +4767,7 @@ INDEX_HTML = r"""<!doctype html>
                     <button class="ux-help" type="button" data-assistant-help="true" data-i18n-title="common.help" title="Help">?</button>
                   </div>
                   <ol class="setup-steps" style="margin-top:12px">
-                    <li class="setup-step" id="setupStep1"><b>1</b><div class="ux-grid"><div><strong data-i18n="setup.step1">Choose the AI brain</strong><div class="ux-muted" data-i18n="setup.step1_hint">A Gemini API key is easiest. Ollama runs on your own computer.</div></div><div id="setupBrainSlot"></div></div></li>
+                    <li class="setup-step" id="setupStep1"><b>1</b><div class="ux-grid"><div><strong data-i18n="setup.step1">Choose the AI brain</strong><div class="ux-muted" data-i18n="setup.step1_hint">Pick an AI provider and add its API key. Gemini is the easiest to start with.</div></div><div id="setupBrainSlot"></div></div></li>
                     <li class="setup-step" id="setupStep2"><b>2</b><div class="ux-grid"><div><strong data-i18n="setup.step2">Add your shop info</strong><div class="ux-muted" data-i18n="setup.step2_hint">Opening hours, menu and prices, how to order and pay.</div></div><div><button id="setupOpenKnowledge" type="button" data-i18n="setup.open_knowledge">Open shop info</button></div></div></li>
                     <li class="setup-step" id="setupStep3"><b>3</b><div class="ux-grid"><div><strong data-i18n="setup.step3">Try a conversation</strong><div class="ux-muted" data-i18n="setup.step3_hint">Ask what a customer would ask and check where the answer came from.</div></div><div><button id="setupOpenChat" type="button" data-i18n="setup.open_chat">Try it</button></div></div></li>
                   </ol>
@@ -4772,6 +4805,7 @@ INDEX_HTML = r"""<!doctype html>
                     </div>
                   </div>
                   <div class="section-body">
+                    <div class="ux-warning hidden" id="assistantAutoReplyAiRemoved" style="margin-bottom:12px" data-i18n="assistant.auto_reply_ai_removed">Auto reply on this account was switched off when the shared AI and AI installed on your own computer were removed. Once your own AI works, switch auto reply on again.</div>
                     <div class="assistant-auto-reply-overview">
                       <div class="assistant-auto-reply-account">
                         <span class="muted" data-i18n="assistant.auto_reply_account">บัญชี</span>
@@ -4958,7 +4992,7 @@ INDEX_HTML = r"""<!doctype html>
                   <section class="help-card">
                     <h3 data-i18n="help.common.steps">ทำตามนี้</h3>
                     <ol class="help-steps">
-                      <li><span class="help-num" aria-hidden="true">1</span><div><strong data-i18n="help.assistant.s1_title">เลือก AI ที่ใช้ตอบ</strong><p data-i18n="help.assistant.s1_body">ใส่ Gemini API key (ง่ายที่สุด) หรือใช้ Ollama บนเครื่องของคุณ</p></div></li>
+                      <li><span class="help-num" aria-hidden="true">1</span><div><strong data-i18n="help.assistant.s1_title">เลือก AI ที่ใช้ตอบ</strong><p data-i18n="help.assistant.s1_body">เลือกผู้ให้บริการ AI เช่น Gemini, Claude หรือ ChatGPT แล้วใส่ API key ของคุณเอง (Gemini เริ่มง่ายที่สุด)</p></div></li>
                       <li><span class="help-num" aria-hidden="true">2</span><div><strong data-i18n="help.assistant.s2_title">ใส่ข้อมูลร้าน</strong><p data-i18n="help.assistant.s2_body">เวลาเปิด–ปิด เมนูและราคา วิธีสั่งและจ่าย แยกเป็นหัวข้อ เขียนข้อละบรรทัด</p></div></li>
                       <li><span class="help-num" aria-hidden="true">3</span><div><strong data-i18n="help.assistant.s3_title">ทดลองคุย</strong><p data-i18n="help.assistant.s3_body">ถามแบบที่ลูกค้าถามจริง แล้วดูว่า AI ตอบถูกและอ้างข้อมูลถูกหัวข้อ</p></div></li>
                       <li><span class="help-num" aria-hidden="true">4</span><div><strong data-i18n="help.assistant.s4_title">เปิดสวิตช์ตอบอัตโนมัติ</strong><p data-i18n="help.assistant.s4_body">เลือกว่าจะตอบเพื่อน กลุ่ม หรือทั้งสองแบบ แล้วเปิดสวิตช์</p></div></li>
@@ -6288,7 +6322,7 @@ INDEX_HTML = r"""<!doctype html>
       "tabs.assistant": {th: "ตอบอัตโนมัติ", en: "AI Chat Bot"},
       "bot.nav_ai_settings": {th: "ตั้งค่า AI", en: "AI Settings"},
       "assistant.title": {th: "ถาม LinePassport AI", en: "Ask LinePassport AI"},
-      "assistant.subtitle": {th: "คำตอบอ้างอิงจาก ข้อมูลส่วนกลางและ ข้อมูลร้านของคุณ", en: "Answers use global knowledge and your private Knowledge / RAG."},
+      "assistant.subtitle": {th: "คำตอบอ้างอิงจากข้อมูลร้านของคุณ และข้อมูลกลางที่ผู้ดูแลระบบเพิ่มไว้", en: "Answers use your shop info and the shared info the system administrator added."},
       "assistant.checking": {th: "กำลังตรวจสอบ", en: "Checking"},
       "assistant.loading": {th: "กำลังโหลดคำถาม...", en: "Loading questions..."},
       "assistant.question_label": {th: "คำถาม", en: "Question"},
@@ -6305,7 +6339,8 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.answer_saved": {th: "บันทึกคำตอบและเพิ่มเข้า ข้อมูลร้าน แล้ว", en: "Answer saved to Knowledge."},
       "assistant.ready": {th: "พร้อมใช้งาน", en: "Ready"},
       "assistant.not_configured": {th: "ยังไม่ได้ตั้งค่า", en: "Not configured"},
-      "assistant.asking": {th: "กำลังถาม Ollama...", en: "Asking Ollama..."},
+      "assistant.asking": {th: "กำลังถาม AI...", en: "Asking the AI..."},
+      "assistant.not_logged": {th: "บันทึกคำถามนี้ลงประวัติคำถามไม่ได้", en: "This question could not be saved to the question history."},
       "assistant.nav_chat": {th: "แชท", en: "Chat"},
       "assistant.nav_auto_reply": {th: "ตอบอัตโนมัติ", en: "Auto Reply"},
       "assistant.nav_knowledge": {th: "ข้อมูลร้าน", en: "Knowledge / RAG"},
@@ -6344,6 +6379,8 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.auto_reply_login_required": {th: "รอเชื่อมต่อบัญชีใหม่", en: "Waiting for the account to reconnect"},
       "assistant.auto_reply_ai_ready": {th: "AI พร้อม", en: "AI ready"},
       "assistant.auto_reply_ai_missing": {th: "ยังไม่ได้ตั้งค่า AI", en: "AI not configured"},
+      "assistant.auto_reply_ai_removed": {th: "ตอบอัตโนมัติของบัญชีนี้ถูกปิดไว้ตอนที่ระบบเลิกให้บริการ AI ส่วนกลางและ AI ที่ติดตั้งบนเครื่องของคุณเอง เมื่อ AI ของคุณใช้งานได้แล้ว ให้เปิดสวิตช์ตอบอัตโนมัติอีกครั้ง", en: "Auto reply on this account was switched off when the shared AI and AI installed on your own computer were removed. Once your own AI works, switch auto reply on again."},
+      "assistant.source_shared": {th: "ข้อมูลกลางจากผู้ดูแลระบบ", en: "Shared info from the system administrator"},
       "assistant.auto_reply_last_poll": {th: "ตรวจข้อความล่าสุด", en: "Last checked"},
       "assistant.auto_reply_last_reply": {th: "ตอบล่าสุด", en: "Last reply"},
       "assistant.auto_reply_error": {th: "ข้อผิดพลาด", en: "Error"},
@@ -6376,6 +6413,7 @@ INDEX_HTML = r"""<!doctype html>
       "assistant.api_edit": {th: "แก้ไข", en: "Edit"},
       "assistant.api_delete": {th: "ลบ", en: "Delete"},
       "assistant.api_saved": {th: "บันทึก API ข้อมูลร้าน แล้ว", en: "Knowledge API saved."},
+      "assistant.api_saved_key_cleared": {th: "บันทึก API ข้อมูลร้านแล้ว แต่ไม่ได้เก็บ key เดิมไว้ เพราะที่อยู่ใหม่เป็นเซิร์ฟเวอร์อื่น ถ้าต้องใช้ key ให้ใส่อีกครั้ง", en: "Knowledge API saved. Its saved key was not kept, because the new address is another server: type the key again if it needs one."},
       "assistant.api_synced": {th: "ดึงข้อมูลและอัปเดต AIแล้ว", en: "Source synced and indexed."},
       "assistant.api_deleted": {th: "ลบ API ข้อมูลร้าน แล้ว", en: "Knowledge API deleted."},
       "assistant.api_delete_confirm": {th: "ลบ API ข้อมูลร้าน นี้?", en: "Delete this Knowledge API source?"},
@@ -6403,6 +6441,7 @@ INDEX_HTML = r"""<!doctype html>
       "auth.hint_register": {th: "สมัครด้วยอีเมลและเริ่มใช้งานในพื้นที่ส่วนตัว จากนั้นเพิ่ม LINE Account และตั้งค่าทุกอย่างได้เอง", en: "Register with email to get a private workspace, then add your own LINE accounts and settings."},
       "auth.email_invalid": {th: "กรอกอีเมลให้ถูกต้อง", en: "Enter a valid email address."},
       "auth.offline": {th: "ติดต่อเซิร์ฟเวอร์ไม่ได้ — กำลังลองใหม่…", en: "Cannot reach the server — retrying…"},
+      "auth.server_error": {th: "เซิร์ฟเวอร์มีปัญหา — กำลังลองใหม่…", en: "The server ran into a problem — retrying…"},
       "auth.password_mismatch": {th: "รหัสผ่านไม่ตรงกัน", en: "Passwords do not match."},
       "topbar.home": {th: "\u0e01\u0e25\u0e31\u0e1a\u0e2b\u0e19\u0e49\u0e32\u0e41\u0e23\u0e01", en: "Home"},
       "topbar.account": {th: "บัญชี LINE", en: "LINE Account"},
@@ -6560,7 +6599,14 @@ INDEX_HTML = r"""<!doctype html>
       "errors.proxy_pool_invalid": {th: "เลือก pool ของ Litport ที่มี IP ไทย", en: "Choose a Litport pool with Thai IPs."},
       "errors.proxy_provider_unknown": {th: "ไม่รู้จักผู้ให้บริการพร็อกซีนี้ โหลดหน้าใหม่แล้วเลือกอีกครั้ง", en: "Unknown proxy provider. Reload the page and choose again."},
       "errors.ai_key_invalid": {th: "API key มีตัวอักษรที่ key ไม่มี คัดลอก key มาใหม่อีกครั้ง", en: "The API key has characters an API key cannot have. Copy it again."},
-      "errors.ollama_url_invalid": {th: "URL ของ Ollama ต้องขึ้นต้นด้วย http:// หรือ https:// และไม่มีชื่อผู้ใช้ รหัสผ่าน ? หรือ #", en: "The Ollama URL must start with http:// or https:// and have no username, password, ? or #."},
+      "errors.ai_settings_invalid": {th: "ตั้งค่า AI ไม่ถูกต้อง โหลดหน้านี้ใหม่แล้วเลือกผู้ให้บริการ AI อีกครั้ง", en: "The AI settings are not valid. Reload the page and pick the AI provider again."},
+      "errors.ai_base_url_invalid": {th: "Base URL ต้องขึ้นต้นด้วย https:// และไม่มีชื่อผู้ใช้ รหัสผ่าน ช่องว่าง ? หรือ # ถ้าชื่อโดเมนเป็นภาษาไทย ให้ใส่แบบ xn--", en: "The base URL must start with https:// and have no username, password, spaces, ? or #. Type a Thai domain name in its xn-- form."},
+      "errors.ai_base_url_required": {th: "กรอก Base URL ของ Custom API ก่อน", en: "Enter the Custom API's base URL first."},
+      "errors.ai_base_url_not_found": {th: "ไม่พบเซิร์ฟเวอร์ตามชื่อโดเมนใน Base URL นี้ ตรวจดูว่าสะกดถูกต้อง", en: "No server was found for the domain name in this base URL. Check the spelling."},
+      "errors.ai_base_url_blocked": {th: "Base URL นี้ชี้ไปที่ที่อยู่ภายในหรือที่อยู่ส่วนตัว ใช้ได้เฉพาะที่อยู่สาธารณะบนอินเทอร์เน็ต", en: "This base URL points to a private or internal address. Use a public internet address."},
+      "errors.ai_model_required": {th: "พิมพ์ชื่อโมเดลสำหรับตอบก่อน", en: "Type the chat model name first."},
+      "errors.ai_provider_unavailable": {th: "เซิร์ฟเวอร์นี้ยังใช้ผู้ให้บริการ AI นี้ไม่ได้ เลือกผู้ให้บริการอื่น หรือให้ผู้ดูแลเซิร์ฟเวอร์ติดตั้งส่วนที่ต้องใช้", en: "This server cannot use this AI provider yet. Pick another one, or ask the server admin to install what it needs."},
+      "errors.ai_unavailable": {th: "AI ไม่ตอบในตอนนี้ ลองใหม่อีกครั้ง หรือตรวจ API key และโมเดลที่ ตั้งค่า → AI", en: "The AI did not answer. Try again, or check the API key and model in Settings → AI."},
       "users.title": {th: "ผู้ใช้และสิทธิ์", en: "Users & Access"},
       "users.subtitle": {th: "กำหนดบทบาทและเลือกบัญชีที่ผู้ใช้แต่ละคนเข้าถึงได้", en: "Assign roles and choose which accounts each user can access."},
       "users.create": {th: "สร้างผู้ใช้", en: "Create User"},
@@ -6788,7 +6834,7 @@ INDEX_HTML = r"""<!doctype html>
       "scheduler.clear_stuck": {th: "เคลียร์งานค้าง", en: "Clear stuck jobs"},
       "scheduler.clear_stuck_count": {th: "เคลียร์งานค้าง ({n})", en: "Clear stuck jobs ({n})"},
       "scheduler.clear_stuck_title": {th: "เคลียร์งานค้าง?", en: "Clear stuck jobs?"},
-      "scheduler.clear_stuck_note": {th: "ระบบจะปลดสถานะกำลังทำงาน/ผิดพลาดของ {n} งานในบัญชี LINE ที่เลือก โดยไม่ลบตารางเวลา", en: "This resets the running/error state for {n} job(s) in the selected LINE account without deleting schedules."},
+      "scheduler.clear_stuck_note": {th: "ระบบจะปลดสถานะกำลังทำงาน/ผิดพลาดของ {n} งานในบัญชี LINE ที่เลือก โดยไม่ลบตารางเวลา งานที่กด “ส่งตอนนี้” ไว้และยังรอคิวส่งอยู่จะไม่ถูกส่ง", en: "This resets the running/error state for {n} job(s) in the selected LINE account without deleting schedules. A Send now still waiting its turn is not sent."},
       "scheduler.next": {th: "ครั้งถัดไป", en: "next"},
       "scheduler.sent": {th: "ส่งแล้ว", en: "sent"},
       "scheduler.error": {th: "ข้อผิดพลาด", en: "error"},
@@ -6929,7 +6975,6 @@ INDEX_HTML = r"""<!doctype html>
       "errors.ai_quota": {th: "โควต้า Google Gemini หมด — รุ่นฟรีมักสร้างรูปไม่ได้ (โควต้า = 0) ต้องเปิดการเรียกเก็บเงิน (billing) บนคีย์ Google หรือรอสักครู่แล้วลองใหม่", en: "Google Gemini quota exceeded — the free tier often can't generate images (quota 0). Enable billing on your Google API key, or try again later."},
       "errors.fal_quota": {th: "เครดิตหรือโควต้า fal.ai ไม่เพียงพอ โปรดตรวจสอบ Billing และยอดคงเหลือของบัญชี fal.ai", en: "fal.ai credit or quota is insufficient. Check billing and the available balance on your fal.ai account."},
       "errors.ai_key_rejected": {th: "API Key ถูกปฏิเสธหรือไม่มีสิทธิ์ใช้งาน — ตรวจสอบคีย์และสิทธิ์การใช้งานของผู้ให้บริการ", en: "The API key was rejected or lacks access — check the key and your provider access."},
-      "errors.assistant_not_configured": {th: "ยังไม่ได้ตั้งค่า Ollama และโมเดล AI ที่หน้าผู้ดูแลระบบ", en: "Ollama and an AI model have not been configured on the God page."},
       "errors.invalid_auto_reply_setting": {th: "ค่าตั้งตอบอัตโนมัติไม่ถูกต้อง", en: "Auto reply settings are invalid."},
       "errors.auto_reply_group_required": {th: "เลือกอย่างน้อย 1 กลุ่ม หรือเปลี่ยนเป็นทุกกลุ่ม", en: "Select at least one group or choose All groups."},
       "errors.email_invalid": {th: "กรอกอีเมลให้ถูกต้อง", en: "Enter a valid email address."},
@@ -6939,6 +6984,10 @@ INDEX_HTML = r"""<!doctype html>
       "errors.password_too_short": {th: "รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร", en: "Password must be at least 8 characters."},
       "errors.password_too_long": {th: "รหัสผ่านต้องไม่เกิน 128 ตัวอักษร", en: "Password must not exceed 128 characters."},
       "errors.server_error": {th: "เกิดข้อผิดพลาดในระบบ ลองใหม่อีกครั้ง", en: "Something went wrong. Please try again."},
+      "errors.state_file_repaired": {th: "ไฟล์ข้อมูลของ LinePassport ถูกแก้ไขระหว่างที่ระบบทำงาน จึงไม่บันทึกทับไฟล์นั้น โปรดรีสตาร์ท LinePassport", en: "A LinePassport data file was changed while LinePassport was running, so it is not saved over. Restart LinePassport."},
+      "errors.state_file_unreadable": {th: "ไฟล์ข้อมูลของ LinePassport อ่านไม่ได้ และเก็บสำเนาไว้ไม่ได้ (ดิสก์อาจเต็ม) จึงไม่บันทึกทับไฟล์นั้น โปรดเพิ่มพื้นที่ว่างบนดิสก์แล้วลองอีกครั้ง", en: "A LinePassport data file cannot be read and no copy of it could be kept (the disk may be full), so it is not saved over. Make room on the disk and try again."},
+      "errors.server_stopping": {th: "ยังไม่ได้ส่ง เพราะ LinePassport กำลังปิดอยู่ ลองส่งอีกครั้งเมื่อเปิดกลับมาแล้ว", en: "Not sent: LinePassport is stopping. Try again once it runs again."},
+      "errors.schedules_unsaved": {th: "ยังไม่ได้ส่ง เพราะตอนนี้บันทึกงานส่งตามเวลาไม่ได้ โปรดลองอีกครั้งในอีกสักครู่", en: "Not sent: the schedules cannot be saved right now. Try again in a moment."},
       "errors.line_login_required": {th: "ต้องเข้าสู่ระบบ LINE ใหม่", en: "LINE login is required again."},
       "errors.line_account_mismatch": {th: "บัญชี LINE ที่สแกนไม่ตรงกับบัญชีเดิม กรุณาสแกนบัญชีเดิม หรือกดย้อนกลับแล้วเพิ่มเป็นบัญชีใหม่", en: "The scanned LINE account does not match. Scan the original account, or go back and add this as a new account."},
       "errors.network": {th: "ติดต่อเซิร์ฟเวอร์ไม่ได้", en: "Cannot reach the server."},
@@ -6961,6 +7010,7 @@ INDEX_HTML = r"""<!doctype html>
       "accounts.delete_customers_some": {th: "ลูกค้าที่คุยกับบัญชีนี้บัญชีเดียวจะถูกลบไปด้วย พร้อมโน้ต งาน แท็ก และประวัติ ลบแล้วกู้คืนไม่ได้", en: "Customers who chat only with this account are deleted too, with their notes, tasks, tags and history. This cannot be undone."},
       "toast.schedule_created": {th: "สร้างตารางเวลาแล้ว", en: "Schedule created"},
       "toast.schedule_sent": {th: "ส่งตามตารางแล้ว", en: "Schedule sent"},
+      "toast.schedule_queued": {th: "เริ่มส่งแล้ว จะทยอยส่งให้ทีละแชท", en: "Sending started: it goes to each chat in turn"},
       "toast.stuck_jobs_cleared": {th: "เคลียร์งานค้างแล้ว {n} งาน", en: "Cleared {n} stuck job(s)"},
       "toast.no_stuck_jobs": {th: "ไม่มีงานค้างให้เคลียร์", en: "No stuck jobs to clear"},
       "toast.select_target_first": {th: "เลือกแชทหรือกรอกปลายทางก่อน", en: "Select a chat or enter a target first"},
@@ -7017,6 +7067,8 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.schedule.run.start": {th: "เริ่มส่งตามเวลา", en: "Bot run started"},
       "botlog.action.schedule.run.success": {th: "ส่งสำเร็จ", en: "Send succeeded"},
       "botlog.action.schedule.run.error": {th: "ส่งผิดพลาด", en: "Send failed"},
+      "botlog.action.schedule.run.missed": {th: "ข้ามรอบที่ส่งไม่ทันเวลา", en: "Missed run not sent"},
+      "botlog.action.schedule.run.already_sent": {th: "ไม่ส่งซ้ำในช่วงเวลาเดิม", en: "Not sent twice in one window"},
       "botlog.action.content.text": {th: "เตรียมข้อความ", en: "Text prepared"},
       "botlog.action.content.image.uploaded": {th: "เตรียมรูปที่อัปโหลด", en: "Uploaded image prepared"},
       "botlog.action.content.image.fetch": {th: "ดึงรูปจาก URL", en: "Image fetch started"},
@@ -7051,6 +7103,7 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.ai.auto_reply.sent": {th: "ส่งคำตอบ AI สำเร็จ", en: "AI reply sent"},
       "botlog.action.ai.auto_reply.rate_limit": {th: "หยุดตอบข้อความถี่เกินกำหนด", en: "Auto reply rate limited"},
       "botlog.action.ai.auto_reply.error": {th: "ตอบอัตโนมัติผิดพลาด", en: "Automatic LINE reply failed"},
+      "botlog.action.ai.auto_reply.dropped": {th: "ข้ามข้อความที่รอ AI ตอบ (มีข้อความรอมากเกินไป)", en: "Waiting AI reply dropped (too many waiting)"},
       "botlog.chat_contact": {th: "เพื่อน", en: "Contact"},
       "botlog.chat_group": {th: "กลุ่ม", en: "Group"},
       "botlog.chat_unknown": {th: "แชท", en: "Chat"},
@@ -8722,7 +8775,15 @@ INDEX_HTML = r"""<!doctype html>
         console.error("LinePassport status error:", err && (err.raw || err.message));
         $("authPanel").classList.remove("hidden");
         $("appShell").classList.add("app-hidden");
-        $("webAuthHint").textContent = t("auth.offline");
+        // Not reached, or reached and failing: a refused save says what to do.
+        const code = (err && err.code) || "network";
+        let hint = t("auth.offline");
+        if (code !== "network") {
+          hint = code !== "server_error" && I18N["errors." + code]
+            ? t("errors." + code)
+            : t("auth.server_error");
+        }
+        $("webAuthHint").textContent = hint;
         $("webAuthButton").disabled = true;
         clearTimeout(state.authRetryTimer);
         state.authRetryTimer = setTimeout(() => refreshWebAuth(), 3000);
@@ -11041,8 +11102,11 @@ INDEX_HTML = r"""<!doctype html>
       try {
         const data = await api(`/api/schedules?${accountQuery(accountId)}`);
         const schedules = data.schedules || [];
-        const schedulesChanged = !sameData(state.schedules, schedules);
+        const unsaved = scheduleSaveState(data);
+        const schedulesChanged = !sameData(state.schedules, schedules)
+          || !sameData(state.schedulesUnsaved, unsaved);
         state.schedules = schedules;
+        state.schedulesUnsaved = unsaved;
         if (data.accounts && !sameData(state.accounts, data.accounts)) {
           state.accounts = data.accounts;
           renderAccounts();
@@ -11051,6 +11115,14 @@ INDEX_HTML = r"""<!doctype html>
       } finally {
         state.scheduleLoading = false;
       }
+    }
+
+    // Whether the server cannot save the schedules now (none is sent until it can),
+    // with the ids of those that went out meanwhile.
+    function scheduleSaveState(data) {
+      return data && data.schedulesUnsaved
+        ? {sent: Array.isArray(data.unsavedSent) ? data.unsavedSent : []}
+        : null;
     }
 
     function isStuckSchedule(job) {
@@ -11271,6 +11343,7 @@ INDEX_HTML = r"""<!doctype html>
       btn.disabled = true;
       const data = await post("/api/schedules/clear-stuck", {accountId});
       state.schedules = data.schedules || [];
+      state.schedulesUnsaved = scheduleSaveState(data);
       renderSchedules();
       await loadBotLogs();
       toast(t("toast.stuck_jobs_cleared", {n: data.cleared || 0}));
@@ -11508,8 +11581,8 @@ INDEX_HTML = r"""<!doctype html>
       const accountId = requireAccount();
       if (!accountId) return;
       if (!confirm(t("confirm.run_now"))) return;
-      await post("/api/schedules/run-now", {id, accountId});
-      toast(t("toast.schedule_sent"));
+      const data = await post("/api/schedules/run-now", {id, accountId});
+      toast(t(data && data.queued ? "toast.schedule_queued" : "toast.schedule_sent"));
       await loadSchedules();
       await loadBotLogs();
     }
@@ -11572,7 +11645,26 @@ INDEX_HTML = r"""<!doctype html>
       });
     }
 
-    // ---- Ollama assistant ---------------------------------------------
+    // ---- AI assistant -------------------------------------------------
+    // What an answer came from: the shop's own sources by name (with their score when
+    // asked), then the system administrator's shared info once under one label. Its
+    // file and source names are not the shop's, and its scores are on another scale.
+    function assistantSourceLabels(sources, withScore) {
+      const labels = [];
+      let shared = false;
+      for (const source of sources || []) {
+        if (!source) continue;
+        if (source.scope === "global") {
+          shared = true;
+          continue;
+        }
+        const name = source.name || t("kb.title");
+        labels.push(withScore ? `${name} (${Math.round(Number(source.score || 0) * 100)}%)` : name);
+      }
+      if (shared) labels.push(t("assistant.source_shared"));
+      return withScore ? labels : [...new Set(labels)];
+    }
+
     function renderAssistantHistory(items) {
       const root = $("assistantHistory");
       root.replaceChildren();
@@ -11593,7 +11685,7 @@ INDEX_HTML = r"""<!doctype html>
         if (item.sources && item.sources.length) {
           const sources = document.createElement("div");
           sources.className = "assistant-sources";
-          for (const source of item.sources) sources.appendChild(textSpan(`${source.name || t("kb.title")} (${Math.round(Number(source.score || 0) * 100)}%)`, "assistant-source"));
+          for (const label of assistantSourceLabels(item.sources, true)) sources.appendChild(textSpan(label, "assistant-source"));
           entry.appendChild(sources);
         }
         root.appendChild(entry);
@@ -11645,12 +11737,13 @@ INDEX_HTML = r"""<!doctype html>
       renderAssistantUnanswered(data.questions || []);
     }
 
-    async function loadAssistant() {
+    async function loadAssistant(unlogged) {
       if (!hasPermission("ask_ai")) return;
       const data = await api("/api/assistant/history?limit=100");
       const configured = Boolean(data.settings && data.settings.configured);
       $("assistantStatusPill").textContent = configured ? t("assistant.ready") : t("assistant.not_configured");
-      renderAssistantHistory(data.questions || []);
+      // An answer the history could not keep (see askAssistant) is shown with it.
+      renderAssistantHistory([...(data.questions || []), ...(Array.isArray(unlogged) ? unlogged : [])]);
       $("assistantAdminPanel").classList.toggle("hidden", !hasPermission("manage_ai"));
       await loadAssistantUnanswered();
     }
@@ -11663,11 +11756,24 @@ INDEX_HTML = r"""<!doctype html>
       button.disabled = true;
       $("assistantAskState").textContent = t("assistant.asking");
       try {
-        await post("/api/assistant/ask", {question});
+        const data = await post("/api/assistant/ask", {question});
         input.value = "";
-        await loadAssistant();
-      } catch (err) { toastError(err); }
+        // When the question history could not keep it (a full disk, say), the answer
+        // is shown all the same, with a note.
+        const unlogged = data && data.logged === false && data.question ? [data.question] : [];
+        await loadAssistant(unlogged);
+        if (unlogged.length) toast(t("assistant.not_logged"), true);
+      } catch (err) { aiAskError(err); }
       finally { button.disabled = false; $("assistantAskState").textContent = ""; }
+    }
+
+    // The AI provider failed to answer: the translated reason, then what it said.
+    function aiAskError(err) {
+      if (err && err.code === "ai_unavailable" && err.message) {
+        toast(t("errors.ai_unavailable") + " (" + err.message + ")", true);
+        return;
+      }
+      toastError(err);
     }
 
     function assistantAutoReplyDate(value) {
@@ -11691,9 +11797,15 @@ INDEX_HTML = r"""<!doctype html>
         running: "assistant.auto_reply_running",
         idle: "assistant.auto_reply_idle",
         error: "assistant.auto_reply_error_state",
-        login_required: "assistant.auto_reply_login_required"
+        login_required: "assistant.auto_reply_login_required",
+        ai_missing: "assistant.auto_reply_ai_missing"
       }[runtimeState] || "assistant.auto_reply_off";
       return t(key);
+    }
+
+    // Runtime states that need the owner to do something.
+    function autoReplyNeedsAttention(runtimeState) {
+      return ["error", "login_required", "ai_missing"].includes(runtimeState);
     }
 
     function syncAssistantAutoReplySwitch(inputId, stateId) {
@@ -11850,12 +11962,18 @@ INDEX_HTML = r"""<!doctype html>
       setPill(
         "assistantAutoReplyStatus",
         assistantAutoReplyRuntimeLabel(runtimeState),
-        ["error", "login_required"].includes(runtimeState) ? "warn" : (enabled ? "ok" : "")
+        autoReplyNeedsAttention(runtimeState) ? "warn" : (enabled ? "ok" : "")
       );
       setPill(
         "assistantAutoReplyAiStatus",
         data && data.aiConfigured ? t("assistant.auto_reply_ai_ready") : t("assistant.auto_reply_ai_missing"),
         data && data.aiConfigured ? "ok" : "warn"
+      );
+      // Switched off when the shared AI and self-installed AI were removed: says so
+      // until it is switched on again (which clears the reason).
+      $("assistantAutoReplyAiRemoved").classList.toggle(
+        "hidden",
+        !(data && !enabled && data.disabledReason === "ai_removed")
       );
       $("assistantAutoReplyLastPoll").textContent = assistantAutoReplyDate(runtime.lastPollAt);
       $("assistantAutoReplyLastReply").textContent = assistantAutoReplyDate(runtime.lastReplyAt);
@@ -12177,7 +12295,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const data = await post("/api/assistant/knowledge/sources/save", payload);
       renderAssistantKnowledge(data);
       clearAssistantSourceForm();
-      toast(t("assistant.api_saved"));
+      toast(t(data.keyCleared ? "assistant.api_saved_key_cleared" : "assistant.api_saved"));
     }
 
     async function syncAssistantSource(id, button) {
@@ -13980,11 +14098,36 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       return state.assistantBrain;
     }
 
+    // One provider's entry from the list the server sends (server order), or null.
+    function brainProviderInfo(data, id) {
+      const providers = data && Array.isArray(data.providers) ? data.providers : [];
+      return providers.find((item) => item && item.id === id) || null;
+    }
+
+    // The host of a Custom API address, for the summary line.
+    function brainHost(url) {
+      try { return new URL(String(url || "")).host; } catch (_) { return String(url || ""); }
+    }
+
+    // The origin (scheme, host and port) of an address, or "" while it is not one yet.
+    function brainOrigin(url) {
+      try {
+        const parsed = new URL(String(url || "").trim());
+        return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.origin : "";
+      } catch (_) { return ""; }
+    }
+
     function brainSummary(data) {
       if (!data || !data.configured) return t("brain.none");
-      if (data.provider === "gemini") return t("brain.summary_gemini", {model: data.chatModel});
-      if (data.source === "global") return t("brain.summary_global", {model: data.chatModel});
-      return t("brain.summary_ollama", {model: data.chatModel, url: data.baseUrl});
+      const info = brainProviderInfo(data, data.provider) || {};
+      const model = data.chatModel || info.chatModel || info.defaultChatModel || "";
+      if (info.needsBaseUrl || data.provider === "custom") {
+        // Staff are not sent the address: the summary then names the model only.
+        const host = brainHost(data.baseUrl || info.baseUrl);
+        return host ? t("brain.summary_custom", {host, model}) : t("brain.summary_custom_model", {model});
+      }
+      const label = info.label || data.provider || "";
+      return model ? `${label} (${model})` : label;
     }
 
     // A model box with the provider's list beside it once Refresh models has run:
@@ -14046,41 +14189,122 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       return err.code && I18N["errors." + err.code] ? t("errors." + err.code) : err.message;
     }
 
-    function renderBrainForm(slot) {
-      const data = state.assistantBrain || {};
+    // Settings → AI → "AI for auto reply", also shown in the auto reply setup steps.
+    // One provider picker in the server's order; the fields under it follow the chosen
+    // provider's flags. A typed key is only ever sent with the provider it was typed for.
+    function renderBrainForm(slot, options = {}) {
+      let data = state.assistantBrain || {};
       slot.replaceChildren();
+      // The form can be on the page twice (Settings and the setup steps): ids stay unique.
+      renderBrainForm.count = (renderBrainForm.count || 0) + 1;
+      const uid = `brainForm${renderBrainForm.count}`;
       const form = document.createElement("div");
       form.className = "ux-grid";
+      // The settings the form shows: the setup steps keep a form that shows the
+      // current ones (what was typed and the last Save and test result stay).
+      form.brainForm = true;
+      form.brainData = state.assistantBrain;
+      // The AI this workspace used is gone: say what to do (staff: who has to do it).
+      const notice = textSpan(t(data.canEdit ? "brain.notice" : "brain.notice_staff"), "ux-warning");
+      const syncNotice = () => {
+        notice.hidden = options.notice === false || !(data.notice && !data.configured);
+      };
+      syncNotice();
+      form.appendChild(notice);
       if (!data.canEdit) {
         form.append(textSpan(brainSummary(data), "ux-muted"), textSpan(t("brain.owner_only"), "ux-muted"));
         slot.appendChild(form);
         return;
       }
-      let provider = data.source === "tenant" ? data.provider : (data.globalAvailable ? "global" : "gemini");
-      const cards = document.createElement("div");
-      cards.className = "choice-grid";
-      const options = [["gemini", "brain.gemini", "brain.gemini_hint"], ["ollama", "brain.ollama", "brain.ollama_hint"]];
-      if (data.globalAvailable) options.push(["global", "brain.global", "brain.global_hint"]);
+      const providers = Array.isArray(data.providers) ? data.providers.filter((item) => item && item.id) : [];
+      const listed = (id) => providers.some((item) => item.id === id);
+      // A workspace without an AI yet starts on Gemini.
+      let provider = listed(data.provider) ? data.provider
+        : listed("gemini") ? "gemini"
+          : ((providers.find((item) => item.available !== false) || providers[0] || {}).id || "");
+      const info = () => brainProviderInfo(data, provider) || {};
+      const pick = document.createElement("select");
+      pick.id = `${uid}Provider`;
+      const groups = [["main", "brain.group_main"], ["more", "brain.group_more"], ["custom", "brain.group_custom"]];
+      for (const [group, labelKey] of groups) {
+        const members = providers.filter((item) => (["main", "custom"].includes(item.group) ? item.group : "more") === group);
+        if (!members.length) continue;
+        const optgroup = document.createElement("optgroup");
+        optgroup.label = t(labelKey);
+        for (const item of members) {
+          const option = document.createElement("option");
+          option.value = item.id;
+          const name = item.label || item.id;
+          option.textContent = item.available === false ? `${name} (${t("brain.unavailable")})` : name;
+          option.disabled = item.available === false;
+          optgroup.appendChild(option);
+        }
+        pick.appendChild(optgroup);
+      }
+      pick.value = provider;
+      const pickLabel = document.createElement("label");
+      pickLabel.htmlFor = pick.id;
+      pickLabel.append(textSpan(t("brain.provider")), pick);
+      const pickNote = textSpan("", "ux-warning");
       const fields = document.createElement("div");
       fields.className = "ux-grid";
+      // API key: one box, always for the provider picked above.
       const keyInput = document.createElement("input");
+      keyInput.id = `${uid}Key`;
       keyInput.type = "password";
       keyInput.autocomplete = "off";
-      keyInput.placeholder = data.hasApiKey && data.provider === "gemini" ? data.apiKeyPreview : "AIza…";
+      keyInput.spellcheck = false;
+      const keyName = textSpan("", "");
       const keyLabel = document.createElement("label");
-      keyLabel.append(textSpan(t("brain.api_key")), keyInput);
-      const keyHint = textSpan(data.imageKeyAvailable ? t("brain.key_shared_hint") : t("brain.key_where"), "ux-muted");
+      keyLabel.htmlFor = keyInput.id;
+      keyLabel.appendChild(keyName);
+      const reveal = document.createElement("button");
+      reveal.type = "button";
+      reveal.textContent = t("ai.reveal");
+      reveal.setAttribute("aria-controls", keyInput.id);
+      reveal.addEventListener("click", () => {
+        const showing = keyInput.type === "password";
+        keyInput.type = showing ? "text" : "password";
+        reveal.textContent = showing ? t("ai.hide") : t("ai.reveal");
+      });
+      const keyRow = document.createElement("div");
+      keyRow.className = "brain-key-row";
+      keyRow.append(keyInput, reveal);
+      const keySaved = textSpan("", "ux-muted");
+      keySaved.id = `${uid}KeySaved`;
+      const keyHint = textSpan("", "ux-muted");
+      keyHint.id = `${uid}KeyHint`;
+      keyInput.setAttribute("aria-describedby", `${keySaved.id} ${keyHint.id}`);
+      const keyField = document.createElement("div");
+      keyField.className = "brain-field";
+      keyField.append(keyLabel, keyRow, keySaved, keyHint);
+      // Base URL: only the Custom API has one.
       const urlInput = document.createElement("input");
-      urlInput.value = data.provider === "ollama" && data.source === "tenant" ? data.baseUrl : (data.defaults || {}).ollamaBaseUrl || "http://127.0.0.1:11434";
+      urlInput.id = `${uid}Url`;
+      urlInput.type = "url";
+      urlInput.autocomplete = "off";
+      urlInput.spellcheck = false;
+      urlInput.placeholder = "https://api.example.com/v1";
+      const urlHint = textSpan(t("brain.base_url_hint"), "ux-muted");
+      urlHint.id = `${uid}UrlHint`;
+      urlInput.setAttribute("aria-describedby", urlHint.id);
       const urlLabel = document.createElement("label");
-      urlLabel.append(textSpan(t("brain.ollama_url")), urlInput);
+      urlLabel.htmlFor = urlInput.id;
+      urlLabel.append(textSpan(t("brain.base_url")), urlInput);
+      const urlField = document.createElement("div");
+      urlField.className = "brain-field";
+      urlField.append(urlLabel, urlHint);
       const modelInput = document.createElement("input");
+      modelInput.autocomplete = "off";
+      modelInput.spellcheck = false;
       const modelChoice = aiModelChoice(modelInput, true, t("brain.model"));
       const modelLabel = modelChoice.label;
       const embedInput = document.createElement("input");
+      embedInput.autocomplete = "off";
+      embedInput.spellcheck = false;
       const embedChoice = aiModelChoice(embedInput, false, t("brain.embedding_model"));
       const embedLabel = embedChoice.label;
-      // Refresh models: which models this Gemini key or Ollama server offers.
+      // Refresh models: which models this key (and, for the Custom API, this address) offers.
       const refresh = document.createElement("button");
       refresh.type = "button";
       refresh.textContent = t("brain.refresh_models");
@@ -14089,6 +14313,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const refreshRow = document.createElement("div");
       refreshRow.className = "ux-row";
       refreshRow.append(refresh, refreshNote);
+      // The result of the last Save and test, for the provider picked when it ran.
+      const result = textSpan("", "ux-muted");
       const advanced = document.createElement("details");
       advanced.className = "ux-advanced";
       const summary = document.createElement("summary");
@@ -14101,48 +14327,82 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       strictLabel.append(strict, textSpan(t("brain.strict")));
       advanced.append(summary, embedLabel, strictLabel);
 
+      // The saved key's line. A Custom API key only goes to the address it was saved
+      // for: once the address typed is on another server, the line says so.
+      function syncKeySaved() {
+        const entry = info();
+        let text = entry.hasApiKey
+          ? t("brain.key_saved", {preview: entry.apiKeyPreview || ""})
+          : (entry.id === "gemini" && data.imageKeyAvailable ? t("brain.key_shared_hint") : "");
+        if (entry.hasApiKey && entry.needsBaseUrl) {
+          const typed = brainOrigin(urlInput.value);
+          const saved = brainOrigin(entry.baseUrl);
+          if (typed && saved && typed !== saved) text = t("brain.key_new_address");
+        }
+        keySaved.textContent = text;
+        keySaved.hidden = !text;
+      }
+
+      // The key box belongs to one provider: its placeholder, saved key and hints.
+      function syncKey() {
+        const entry = info();
+        keyInput.value = "";
+        keyInput.type = "password";
+        reveal.textContent = t("ai.reveal");
+        keyInput.placeholder = entry.keyPlaceholder || "";
+        keyName.textContent = entry.keyRequired === false ? t("brain.api_key_optional") : t("brain.api_key");
+        syncKeySaved();
+        // Where to get a key is a place name; the Custom API's key is the owner's own.
+        keyHint.textContent = [
+          entry.keyHint && !entry.needsBaseUrl ? t("brain.key_where", {hint: entry.keyHint}) : "",
+          entry.id === "zai" ? t("brain.key_note_zai") : "",
+          entry.keyRequired === false ? t("brain.key_optional_hint") : ""
+        ].filter(Boolean).join(" ");
+        keyHint.hidden = !keyHint.textContent;
+        pickNote.textContent = entry.available === false
+          ? aiModelError({code: entry.unavailableReason, message: t("brain.unavailable")})
+          : "";
+        pickNote.hidden = !pickNote.textContent;
+      }
+
+      // Everything under the picker follows the chosen provider's flags.
       function syncFields() {
-        cards.querySelectorAll(".choice-card").forEach((card) => card.setAttribute("aria-pressed", String(card.dataset.provider === provider)));
-        keyLabel.hidden = provider !== "gemini";
-        keyHint.hidden = provider !== "gemini";
-        urlLabel.hidden = provider !== "ollama";
-        advanced.hidden = provider === "global";
-        modelLabel.hidden = provider === "global";
-        refreshRow.hidden = provider === "global";
+        const entry = info();
+        const custom = Boolean(entry.needsBaseUrl);
+        urlField.hidden = !custom;
+        urlInput.value = custom ? entry.baseUrl || "" : "";
+        syncKey();
         // A list belongs to the provider it came from.
         modelChoice.clear();
         embedChoice.clear();
         refreshNote.className = "ux-muted";
         refreshNote.textContent = "";
-        const defaults = data.defaults || {};
-        if (provider === "gemini") {
-          modelInput.value = data.provider === "gemini" && data.source === "tenant" ? data.chatModel : defaults.geminiChatModel || "";
-          embedInput.value = data.provider === "gemini" && data.source === "tenant" ? data.embeddingModel : defaults.geminiEmbeddingModel || "";
-        } else if (provider === "ollama") {
-          modelInput.value = data.provider === "ollama" && data.source === "tenant" ? data.chatModel : "";
-          embedInput.value = data.provider === "ollama" && data.source === "tenant" ? data.embeddingModel : "";
-          advanced.open = true;
-        }
+        // A blank chat model means the provider's default, so the default is shown.
+        modelInput.value = entry.chatModel || entry.defaultChatModel || "";
+        modelInput.placeholder = custom ? t("brain.model_custom_ph") : entry.defaultChatModel || "";
+        // The search model: providers with embeddings, and (optional) the Custom API.
+        const searchable = Boolean(entry.embeddings) || custom;
+        // A provider set up before keeps its own search model, even none.
+        const stored = entry.id === data.provider || Boolean(entry.hasApiKey || entry.chatModel || entry.embeddingModel);
+        embedLabel.hidden = !searchable;
+        embedInput.value = searchable ? (stored ? entry.embeddingModel || "" : entry.defaultEmbeddingModel || "") : "";
       }
-      for (const [value, labelKey, hintKey] of options) {
-        const card = document.createElement("button");
-        card.type = "button";
-        card.className = "choice-card";
-        card.dataset.provider = value;
-        const title = document.createElement("strong");
-        title.textContent = t(labelKey) + (value === "gemini" ? ` · ${t("brain.recommended")}` : "");
-        card.append(title, textSpan(t(hintKey)));
-        card.addEventListener("click", () => { provider = value; syncFields(); });
-        cards.appendChild(card);
-      }
+      pick.addEventListener("change", () => {
+        provider = pick.value;
+        result.textContent = "";
+        result.className = "ux-muted";
+        syncFields();
+      });
+      urlInput.addEventListener("input", syncKeySaved);
       refresh.addEventListener("click", async () => {
         const asked = provider;
+        const custom = Boolean(info().needsBaseUrl);
         refresh.disabled = true;
         refreshNote.className = "ux-muted";
         refreshNote.textContent = t("brain.refreshing_models");
         try {
           const data = await post("/api/ai/models", {
-            provider: asked, apiKey: keyInput.value.trim(), baseUrl: urlInput.value.trim()
+            provider: asked, apiKey: keyInput.value.trim(), ...(custom ? {baseUrl: urlInput.value.trim()} : {})
           });
           if (asked !== provider) return;
           modelChoice.fill(data.chatModels || []);
@@ -14150,7 +14410,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
           refreshNote.textContent = t("brain.models_loaded", {n: (data.chatModels || []).length});
         } catch (err) {
           if (asked !== provider) return;
-          refreshNote.className = "badge bad";
+          refreshNote.className = "badge bad brain-status";
           refreshNote.textContent = t("brain.models_failed") + " " + aiModelError(err);
         } finally {
           refresh.disabled = false;
@@ -14160,26 +14420,45 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       save.type = "button";
       save.className = "primary";
       save.textContent = t("brain.save_test");
-      const result = textSpan("", "ux-muted");
       save.addEventListener("click", async () => {
+        const asked = provider;
+        const entry = info();
+        const custom = Boolean(entry.needsBaseUrl);
+        const searchable = Boolean(entry.embeddings) || custom;
+        const key = keyInput.value.trim();
         save.disabled = true;
+        result.className = "ux-muted";
         result.textContent = t("brain.testing");
         try {
           const saved = await post("/api/assistant/settings", {
-            provider,
-            apiKey: keyInput.value.trim(),
-            baseUrl: urlInput.value.trim(),
+            provider: asked,
+            ...(key ? {apiKey: key} : {}),
+            ...(custom ? {baseUrl: urlInput.value.trim()} : {}),
             chatModel: modelInput.value.trim(),
-            embeddingModel: embedInput.value.trim(),
+            embeddingModel: searchable ? embedInput.value.trim() : "",
             strictKnowledge: strict.checked,
             test: true
           });
           state.assistantBrain = saved;
+          // A failed test keeps step 1 of the setup open (refreshAssistantSetup).
+          state.assistantBrainTest = saved.test || null;
+          data = saved;
+          form.brainData = saved;
           const test = saved.test || {};
-          result.textContent = test.ok ? t("brain.test_ok") : t("brain.test_failed", {error: test.error || ""});
-          result.className = test.ok ? "badge ok" : "badge bad";
-          keyInput.value = "";
+          const outcome = test.ok ? t("brain.test_ok") : t("brain.test_failed", {error: test.error || ""});
+          if (provider === asked) {
+            result.textContent = outcome;
+            result.className = test.ok ? "badge ok" : "badge bad brain-status";
+            // The new key now shows as that provider's saved key.
+            syncKey();
+          } else {
+            // Another provider is picked now and keeps its box: the result goes to a toast.
+            toast(`${(brainProviderInfo(saved, asked) || {}).label || asked}: ${outcome}`, !test.ok);
+          }
+          syncNotice();
           refreshAssistantSetup();
+          // The auto reply page's AI badge and state follow the AI just saved.
+          loadAssistantAutoReply().then(refreshAssistantSetup).catch(() => {});
         } catch (err) {
           result.textContent = "";
           toastError(err);
@@ -14187,13 +14466,19 @@ Response guidance: Say goodbye politely and invite the person to return with mor
           save.disabled = false;
         }
       });
-      fields.append(keyLabel, keyHint, urlLabel, modelLabel, refreshRow, advanced);
+      fields.append(keyField, urlField, modelLabel, refreshRow, advanced);
       const actions = document.createElement("div");
       actions.className = "ux-row";
       actions.append(save, result);
-      form.append(cards, fields, actions);
+      form.append(pickLabel, pickNote, fields, actions);
       slot.appendChild(form);
       syncFields();
+      // Drawn again after a failed test (in the other slot, or a new visit): say why.
+      const lastTest = state.assistantBrainTest;
+      if (lastTest && lastTest.ok === false && provider === data.provider) {
+        result.textContent = t("brain.test_failed", {error: lastTest.error || ""});
+        result.className = "badge bad brain-status";
+      }
     }
 
     async function loadKpiSettingsForm() {
@@ -14274,7 +14559,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const brain = state.assistantBrain;
       const knowledge = state.assistantKnowledge || {};
       const auto = state.assistantAutoReply || {};
-      const step1 = Boolean(brain && brain.configured);
+      // A saved AI whose last test failed keeps step 1 open, with the form and the reason.
+      const lastTest = state.assistantBrainTest;
+      const step1 = Boolean(brain && brain.configured) && !(lastTest && lastTest.ok === false);
       const topics = (knowledge.sections || []).filter((section) => String(section.body || "").trim());
       const step2 = topics.length > 0;
       let step3 = false;
@@ -14288,8 +14575,19 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         const firstOpen = all.findIndex(([, d]) => !d);
         el.classList.toggle("current", !done && firstOpen === index);
       });
-      if (!setup.classList.contains("hidden") && !step1) renderBrainForm($("setupBrainSlot"));
-      else $("setupBrainSlot").replaceChildren(textSpan(brainSummary(brain), "ux-muted"));
+      // The AI this workspace used is gone: the warning tops the page (once, so the
+      // form in the setup steps leaves its own out). Staff read who has to act.
+      const aiNotice = $("assistantAiNotice");
+      aiNotice.dataset.i18n = brain && brain.canEdit === false ? "brain.notice_staff" : "brain.notice";
+      aiNotice.textContent = t(aiNotice.dataset.i18n);
+      aiNotice.classList.toggle("hidden", !(brain && brain.notice && !brain.configured));
+      const brainSlot = $("setupBrainSlot");
+      const shown = brainSlot.firstChild;
+      if (!setup.classList.contains("hidden") && !step1) {
+        // Drawn again only for other settings: a form showing the current ones keeps
+        // what the owner typed and the result of its last Save and test.
+        if (!(shown && shown.brainForm && shown.brainData === brain)) renderBrainForm(brainSlot, {notice: false});
+      } else brainSlot.replaceChildren(textSpan(brainSummary(brain), "ux-muted"));
       const heroSwitch = $("assistantHeroSwitch");
       heroSwitch.checked = Boolean(auto.enabled);
       heroSwitch.disabled = !(auto.enabled || (step1 && (step2 || auto.enabled))) || !selectedAccountId() || !hasPermission("ask_ai");
@@ -14300,7 +14598,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       const runtimeState = (auto.runtime || {}).state || "off";
       const badge = $("assistantHeroBadge");
       badge.textContent = assistantAutoReplyRuntimeLabel(runtimeState);
-      badge.className = "badge " + (["error", "login_required"].includes(runtimeState) ? "bad" : (auto.enabled ? "ok" : ""));
+      badge.className = "badge " + (autoReplyNeedsAttention(runtimeState) ? "bad" : (auto.enabled ? "ok" : ""));
       $("heroBrainSummary").textContent = brainSummary(brain);
       $("heroKnowledgeSummary").textContent = topics.length
         ? t("hero.knowledge_summary", {n: topics.length, names: topics.slice(0, 3).map((s) => s.title || t("kb.untitled")).join(", ")})
@@ -14466,8 +14764,12 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         waiting.remove();
         try { localStorage.setItem("okline.assistantTried", "yes"); } catch (_) { /* optional */ }
         if (item.answer) {
-          const names = [...new Set((item.sources || []).map((s) => s.name).filter(Boolean))];
+          const names = assistantSourceLabels((item.sources || []).filter((s) => s && (s.name || s.scope === "global")), false);
           kbBubble(item.answer, "ai", textSpan(names.length ? t("kb.answered_from", {names: names.join(", ")}) : t("kb.answered_general"), "kb-source"));
+        } else if (data.logged === false) {
+          // It could not be saved, so it is not in the list of questions the AI could
+          // not answer either.
+          kbBubble(t("kb.handoff"), "ai none", textSpan(t("kb.no_info_unlogged"), "kb-source"));
         } else {
           const source = document.createElement("span");
           source.className = "kb-source";
@@ -14479,11 +14781,13 @@ Response guidance: Say goodbye politely and invite the person to return with mor
           source.append(t("kb.no_info") + " · ", add);
           kbBubble(t("kb.handoff"), "ai none", source);
         }
+        // The question history could not keep it (a full disk, say).
+        if (data.logged === false) toast(t("assistant.not_logged"), true);
         refreshAssistantSetup();
         loadKbUnanswered().catch(() => {});
       } catch (err) {
         waiting.remove();
-        toastError(err);
+        aiAskError(err);
       }
     }
 
@@ -14795,12 +15099,25 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       list.replaceChildren();
       const banners = $("jobErrorBanners");
       banners.replaceChildren();
+      const unsaved = state.schedulesUnsaved;
+      if (unsaved) {
+        const banner = document.createElement("div");
+        banner.className = "job-error-banner";
+        const names = state.schedules
+          .filter((job) => unsaved.sent.includes(job.id))
+          .map((job) => t("jobs.quoted", {name: job.name || t("scheduler.default_name")}));
+        banner.appendChild(textSpan(t("jobs.unsaved_banner") + (names.length ? " " + t("jobs.unsaved_sent", {names: names.join(", ")}) : "")));
+        banners.appendChild(banner);
+      }
       const failing = state.schedules.filter((job) => ["error", "login_required"].includes(jobStatus(job)[0]));
       for (const job of failing) {
         const banner = document.createElement("div");
         banner.className = "job-error-banner";
         const [status] = jobStatus(job);
-        banner.appendChild(textSpan(t("jobs.failed_banner", {name: job.name || t("scheduler.default_name"), error: status === "login_required" ? t("scheduler.login_required") : (job.lastError || t("scheduler.error"))})));
+        // A run that LINE's sign-in cut short names the chats it did not reach.
+        const partial = /^Sent to \d+\/\d+ chats\. /.test(job.lastError || "");
+        const loginError = t("scheduler.login_required") + (partial ? " · " + job.lastError : "");
+        banner.appendChild(textSpan(t("jobs.failed_banner", {name: job.name || t("scheduler.default_name"), error: status === "login_required" ? loginError : (job.lastError || t("scheduler.error"))})));
         const fix = document.createElement("button");
         fix.type = "button";
         fix.className = "primary";
@@ -15715,22 +16032,28 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "brain.title": {th: "AI ที่ใช้ตอบลูกค้า", en: "AI for auto reply"},
       "brain.subtitle": {th: "เลือกว่าใครเป็นคนคิดคำตอบ ใช้ร่วมกันทุกคนที่ดูแลบัญชีของคุณ", en: "Choose what answers your customers. Shared by everyone on your accounts."},
       "brain.none": {th: "ยังไม่ได้เลือก AI", en: "No AI chosen yet"},
-      "brain.summary_gemini": {th: "Gemini ({model}) ด้วย API key ของร้าน", en: "Gemini ({model}) with the shop's API key"},
-      "brain.summary_global": {th: "AI ส่วนกลางที่ผู้ดูแลระบบตั้งไว้ ({model})", en: "Shared AI set up by the administrator ({model})"},
-      "brain.summary_ollama": {th: "Ollama ({model}) ที่ {url}", en: "Ollama ({model}) at {url}"},
+      "brain.summary_custom": {th: "Custom API · {host} ({model})", en: "Custom API · {host} ({model})"},
+      "brain.summary_custom_model": {th: "Custom API ({model})", en: "Custom API ({model})"},
       "brain.owner_only": {th: "เฉพาะเจ้าของบัญชีเท่านั้นที่เปลี่ยน AI ได้", en: "Only the account owner can change the AI."},
-      "brain.gemini": {th: "Gemini", en: "Gemini"},
-      "brain.gemini_hint": {th: "ใส่ API key จาก Google AI Studio ใช้ได้ทันที", en: "Paste an API key from Google AI Studio. Works right away."},
-      "brain.ollama": {th: "Ollama บนเครื่อง", en: "Ollama on your computer"},
-      "brain.ollama_hint": {th: "ต้องติดตั้ง Ollama และโหลดโมเดลเอง", en: "Install Ollama and pull a model yourself."},
-      "brain.global": {th: "AI ส่วนกลาง", en: "Shared AI"},
-      "brain.global_hint": {th: "ใช้ที่ผู้ดูแลระบบตั้งไว้ให้", en: "Use the one your administrator set up."},
-      "brain.recommended": {th: "แนะนำ", en: "Recommended"},
-      "brain.api_key": {th: "API key ของ Gemini", en: "Gemini API key"},
+      "brain.notice": {th: "ระบบเลิกให้บริการ AI ส่วนกลางและ AI ที่ติดตั้งบนเครื่องของคุณเองแล้ว เลือกผู้ให้บริการ AI และใส่ API key ของคุณเอง ถ้าเคยเปิดตอบอัตโนมัติไว้ ระบบปิดไว้ให้ก่อน บันทึกแล้วเปิดสวิตช์อีกครั้ง", en: "LinePassport no longer offers the shared AI or AI installed on your own computer. Pick an AI provider and add your own API key. If auto reply was on, it has been switched off for now: save, then switch it on again."},
+      "brain.notice_staff": {th: "ระบบเลิกให้บริการ AI ส่วนกลางและ AI ที่ติดตั้งบนเครื่องของคุณเองแล้ว ตอบอัตโนมัติจะใช้ได้อีกครั้งเมื่อเจ้าของบัญชีเลือกผู้ให้บริการ AI และใส่ API key", en: "LinePassport no longer offers the shared AI or AI installed on your own computer. Auto reply works again once the account owner picks an AI provider and adds an API key."},
+      "brain.provider": {th: "ผู้ให้บริการ AI", en: "AI provider"},
+      "brain.group_main": {th: "ยอดนิยม", en: "Popular"},
+      "brain.group_more": {th: "ผู้ให้บริการอื่น", en: "More providers"},
+      "brain.group_custom": {th: "เชื่อม API เอง", en: "Your own API"},
+      "brain.unavailable": {th: "ใช้ไม่ได้บนเซิร์ฟเวอร์นี้", en: "not available on this server"},
+      "brain.api_key": {th: "API key", en: "API key"},
+      "brain.api_key_optional": {th: "API key (ไม่บังคับ)", en: "API key (optional)"},
+      "brain.key_saved": {th: "บันทึก key ไว้แล้ว {preview} เว้นว่างไว้เพื่อใช้ key เดิม", en: "Saved key {preview}. Leave blank to keep it."},
       "brain.key_shared_hint": {th: "เว้นว่างไว้เพื่อใช้ key เดียวกับ AI สร้างรูป", en: "Leave blank to use the same key as the picture AI."},
-      "brain.key_where": {th: "สร้าง key ฟรีที่ aistudio.google.com → Get API key", en: "Create a free key at aistudio.google.com → Get API key."},
-      "brain.ollama_url": {th: "ที่อยู่ Ollama", en: "Ollama address"},
+      "brain.key_where": {th: "สร้าง key ได้ที่ {hint}", en: "Get a key at {hint}"},
+      "brain.key_optional_hint": {th: "เว้นว่างได้ถ้าเซิร์ฟเวอร์ของคุณไม่ต้องใช้ key", en: "Leave it blank if your server needs no key."},
+      "brain.key_new_address": {th: "key ที่บันทึกไว้ใช้ได้กับที่อยู่เดิมเท่านั้น ถ้าเซิร์ฟเวอร์นี้ต้องใช้ key ให้กรอกอีกครั้ง", en: "The saved key only goes to the address it was saved for. If this server needs a key, type it again."},
+      "brain.key_note_zai": {th: "ใช้ API key แบบ Standard เท่านั้น key ของ Coding Plan ใช้ที่นี่ไม่ได้", en: "Use a Standard API key. Coding Plan keys do not work here."},
+      "brain.base_url": {th: "Base URL", en: "Base URL"},
+      "brain.base_url_hint": {th: "เซิร์ฟเวอร์ LinePassport จะเรียกที่อยู่นี้ ต้องเป็นที่อยู่ https สาธารณะที่รองรับ API แบบเดียวกับ OpenAI", en: "The LinePassport server calls this address. It must be a public https address with an OpenAI-compatible API."},
       "brain.model": {th: "โมเดลสำหรับตอบ", en: "Chat model"},
+      "brain.model_custom_ph": {th: "ชื่อโมเดล (ต้องกรอก)", en: "Model name (required)"},
       "brain.embedding_model": {th: "โมเดลสำหรับค้นข้อมูลร้าน (ไม่บังคับ)", en: "Search model (optional)"},
       "brain.advanced": {th: "ตัวเลือกขั้นสูง", en: "Advanced options"},
       "brain.refresh_models": {th: "รีเฟรชรายชื่อโมเดล", en: "Refresh models"},
@@ -15738,7 +16061,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "brain.models_loaded": {th: "พบ {n} โมเดล", en: "{n} models found"},
       "brain.models_failed": {th: "โหลดรายชื่อโมเดลไม่สำเร็จ:", en: "Could not load the models:"},
       "brain.model_other": {th: "พิมพ์ชื่อเอง…", en: "Type a name…"},
-      "errors.ai_key_required": {th: "กรอก API key ของ Gemini ก่อน", en: "Enter the Gemini API key first."},
+      "errors.ai_key_required": {th: "กรอก API key ก่อน", en: "Enter the API key first."},
       "brain.strict": {th: "ตอบเฉพาะจากข้อมูลร้าน (ถ้าไม่มีให้ส่งต่อให้คน)", en: "Answer only from shop info (otherwise hand over to staff)"},
       "brain.save_test": {th: "บันทึกและทดสอบ", en: "Save and test"},
       "brain.testing": {th: "กำลังทดสอบ…", en: "Testing…"},
@@ -15747,7 +16070,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "setup.title": {th: "ตั้งค่าตอบอัตโนมัติ 3 ขั้น", en: "Set up auto reply in 3 steps"},
       "setup.subtitle": {th: "สวิตช์จะเปิดได้เมื่อทำครบทั้ง 3 ขั้น", en: "The switch turns on once all three are done."},
       "setup.step1": {th: "เลือกสมอง AI", en: "Choose the AI brain"},
-      "setup.step1_hint": {th: "ใส่ Gemini API key ง่ายที่สุด หรือใช้ Ollama บนเครื่องของคุณ", en: "A Gemini API key is easiest. Ollama runs on your own computer."},
+      "setup.step1_hint": {th: "เลือกผู้ให้บริการ AI แล้วใส่ API key ของคุณ Gemini เริ่มต้นง่ายที่สุด", en: "Pick an AI provider and add its API key. Gemini is the easiest to start with."},
       "setup.step2": {th: "ใส่ข้อมูลร้าน", en: "Add your shop info"},
       "setup.step2_hint": {th: "เวลาเปิด–ปิด เมนูและราคา วิธีสั่งและจ่าย", en: "Opening hours, menu and prices, how to order and pay."},
       "setup.step3": {th: "ทดลองคุย", en: "Try a conversation"},
@@ -15810,6 +16133,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "kb.no_info": {th: "ไม่มีข้อมูล — ส่งต่อให้คน", en: "No info — handed over to staff"},
       "kb.handoff": {th: "AI จะตอบลูกค้าว่าทีมงานจะเข้ามาตอบเพิ่มเติม", en: "The AI tells the customer a staff member will follow up."},
       "kb.add_answer": {th: "เพิ่มคำตอบ", en: "Add an answer"},
+      "kb.no_info_unlogged": {th: "ไม่มีข้อมูล และบันทึกคำถามนี้ไม่ได้ จึงไม่อยู่ในรายการคำถามที่ AI ตอบไม่ได้", en: "No info, and this question could not be saved, so it is not in the list of questions the AI couldn't answer."},
       "kb.from_line": {th: "จากลูกค้าใน LINE", en: "From a LINE customer"},
       "kb.from_test": {th: "จากการทดลองคุย", en: "From a test chat"},
       "kb.answer_ph": {th: "พิมพ์คำตอบที่ถูกต้อง", en: "Type the right answer"},
@@ -15848,7 +16172,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "help.assistant.title": {th: "วิธีใช้ตอบอัตโนมัติ", en: "Using Auto reply"},
       "help.assistant.intro": {th: "ให้ AI ตอบคำถามลูกค้าใน LINE แทนคุณ โดยตอบจากข้อมูลร้านที่คุณใส่ไว้", en: "Let AI answer customers on LINE for you, using the shop info you provide."},
       "help.assistant.s1_title": {th: "เลือก AI ที่ใช้ตอบ", en: "Choose the AI"},
-      "help.assistant.s1_body": {th: "ใส่ Gemini API key (ง่ายที่สุด) หรือใช้ Ollama บนเครื่องของคุณ", en: "Add a Gemini API key (easiest) or use Ollama on your own machine."},
+      "help.assistant.s1_body": {th: "เลือกผู้ให้บริการ AI เช่น Gemini, Claude หรือ ChatGPT แล้วใส่ API key ของคุณเอง (Gemini เริ่มง่ายที่สุด)", en: "Pick an AI provider such as Gemini, Claude or ChatGPT and add your own API key (Gemini is the easiest start)."},
       "help.assistant.s2_title": {th: "ใส่ข้อมูลร้าน", en: "Add shop info"},
       "help.assistant.s2_body": {th: "เวลาเปิด–ปิด เมนูและราคา วิธีสั่งและจ่าย แยกเป็นหัวข้อ เขียนข้อละบรรทัด", en: "Opening hours, menu and prices, how to order and pay — one topic each, one fact per line."},
       "help.assistant.s3_title": {th: "ทดลองคุย", en: "Try a conversation"},
@@ -16022,6 +16346,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "jobs.mon_sat": {th: "จ–ส", en: "Mon–Sat"},
       "jobs.when_window": {th: "{days} {start}–{end} ทุก {n} นาที", en: "{days} {start}–{end} every {n} min"},
       "jobs.failed_banner": {th: "งาน “{name}” ส่งไม่สำเร็จ: {error}", en: "\"{name}\" failed: {error}"},
+      "jobs.unsaved_banner": {th: "ตอนนี้บันทึกงานส่งตามเวลาไม่ได้ จึงยังไม่มีงานใดถูกส่งจนกว่าจะบันทึกได้ ระบบลองใหม่ทุก 10 วินาที (ดูสาเหตุได้ใน log ของเซิร์ฟเวอร์)", en: "The schedules cannot be saved right now, so none is sent until they can be. LinePassport tries again every 10 seconds (the server log says why)."},
+      "jobs.unsaved_sent": {th: "อย่าเพิ่งรีสตาร์ท LinePassport: {names} ส่งออกไปแล้วแต่ยังบันทึกไม่ได้ ถ้ารีสตาร์ทก่อนบันทึกได้ จะถูกส่งซ้ำอีกครั้ง", en: "Do not restart LinePassport yet: {names} went out, but that is not saved, and a restart before it is sends it again."},
+      "jobs.quoted": {th: "“{name}”", en: "\"{name}\""},
       "jobs.reconnect": {th: "เชื่อมต่อใหม่", en: "Reconnect"},
       "jobs.retry": {th: "ลองอีกครั้ง", en: "Try again"},
       "jobs.status_running": {th: "กำลังส่ง", en: "Sending"},
@@ -16807,7 +17134,6 @@ GOD_HTML = r"""<!doctype html>
     </header>
     <nav class="god-nav" role="tablist" aria-label="เมนูจัดการระบบ">
       <button class="active" type="button" role="tab" aria-selected="true" data-god-page-target="members">สมาชิก</button>
-      <button type="button" role="tab" aria-selected="false" data-god-page-target="ai-settings">Ollama</button>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="knowledge">Knowledge / RAG</button>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="unanswered">ตอบไม่ได้ <span class="nav-count" id="godUnansweredCount"></span></button>
       <button type="button" role="tab" aria-selected="false" data-god-page-target="system">ตั้งค่าระบบ</button>
@@ -16829,40 +17155,13 @@ GOD_HTML = r"""<!doctype html>
         </div>
       </section>
 
-      <section class="god-page hidden" data-god-page="ai-settings">
-        <div class="page-head">
-          <div><h2>Global AI / Ollama</h2><span class="muted">ตั้งค่า AI สนทนาส่วนกลางสำหรับสมาชิกทุกคน</span></div>
-          <span class="badge" id="globalAiStatus">ยังไม่ได้ตั้งค่า</span>
-        </div>
-        <div class="panel">
-          <div class="panel-head"><h3>การเชื่อมต่อ</h3><button class="secondary" type="button" id="testOllamaButton">ทดสอบและโหลดโมเดล</button></div>
-          <div class="panel-body form-grid">
-            <label class="switch-row"><input id="globalAiEnabled" type="checkbox"> เปิดใช้ AI สนทนา</label>
-            <div class="settings-grid">
-              <label>Ollama Base URL<input id="ollamaBaseUrl" type="url" placeholder="http://127.0.0.1:11434"></label>
-              <label>API key (ถ้ามี)<div class="field-row"><input id="ollamaApiKey" type="password" autocomplete="off" placeholder="เว้นว่างเพื่อใช้ค่าเดิม"><button class="secondary" type="button" id="toggleOllamaKeyButton">แสดง</button></div><span class="muted" id="ollamaApiKeyCurrent"></span></label>
-              <label>Chat model<input id="ollamaChatModel" list="ollamaModelOptions" placeholder="เช่น gemma3:4b"></label>
-              <label>Embedding model<input id="ollamaEmbeddingModel" list="ollamaModelOptions" placeholder="เช่น embeddinggemma"></label>
-              <datalist id="ollamaModelOptions"></datalist>
-              <label>Top K<input id="ollamaTopK" type="number" min="1" max="12" value="5"></label>
-              <label>Temperature<input id="ollamaTemperature" type="number" min="0" max="2" step="0.1" value="0.2"></label>
-              <label>Timeout (วินาที)<input id="ollamaTimeout" type="number" min="5" max="600" value="120"></label>
-              <label class="switch-row"><input id="ollamaStrictKnowledge" type="checkbox"> ตอบจาก Knowledge เท่านั้น</label>
-              <label class="wide">System prompt<textarea id="ollamaSystemPrompt" rows="5"></textarea></label>
-            </div>
-            <div class="connection-state" id="ollamaConnectionState">ยังไม่ได้ทดสอบการเชื่อมต่อ</div>
-            <div class="button-row"><button class="primary" type="button" id="saveGlobalAiButton">บันทึกการตั้งค่า</button><button class="secondary" type="button" id="reindexKnowledgeButton">สร้างดัชนีใหม่</button></div>
-          </div>
-        </div>
-      </section>
-
       <section class="god-page hidden" data-god-page="knowledge">
         <div class="page-head">
-          <div><h2>Knowledge / RAG</h2><span class="muted">จัดการ knowledge.md และข้อมูลจาก API ภายนอก</span></div>
+          <div><h2>Knowledge / RAG</h2><span class="muted">ข้อมูลกลางที่ AI ของสมาชิกทุกคนใช้ตอบลูกค้า ระบบค้นด้วยคำสำคัญ แล้วส่งส่วนที่ตรงกับคำถามไปยังผู้ให้บริการ AI ที่สมาชิกแต่ละคนเลือก</span></div>
           <div class="summary"><span id="knowledgeChunkCount">0 chunks</span><span id="knowledgeIndexMode">ยังไม่ Index</span></div>
         </div>
         <div class="panel">
-          <div class="panel-head"><h3>knowledge.md</h3><button class="primary" type="button" id="saveKnowledgeButton">บันทึกและ Index</button></div>
+          <div class="panel-head"><h3>knowledge.md</h3><div class="button-row"><button class="secondary" type="button" id="reindexKnowledgeButton">สร้างดัชนีใหม่</button><button class="primary" type="button" id="saveKnowledgeButton">บันทึกและ Index</button></div></div>
           <div class="panel-body"><textarea class="knowledge-editor" id="knowledgeMarkdown" spellcheck="false" placeholder="# Knowledge&#10;&#10;ใส่ข้อมูลที่ต้องการให้ AI ใช้ตอบคำถาม"></textarea><div class="connection-state" id="knowledgeIndexState">ยังไม่มีข้อมูลดัชนี</div></div>
         </div>
         <div class="panel">
@@ -16918,10 +17217,8 @@ GOD_HTML = r"""<!doctype html>
           <div class="panel-body">
             <ol class="god-guide-steps">
               <li class="god-guide-step"><span class="god-guide-number">1</span><div><strong>ตรวจและจัดการสมาชิก</strong><p>หน้า “สมาชิก” ใช้ค้นหาด้วยอีเมลหรือชื่อ กด “รายละเอียด” เพื่อดูบัญชี LINE, Pattern, งานบอท และ AI ที่สมาชิกใช้ กด “แก้ไข” เพื่อเปลี่ยนอีเมล ชื่อ บทบาท รหัสผ่าน หรือสถานะบัญชี ควรปิดใช้งานก่อนลบเมื่อยังต้องเก็บข้อมูล</p></div></li>
-              <li class="god-guide-step"><span class="god-guide-number">2</span><div><strong>เชื่อม Ollama และเลือกโมเดล</strong><p>เปิดหน้า “Ollama” ใส่ Base URL แล้วกด “ทดสอบและโหลดโมเดล” เลือก Chat model และ Embedding model ตั้งค่า Top K, Temperature และ Timeout จากนั้นเปิด AI สนทนาและกดบันทึก สถานะต้องขึ้นพร้อมใช้งานก่อนให้สมาชิกทดสอบ</p></div></li>
-              <li class="god-guide-step"><span class="god-guide-number">3</span><div><strong>ใส่ Knowledge ส่วนกลาง</strong><p>หน้า “Knowledge / RAG” ใช้ข้อมูลที่สมาชิกทุกคนอ้างอิงร่วมกัน เขียนหัวข้อและข้อเท็จจริงใน knowledge.md แล้วกด “บันทึกและ Index” หากดึงข้อมูลจาก API ให้ใส่ URL, JSON path และ Bearer token แล้วกดดึงข้อมูลให้สำเร็จ</p></div></li>
-              <li class="god-guide-step"><span class="god-guide-number">4</span><div><strong>ทดสอบจากบัญชีสมาชิก</strong><p>เข้าสู่หน้าปกติด้วยสมาชิกทดสอบ เปิด AI Chat Bot และถามหลายรูปแบบ ตรวจว่าแหล่งข้อมูลถูกต้องก่อนเปิดตอบ LINE อัตโนมัติ การแก้ Knowledge ต้อง Index ใหม่ทุกครั้งก่อนทดสอบซ้ำ</p></div></li>
-              <li class="god-guide-step"><span class="god-guide-number">5</span><div><strong>ตอบคำถามที่ AI ตอบไม่ได้</strong><p>หน้า “ตอบไม่ได้” รวมคำถามที่ AI หาแหล่งข้อมูลไม่พอ อ่านคำถามและเจ้าของให้ครบ ใส่คำตอบที่ตรวจสอบแล้วและบันทึก คำตอบจะถูกเพิ่มเข้า Knowledge ของเจ้าของคำถามเพื่อใช้ครั้งต่อไป</p></div></li>
+              <li class="god-guide-step"><span class="god-guide-number">2</span><div><strong>ใส่ Knowledge ส่วนกลาง</strong><p>หน้า “Knowledge / RAG” เก็บข้อมูลกลางที่ AI ของสมาชิกทุกคนใช้ตอบลูกค้า ระบบค้นข้อมูลนี้ด้วยคำสำคัญ แล้วส่งส่วนที่ตรงกับคำถามไปยังผู้ให้บริการ AI ที่สมาชิกแต่ละคนเลือกเอง เขียนหัวข้อและข้อเท็จจริงใน knowledge.md แล้วกด “บันทึกและ Index” หากดึงข้อมูลจาก API ให้ใส่ URL, JSON path และ Bearer token แล้วกด “ซิงก์” ให้สำเร็จ</p></div></li>
+              <li class="god-guide-step"><span class="god-guide-number">3</span><div><strong>ตอบคำถามที่ AI ตอบไม่ได้</strong><p>หน้า “ตอบไม่ได้” รวมคำถามที่ AI หาแหล่งข้อมูลไม่พอ อ่านคำถามและเจ้าของให้ครบ ใส่คำตอบที่ตรวจสอบแล้วและบันทึก คำตอบจะถูกเพิ่มเข้า Knowledge ของเจ้าของคำถามเพื่อใช้ครั้งต่อไป</p></div></li>
             </ol>
           </div>
         </div>
@@ -16929,8 +17226,8 @@ GOD_HTML = r"""<!doctype html>
           <div class="panel-head"><h3>ข้อควรระวัง</h3></div>
           <div class="panel-body">
             <div class="god-guide-note"><strong>God แยกจาก Login สมาชิก</strong><span>ใช้หน้า /god สำหรับจัดการระบบเท่านั้น อย่าแชร์รหัส God และอย่าใช้บัญชีนี้ทำงานประจำวันแทนสมาชิก</span></div>
-            <div class="god-guide-note"><strong>Global Knowledge กับ Knowledge สมาชิกไม่เหมือนกัน</strong><span>Global Knowledge ใช้ร่วมกันทุกคน ส่วน Knowledge ใน AI Chat Bot เป็นข้อมูลส่วนตัวของผู้ใช้นั้น เลือกตำแหน่งเก็บข้อมูลให้ตรงกับผู้ที่ควรเห็น</span></div>
-            <div class="god-guide-note"><strong>Strict Knowledge</strong><span>เมื่อเปิด AI จะตอบเฉพาะข้อมูลที่ค้นพบใน Knowledge และส่งคำถามที่ตอบไม่ได้เข้าคิว เหมาะกับข้อมูลธุรกิจที่ต้องการลดการเดา</span></div>
+            <div class="god-guide-note"><strong>AI ของสมาชิก</strong><span>สมาชิกแต่ละคนเลือกผู้ให้บริการ AI และใส่ API key ของตัวเองที่ ตั้งค่า → AI หน้า God ไม่ได้ตั้งค่า AI ให้สมาชิก</span></div>
+            <div class="god-guide-note"><strong>Global Knowledge กับข้อมูลร้านของสมาชิกไม่เหมือนกัน</strong><span>Global Knowledge ใช้กับสมาชิกทุกคน ส่วนข้อมูลร้านในหน้าตอบอัตโนมัติเป็นของสมาชิกคนนั้น ข้อความใน Global Knowledge ถูกส่งไปยังผู้ให้บริการ AI ของสมาชิกทุกคน จึงไม่ควรใส่ข้อมูลลับหรือข้อมูลส่วนบุคคล</span></div>
             <div class="god-guide-note"><strong>ก่อนลบสมาชิก</strong><span>การลบจะลบบัญชี LINE, LINE OA และ Telegram, Pattern, งานบอท, Log และค่า AI ของสมาชิกทั้งหมด ควรตรวจรายละเอียดและสำรองข้อมูลที่จำเป็นก่อนยืนยัน</span></div>
           </div>
         </div>
@@ -16984,7 +17281,9 @@ GOD_HTML = r"""<!doctype html>
   <div class="toast hidden" id="toast" role="status"></div>
 
   <script>
-    const state = {users: [], roles: {}, deleteUser: null, page: "members", globalAi: null, knowledge: null, unanswered: []};
+    const state = {users: [], roles: {}, deleteUser: null, page: "members", knowledge: null, unanswered: [], unansweredMore: false};
+    // The page shows at most this many questions waiting for an answer.
+    const UNANSWERED_LIMIT = 500;
     const $ = (id) => document.getElementById(id);
 
     const editPasswordConfirmLabel = document.createElement("label");
@@ -16998,13 +17297,19 @@ GOD_HTML = r"""<!doctype html>
     editPasswordConfirmLabel.appendChild(editPasswordConfirm);
     $("editPassword").closest(".two-col").appendChild(editPasswordConfirmLabel);
 
+    // Saves the server refuses to keep a data file safe (its text is English).
+    const GOD_ERROR_TEXTS = {
+      state_file_repaired: "ไฟล์ข้อมูลของ LinePassport ถูกแก้ไขระหว่างที่ระบบทำงาน จึงไม่บันทึกทับไฟล์นั้น โปรดรีสตาร์ท LinePassport",
+      state_file_unreadable: "ไฟล์ข้อมูลของ LinePassport อ่านไม่ได้ และเก็บสำเนาไว้ไม่ได้ (ดิสก์อาจเต็ม) จึงไม่บันทึกทับไฟล์นั้น โปรดเพิ่มพื้นที่ว่างบนดิสก์แล้วลองอีกครั้ง",
+    };
+
     async function api(path, options = {}) {
       const response = await fetch(path, {credentials: "same-origin", ...options, headers: {"Content-Type": "application/json", ...(options.headers || {})}});
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         // A wrong current password is a 401 too; that one stays on the page.
         if (response.status === 401 && data.code !== "current_password_incorrect") showLogin();
-        const error = new Error(data.error || "เกิดข้อผิดพลาด");
+        const error = new Error(GOD_ERROR_TEXTS[data.code] || data.error || "เกิดข้อผิดพลาด");
         error.status = response.status;
         error.code = data.code || "";
         throw error;
@@ -17130,7 +17435,7 @@ GOD_HTML = r"""<!doctype html>
     }
 
     async function setGodPage(page) {
-      const allowed = ["members", "ai-settings", "knowledge", "unanswered", "system", "guide"];
+      const allowed = ["members", "knowledge", "unanswered", "system", "guide"];
       state.page = allowed.includes(page) ? page : "members";
       document.querySelectorAll("[data-god-page-target]").forEach((button) => {
         const active = button.dataset.godPageTarget === state.page;
@@ -17141,126 +17446,45 @@ GOD_HTML = r"""<!doctype html>
         panel.classList.toggle("hidden", panel.dataset.godPage !== state.page);
       });
       if (state.page === "members") await loadUsers();
-      if (state.page === "ai-settings") await loadGlobalAiSettings();
       if (state.page === "knowledge") await loadKnowledge();
       if (state.page === "unanswered") await loadUnanswered();
       if (state.page === "system") await loadSystemSettings();
     }
 
-    function setConnectionState(message, kind = "") {
-      const element = $("ollamaConnectionState");
-      element.textContent = message;
-      element.className = `connection-state ${kind}`.trim();
-    }
-
-    function populateOllamaModels(models) {
-      const datalist = $("ollamaModelOptions");
-      datalist.replaceChildren();
-      for (const model of models || []) {
-        const option = document.createElement("option");
-        option.value = model.name || "";
-        option.label = [model.parameterSize, model.quantization].filter(Boolean).join(" · ");
-        datalist.appendChild(option);
-      }
-    }
-
-    function renderGlobalAiSettings(config) {
-      state.globalAi = config || {};
-      $("globalAiEnabled").checked = Boolean(config.enabled);
-      $("ollamaBaseUrl").value = config.baseUrl || "http://127.0.0.1:11434";
-      $("ollamaApiKey").value = "";
-      $("ollamaApiKeyCurrent").textContent = config.hasApiKey
-        ? `บันทึก key แล้ว ${config.apiKeyPreview || ""}`
-        : "Local Ollama ไม่ต้องใช้ API key";
-      $("ollamaChatModel").value = config.chatModel || "";
-      $("ollamaEmbeddingModel").value = config.embeddingModel || "";
-      $("ollamaTopK").value = config.topK || 5;
-      $("ollamaTemperature").value = config.temperature ?? 0.2;
-      $("ollamaTimeout").value = config.timeout || 120;
-      $("ollamaStrictKnowledge").checked = Boolean(config.strictKnowledge);
-      $("ollamaSystemPrompt").value = config.systemPrompt || "";
-      $("globalAiStatus").textContent = config.configured ? "พร้อมใช้งาน" : "ยังไม่ได้ตั้งค่า";
-      $("globalAiStatus").className = `badge ${config.configured ? "active" : "inactive"}`;
-      $("godUnansweredCount").textContent = config.unansweredCount ? `(${config.unansweredCount})` : "";
-      if (config.indexError) setConnectionState(config.indexError, "error-state");
-    }
-
-    async function loadGlobalAiSettings() {
-      const config = await api("/api/god/ai/settings");
-      renderGlobalAiSettings(config);
-      return config;
-    }
-
-    async function testOllama() {
-      const button = $("testOllamaButton");
-      button.disabled = true;
-      setConnectionState("กำลังเชื่อมต่อ Ollama...");
-      try {
-        const data = await api("/api/god/ai/test", {
-          method: "POST",
-          body: JSON.stringify({
-            baseUrl: $("ollamaBaseUrl").value.trim(),
-            apiKey: $("ollamaApiKey").value.trim()
-          })
-        });
-        state.ollamaModels = data.models || [];
-        populateOllamaModels(state.ollamaModels);
-        const names = state.ollamaModels.map((item) => item.name);
-        if (!$("ollamaChatModel").value) {
-          $("ollamaChatModel").value = names.find((name) => !/embed|minilm/i.test(name)) || names[0] || "";
-        }
-        if (!$("ollamaEmbeddingModel").value) {
-          $("ollamaEmbeddingModel").value = names.find((name) => /embed|minilm/i.test(name)) || "";
-        }
-        setConnectionState(`เชื่อมต่อแล้ว · พบ ${names.length} โมเดล`, "ok");
-      } catch (error) {
-        setConnectionState(error.message, "error-state");
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    async function saveGlobalAiSettings() {
-      const payload = {
-        enabled: $("globalAiEnabled").checked,
-        baseUrl: $("ollamaBaseUrl").value.trim(),
-        chatModel: $("ollamaChatModel").value.trim(),
-        embeddingModel: $("ollamaEmbeddingModel").value.trim(),
-        topK: Number($("ollamaTopK").value),
-        temperature: Number($("ollamaTemperature").value),
-        timeout: Number($("ollamaTimeout").value),
-        strictKnowledge: $("ollamaStrictKnowledge").checked,
-        systemPrompt: $("ollamaSystemPrompt").value.trim()
-      };
-      if ($("ollamaApiKey").value.trim()) payload.apiKey = $("ollamaApiKey").value.trim();
-      const config = await api("/api/god/ai/settings", {method: "POST", body: JSON.stringify(payload)});
-      renderGlobalAiSettings(config);
-      toast("บันทึก Global AI แล้ว");
+    // Text typed into knowledge.md and not saved yet.
+    function knowledgeDraft() {
+      const editor = $("knowledgeMarkdown");
+      return state.knowledge && editor.value !== (state.knowledge.knowledgeMarkdown || "") ? editor.value : null;
     }
 
     async function reindexKnowledge() {
       $("reindexKnowledgeButton").disabled = true;
       try {
+        // The index is built from the saved text: unsaved edits beside it are saved first.
+        if (knowledgeDraft() !== null) return await saveKnowledge();
         const data = await api("/api/god/ai/reindex", {method: "POST", body: "{}"});
         renderKnowledge(data);
-        await loadGlobalAiSettings();
         toast("สร้างดัชนี Knowledge แล้ว");
       } finally {
         $("reindexKnowledgeButton").disabled = false;
       }
     }
 
-    function renderKnowledge(data) {
+    // `saved`: the server just stored the editor's text. Otherwise text typed and not
+    // saved yet stays in the editor (an API source saved, synced or deleted meanwhile).
+    function renderKnowledge(data, saved = false) {
+      const draft = saved ? null : knowledgeDraft();
       state.knowledge = data || {};
-      $("knowledgeMarkdown").value = data.knowledgeMarkdown || "";
+      $("knowledgeMarkdown").value = draft !== null ? draft : (state.knowledge.knowledgeMarkdown || "");
       $("knowledgeChunkCount").textContent = `${data.chunkCount || 0} chunks`;
-      $("knowledgeIndexMode").textContent = data.indexMode === "embedding" ? "Vector index" : data.indexMode === "keyword" ? "Keyword index" : "ยังไม่ Index";
+      // Every member's AI searches this text by keyword matching.
+      $("knowledgeIndexMode").textContent = data.chunkCount ? "ค้นด้วยคำสำคัญ" : "ยังไม่ Index";
       const status = $("knowledgeIndexState");
       if (data.indexError) {
-        status.textContent = `บันทึกแล้ว แต่ Embedding ใช้งานไม่ได้: ${data.indexError}`;
+        status.textContent = `บันทึกแล้ว แต่สร้างดัชนีไม่สำเร็จ: ${data.indexError}`;
         status.className = "connection-state error-state";
       } else if (data.indexedAt) {
-        status.textContent = `Index ล่าสุด ${data.indexedAt} · ${data.chunkCount || 0} chunks · ${data.indexMode || "empty"}`;
+        status.textContent = `Index ล่าสุด ${data.indexedAt} · ${data.chunkCount || 0} chunks`;
         status.className = "connection-state ok";
       } else {
         status.textContent = "ยังไม่มีข้อมูลดัชนี";
@@ -17280,7 +17504,7 @@ GOD_HTML = r"""<!doctype html>
           method: "POST",
           body: JSON.stringify({knowledgeMarkdown: $("knowledgeMarkdown").value})
         });
-        renderKnowledge(data);
+        renderKnowledge(data, true);
         toast("บันทึก knowledge.md และสร้างดัชนีแล้ว");
       } finally {
         $("saveKnowledgeButton").disabled = false;
@@ -17363,7 +17587,9 @@ GOD_HTML = r"""<!doctype html>
       const data = await api("/api/god/ai/sources/save", {method: "POST", body: JSON.stringify(payload)});
       clearKnowledgeSourceForm();
       renderKnowledge(data);
-      toast("บันทึก Knowledge API แล้ว");
+      toast(data.keyCleared
+        ? "บันทึก Knowledge API แล้ว แต่ไม่ได้เก็บ key เดิมไว้ เพราะที่อยู่ใหม่เป็นเซิร์ฟเวอร์อื่น ถ้าต้องใช้ key ให้ใส่อีกครั้ง"
+        : "บันทึก Knowledge API แล้ว");
     }
 
     async function syncKnowledgeSource(id) {
@@ -17382,7 +17608,8 @@ GOD_HTML = r"""<!doctype html>
     function renderUnanswered() {
       const list = $("godUnansweredList");
       list.replaceChildren();
-      $("godUnansweredCount").textContent = state.unanswered.length ? `(${state.unanswered.length})` : "";
+      const count = state.unanswered.length;
+      $("godUnansweredCount").textContent = count ? `(${count}${state.unansweredMore ? "+" : ""})` : "";
       if (!state.unanswered.length) {
         const empty = document.createElement("div");
         empty.className = "empty-panel panel";
@@ -17423,8 +17650,11 @@ GOD_HTML = r"""<!doctype html>
     }
 
     async function loadUnanswered() {
-      const data = await api("/api/god/ai/unanswered?limit=500");
-      state.unanswered = data.questions || [];
+      // One more than it shows: the menu count can then say "500+" only past 500.
+      const data = await api(`/api/god/ai/unanswered?limit=${UNANSWERED_LIMIT + 1}`);
+      const questions = data.questions || [];
+      state.unansweredMore = questions.length > UNANSWERED_LIMIT;
+      state.unanswered = questions.slice(0, UNANSWERED_LIMIT);
       renderUnanswered();
     }
 
@@ -17596,8 +17826,6 @@ GOD_HTML = r"""<!doctype html>
     document.querySelectorAll("[data-god-page-target]").forEach((button) => {
       button.addEventListener("click", () => setGodPage(button.dataset.godPageTarget).catch((error) => toast(error.message)));
     });
-    $("testOllamaButton").addEventListener("click", () => testOllama().catch((error) => toast(error.message)));
-    $("saveGlobalAiButton").addEventListener("click", () => saveGlobalAiSettings().catch((error) => toast(error.message)));
     $("saveSystemSettingsButton").addEventListener("click", () => saveSystemSettings().catch((error) => toast(error.message)));
     $("reindexKnowledgeButton").addEventListener("click", () => reindexKnowledge().catch((error) => toast(error.message)));
     $("saveKnowledgeButton").addEventListener("click", () => saveKnowledge().catch((error) => toast(error.message)));
@@ -17605,12 +17833,6 @@ GOD_HTML = r"""<!doctype html>
     $("cancelKnowledgeSourceButton").addEventListener("click", clearKnowledgeSourceForm);
     $("refreshKnowledgeButton").addEventListener("click", () => loadKnowledge().catch((error) => toast(error.message)));
     $("refreshUnansweredButton").addEventListener("click", () => loadUnanswered().catch((error) => toast(error.message)));
-    $("toggleOllamaKeyButton").addEventListener("click", () => {
-      const input = $("ollamaApiKey");
-      const revealing = input.type === "password";
-      input.type = revealing ? "text" : "password";
-      $("toggleOllamaKeyButton").textContent = revealing ? "ซ่อน" : "แสดง";
-    });
     $("logoutButton").addEventListener("click", async () => {
       try {
         await api("/api/god/logout", {method: "POST", body: "{}"});
@@ -17625,7 +17847,8 @@ GOD_HTML = r"""<!doctype html>
     api("/api/god/status").then((data) => {
       if (!data.authenticated) return showLogin();
       showApp();
-      loadGlobalAiSettings().catch(() => {});
+      // The menu badge counts the questions waiting for an answer from the start.
+      loadUnanswered().catch(() => {});
       return setGodPage(state.page || "members");
     }).catch((error) => {
       // api() has already gone to the sign-in form on a 401. A network error, a 5xx
@@ -17723,6 +17946,11 @@ DEFAULT_SCHEDULE_MAX_PER_DAY = 200
 DEFAULT_SCHEDULE_JITTER_MINUTES = 3
 SCHEDULE_QUEUE_RETRY_SECONDS = 300
 SCHEDULE_RETRY_DELAY_SECONDS = 300
+# How late after its next run and random delay a once-a-day run still comes due on time: a
+# few of the scheduler's rounds (every 10 seconds), or a wait for a free sender (see
+# _due_run_deferred).
+SCHEDULE_ON_TIME_SLACK_SECONDS = 60
+SCHEDULE_SENDER_WAIT_SECONDS = 900
 SCHEDULE_TARGET_GAP_SECONDS = (30.0, 90.0)
 MAX_SCHEDULE_IMAGE_STORAGE_PER_ACCOUNT = 100 * 1024 * 1024
 MAX_BOT_LOG_STORAGE_BYTES = 25 * 1024 * 1024
@@ -17753,6 +17981,10 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("POST", "/api/schedules/test"): (6, 60.0),
     ("POST", "/api/proxy/test"): (10, 60.0),
     ("POST", "/api/ai/models"): (12, 60.0),
+    # Each of these calls the workspace's AI provider (a save also runs a test chat).
+    ("POST", "/api/assistant/settings"): (6, 60.0),
+    ("POST", "/api/assistant/ask"): (20, 60.0),
+    ("POST", "/api/assistant/knowledge/reindex"): (4, 60.0),
     **crm_routes.RATE_LIMITS,
     **telegram_routes.RATE_LIMITS,
     ("POST", "/api/lineoa/login/start"): (6, 300.0),
@@ -17761,15 +17993,65 @@ AUTHENTICATED_API_RATE_LIMITS: dict[tuple[str, str], tuple[int, float]] = {
     ("GET", "/api/inbox"): (60, 60.0),
     ("GET", "/api/events/inbox"): (12, 60.0),
 }
+# Limited routes that act on the account named by ?accountId=: each account the user
+# can open has its own bucket there. Every other limited route is counted per user,
+# method and path, so a made-up accountId never opens a fresh bucket.
+ACCOUNT_SCOPED_RATE_LIMIT_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/api/status"),
+        ("GET", "/api/contacts"),
+        ("GET", "/api/groups"),
+        ("GET", "/api/conversations"),
+        ("GET", "/api/messages"),
+        ("GET", "/api/profile-avatar"),
+        ("GET", "/api/events"),
+        ("GET", "/api/kpi"),
+        ("GET", "/api/assistant/auto-reply"),
+        ("GET", "/api/assistant/auto-reply/groups"),
+    }
+)
 MAX_USERS = 1000
 MAX_ACCOUNTS_PER_USER = 20
 MAX_STAFF_PER_OWNER = 50
 MAX_ASSISTANT_QUESTION_LENGTH = 4000
+# An answer a person types (to a logged question, or as a manual answer).
 MAX_ASSISTANT_ANSWER_LENGTH = 20_000
+# The most of an AI answer that is stored and sent: LINE's longest text message
+# (Telegram takes 4096 of it). Every logged question, answer included, lives in the
+# one global_ai record all workspaces share.
+MAX_AI_ANSWER_LENGTH = 5000
+# A model name an AI reports back (stored with each logged question) is cut to this.
+MAX_AI_MODEL_NAME_LENGTH = 200
+# Refresh models waits at most this long for a provider's list, with no retry: well
+# inside Cloudflare's 100-second limit, so a stalled provider still ends in the
+# readable 422 ai_models_unavailable instead of a proxy error page.
+MODEL_LIST_TIMEOUT_SECONDS = 30.0
+# How long one ask waits for its question's search vector before it falls back to
+# keyword search. With the 60-second answer this keeps a whole ask (an auto reply's
+# hold on a shared worker) to about 75 seconds.
+QUESTION_EMBEDDING_TIMEOUT_SECONDS = 15.0
+# How long a request to an outside address waits for its host name to resolve (the
+# Custom API waits no longer than its own deadline allows).
+DNS_LOOKUP_TIMEOUT_SECONDS = 10.0
+# A search vector longer than MAX_EMBEDDING_DIMENSIONS (from okline.assistant, where
+# the AI clients refuse longer ones too) is not kept, one workspace's chunks may hold
+# at most MAX_TENANT_VECTOR_VALUES vector values in all (about 20 MB of the shared
+# global_ai record in PostgreSQL, which refuses a record over 256 MB; about 33 MB in
+# the file store: 325 chunks of 3072 values), and all workspaces together at most
+# MAX_TOTAL_VECTOR_VALUES (about 80 MB in PostgreSQL). Past any of these, the
+# workspace's index falls back to keyword search, with the reason in indexError. The
+# shared budget goes to whoever builds first, so a few large workspaces can use it up.
+MAX_TENANT_VECTOR_VALUES = 1_000_000
+MAX_TOTAL_VECTOR_VALUES = 4_000_000
 MAX_GLOBAL_KNOWLEDGE_LENGTH = 750_000
 MAX_KNOWLEDGE_API_BYTES = 750_000
 MAX_KNOWLEDGE_API_SOURCES = 50
+# The question log every workspace shares keeps at most this many questions, and at
+# most MAX_ASSISTANT_QUESTIONS_PER_WORKSPACE of one workspace (its own oldest go
+# first). When the log is full, the workspace holding the most questions loses its
+# oldest (see _trim_question_log).
 MAX_ASSISTANT_QUESTIONS = 5000
+MAX_ASSISTANT_QUESTIONS_PER_WORKSPACE = 500
 MAX_INCOMING_API_LINKS_PER_USER = 100
 MAX_INCOMING_API_TARGETS = 20
 MAX_INCOMING_API_NAME_LENGTH = 120
@@ -17783,6 +18065,10 @@ MAX_PROXY_USERNAME_LENGTH = 255
 MAX_PROXY_PASSWORD_LENGTH = 1024
 AI_AUTO_REPLY_POLL_SECONDS = 5.0
 MAX_AI_AUTO_REPLY_CHATS = 500
+# A look's time is the newest message time in the inbox it read, on LINE's clock (see
+# _inbox_line_time_ms). A message LINE stamped just before it built that inbox can
+# still be missing from it: a bound taken from a look allows this much for that.
+AI_AUTO_REPLY_LOOK_SLACK_MS = 2_000
 AI_AUTO_REPLY_IDENTITY_CACHE_TTL_SECONDS = 10 * 60
 MAX_AI_AUTO_REPLY_IDENTITY_CACHE = 4000
 INBOX_SNAPSHOT_TTL_SECONDS = AI_AUTO_REPLY_POLL_SECONDS
@@ -17849,6 +18135,28 @@ DEFAULT_KPI_SLA_SECONDS = 300
 KPI_OVERDUE_SECONDS = 1800
 MAX_AI_AUTO_REPLIES_PER_ACCOUNT_PER_MINUTE = 20
 MAX_AI_AUTO_REPLIES_PER_CHAT_PER_MINUTE = 6
+AI_AUTO_REPLY_WORKERS = 4
+# Auto replies of one workspace owner running or queued in the shared workers at once.
+# A slow (or hostile) AI provider holds a worker for a whole ask (search vector plus
+# answer, about 75 seconds at most; see ask_global_ai), so one workspace can never take
+# more than half the workers from the others.
+AI_AUTO_REPLY_JOBS_PER_OWNER = 2
+# Telegram and LINE OA messages have no cursor to come back to: while their owner's
+# places are all taken, up to this many wait in that owner's backlog, oldest first.
+# When it is full the oldest is dropped, with an "ai.auto_reply.dropped" log line.
+AI_AUTO_REPLY_BACKLOG_PER_OWNER = 20
+# A LINE message that finds its owner's places taken waits instead, its chat's cursor
+# unchanged and no rate used. The poll that found it leaves up to this many such chats
+# of an account ready, those that have waited longest: a place that frees up starts the
+# first of them at once (in turn with the backlog) until the account's next poll
+# replaces them, but for no longer than AI_AUTO_REPLY_READY_SECONDS (a poll cycle held
+# up by a LINE account whose requests hang can take minutes). Further waiting chats are
+# not even read until a later poll has room for them.
+MAX_AI_AUTO_REPLY_READY_PER_ACCOUNT = 8
+AI_AUTO_REPLY_READY_SECONDS = 60.0
+# How long an owner's "AI is set up" answer is reused by the per-message checks
+# (Telegram, LINE OA, the reply workers); saving the AI settings forgets it at once.
+AI_READY_CACHE_SECONDS = 5.0
 AI_AUTO_REPLY_FALLBACK = (
     "ขออภัย ระบบยังไม่มีข้อมูลเพียงพอสำหรับคำถามนี้ "
     "ทีมงานจะเข้ามาตอบเพิ่มเติม"
@@ -17880,7 +18188,33 @@ LITPORT_PARAMETERS = ("pool", "country", "region", "state", "city", "sid", "sttl
 BRIGHTDATA_PARAMETERS = (
     "country", "state", "city", "zip", "asn", "session", "ip", "os", "carrier", "dns"
 )
-DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+# Routes of the removed shared AI (God page "Global AI / Ollama"); they answer 404.
+REMOVED_GOD_AI_PATHS = frozenset({"/api/god/ai/settings", "/api/god/ai/test"})
+# The God's global knowledge reaches every workspace by keyword matching only (each
+# workspace has its own AI, with its own search model or none). A God chunk joins an
+# answer when it holds at least this share of what the question is about (see
+# _global_knowledge_score) ...
+GLOBAL_KNOWLEDGE_MIN_SCORE = 0.6
+# ... and scores at least this share of the best God chunk, at most this many.
+GLOBAL_KNOWLEDGE_MARGIN = 0.75
+GLOBAL_KNOWLEDGE_MAX_CHUNKS = 3
+# A question is looked for in the God's chunks by at most this many distinct terms
+# (Thai 3-letter groups and other words), the first it holds, and a word other than
+# Thai by at most its first MAX_KNOWLEDGE_QUERY_WORD_LENGTH letters (no real word is
+# longer; a pasted code or hash would be): a 4000-letter message, even one long run
+# of letters, costs about what a few hundred letters do.
+MAX_GLOBAL_KNOWLEDGE_QUERY_TERMS = 300
+MAX_KNOWLEDGE_QUERY_WORD_LENGTH = 40
+# A question's words other than Thai are found in a chunk's text one by one; from
+# this many on, the chunk's words are listed once and looked up instead (faster then).
+GLOBAL_KNOWLEDGE_WORD_LIST_FROM = 24
+# A saved key's last 4 characters are shown only when it is at least this long.
+MASK_SECRET_TAIL_MIN_LENGTH = 16
+# Set in the global_ai record by the one-time move to per-workspace AI providers.
+AI_PROVIDERS_MIGRATION_KEY = "aiProvidersMigration"
+# Set in the global_ai record by the one-time move of the God's answers to staff
+# questions (filed under the staff member's id before) to the team owner's workspace.
+STAFF_ANSWERS_MOVED_KEY = "staffAnswersMoved"
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
     "You are LinePassport Assistant. Answer clearly and concisely in the same "
     "language as the user. Never invent facts that are not supported by the supplied "
@@ -18207,18 +18541,99 @@ def _line_config_for_proxy(proxy_url: str | None) -> LineConfig | None:
     return LineConfig(proxies={"http": value, "https": value})
 
 
-def _public_http_target(url: str) -> tuple[str, tuple[str, ...]]:
+# IPv6 ranges that carry an IPv4 address inside, besides IPv4-mapped (::ffff:0:0/96),
+# 6to4 and Teredo, which ipaddress names itself: IPv4-compatible and NAT64.
+_IPV4_EMBEDDING_IPV6_NETWORKS = (
+    ipaddress.IPv6Network("::/96"),
+    ipaddress.IPv6Network("64:ff9b::/96"),
+    ipaddress.IPv6Network("64:ff9b:1::/48"),
+)
+
+
+def _ip_address_is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Whether the server may connect to this address for a user-supplied URL.
+
+    Private, loopback, link-local (the cloud metadata address 169.254.169.254 among
+    them), multicast, reserved, unspecified and shared (CGNAT, 100.64.0.0/10)
+    addresses are refused. So is every IPv6 form with an IPv4 address inside
+    (IPv4-mapped, IPv4-compatible, 6to4, Teredo, NAT64): some systems route those
+    to the IPv4 address, and newer Python versions call ::ffff:a.b.c.d global when
+    a.b.c.d is.
+    """
+    if (
+        not address.is_global
+        or address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    ):
+        return False
+    if isinstance(address, ipaddress.IPv6Address):
+        if (
+            address.is_site_local
+            or address.ipv4_mapped is not None
+            or address.sixtofour is not None
+            or address.teredo is not None
+            or any(address in network for network in _IPV4_EMBEDDING_IPV6_NETWORKS)
+        ):
+            return False
+    return True
+
+
+def _resolve_host(host: str, port: int, timeout: float) -> list[Any]:
+    """``socket.getaddrinfo`` for ``host``, waiting for it at most ``timeout`` seconds.
+
+    The lookup runs on a thread of its own, so a name server that never answers does
+    not hold the caller (an auto reply's worker, say) past its deadline; that thread
+    ends by itself when the system's resolver gives up. Raises OSError on timeout.
+    """
+    found: list[Any] = []
+    failed: list[BaseException] = []
+
+    def lookup() -> None:
+        try:
+            found.extend(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+        except BaseException as exc:  # handed to the caller below
+            failed.append(exc)
+
+    thread = threading.Thread(target=lookup, name="linepassport-dns", daemon=True)
+    try:
+        thread.start()
+    except RuntimeError as exc:  # no thread can be started now
+        raise OSError(f"{host} could not be looked up ({exc})") from exc
+    thread.join(max(0.1, timeout))
+    if thread.is_alive():
+        raise OSError(f"{host} did not resolve within {max(0.1, timeout):g} seconds")
+    if failed:
+        raise failed[0]
+    return found
+
+
+def _public_http_target(
+    url: str, *, dns_timeout: float = DNS_LOOKUP_TIMEOUT_SECONDS
+) -> tuple[str, tuple[str, ...]]:
+    """``url`` checked, and the public addresses its host resolves to.
+
+    The DNS lookup waits at most ``dns_timeout`` seconds (DNS_LOOKUP_TIMEOUT_SECONDS
+    at most).
+    """
     value = _validate_http_url_shape(url)
     parsed = urlparse(value)
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
         addresses = {
             ipaddress.ip_address(str(item[4][0]).split("%", 1)[0])
-            for item in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+            for item in _resolve_host(
+                str(parsed.hostname or ""),
+                port,
+                min(dns_timeout, DNS_LOOKUP_TIMEOUT_SECONDS),
+            )
         }
     except (OSError, ValueError) as exc:
         raise WebError(HTTPStatus.BAD_GATEWAY, "URL host could not be resolved.") from exc
-    if not addresses or any(not address.is_global for address in addresses):
+    if not addresses or any(not _ip_address_is_public(address) for address in addresses):
         raise WebError(
             HTTPStatus.BAD_REQUEST,
             "Private, loopback, link-local, and reserved network addresses are not allowed.",
@@ -18233,9 +18648,20 @@ def _validate_public_http_url(url: str) -> str:
 
 
 class _PinnedAddressAdapter(HTTPAdapter):
-    def __init__(self, url: str, address: str) -> None:
+    """Sends a request for ``url`` to ``address``, the address that was checked.
+
+    TLS still checks the certificate against the URL's host name. With a
+    ``watchdog``, every connection reports its socket to that
+    :class:`DeadlineWatchdog`, so the request keeps its total deadline in every
+    phase (connect, TLS, status line and headers, body).
+    """
+
+    def __init__(
+        self, url: str, address: str, watchdog: DeadlineWatchdog | None = None
+    ) -> None:
         self.target = urlparse(url)
         self.address = address
+        self.watchdog = watchdog
         super().__init__(pool_connections=1, pool_maxsize=1, max_retries=0)
 
     def get_connection_with_tls_context(
@@ -18246,6 +18672,7 @@ class _PinnedAddressAdapter(HTTPAdapter):
         cert: Any = None,
     ) -> HTTPConnectionPool:
         port = self.target.port or (443 if self.target.scheme == "https" else 80)
+        pool: HTTPConnectionPool
         if self.target.scheme == "https":
             _, raw_pool_kwargs = self.build_connection_pool_key_attributes(
                 request, verify, cert
@@ -18253,8 +18680,12 @@ class _PinnedAddressAdapter(HTTPAdapter):
             pool_kwargs: dict[str, Any] = dict(raw_pool_kwargs)
             pool_kwargs["assert_hostname"] = self.target.hostname
             pool_kwargs["server_hostname"] = self.target.hostname
-            return HTTPSConnectionPool(self.address, port, **pool_kwargs)
-        return HTTPConnectionPool(self.address, port)
+            pool = HTTPSConnectionPool(self.address, port, **pool_kwargs)
+        else:
+            pool = HTTPConnectionPool(self.address, port)
+        if self.watchdog is not None:
+            self.watchdog.watch_pool(pool)
+        return pool
 
     def send(
         self,
@@ -18356,7 +18787,13 @@ def _open_public_response(
             raise WebError(HTTPStatus.BAD_GATEWAY, "Upstream redirect has no destination.")
         if redirect_count >= MAX_REDIRECTS:
             raise WebError(HTTPStatus.BAD_GATEWAY, "Upstream returned too many redirects.")
-        current = _validate_public_http_url(urljoin(current, location))
+        following = _validate_public_http_url(urljoin(current, location))
+        if not _same_ai_origin(current, following) and not _https_upgrade(current, following):
+            # Credentials go only to the origin they were given for.
+            for name in list(current_headers):
+                if name.lower() in {"authorization", "cookie", "proxy-authorization"}:
+                    del current_headers[name]
+        current = following
         current_params = None
         if response.status_code == 303 or (
             response.status_code in {301, 302} and current_method == "POST"
@@ -18405,6 +18842,672 @@ def _buffer_response_limited(response: requests.Response, max_bytes: int) -> req
     if len(raw) > max_bytes:
         raise WebError(HTTPStatus.BAD_GATEWAY, "Upstream response is too large.")
     return response
+
+
+# --- Custom API (an OpenAI-compatible server a workspace names) ---------------
+# The server calls an address a member typed, so every call to it goes through
+# _custom_ai_transport: https only, to public addresses only, over a connection pinned
+# to the address that was checked (DNS cannot swap in a private one between the check
+# and the connect), with no proxy or .netrc credentials from the environment, no
+# redirects, no compressed answers, a size cap, a total deadline that a
+# DeadlineWatchdog keeps in every phase, and never a second send of a request.
+
+
+def _custom_ai_base_url(value: Any) -> str:
+    """A Custom API base URL as it is saved and called, or a 400 the page translates.
+
+    A pasted ``/chat/completions`` or ``/models`` at the end is dropped. An empty
+    address is ``ai_base_url_required``. The address must be https, printable ASCII
+    of at most 2048 characters (a domain in another script goes in its ``xn--``
+    form) with no user name, password, query or fragment (``ai_base_url_invalid``).
+    Its host must be found (``ai_base_url_not_found``) and resolve to public
+    addresses only (``ai_base_url_blocked``).
+    """
+    url = normalize_custom_base_url(str(value or ""))
+    if not url:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST, "Enter the Custom API address.", "ai_base_url_required"
+        )
+    invalid = WebError(
+        HTTPStatus.BAD_REQUEST,
+        "The Custom API address must look like https://api.example.com/v1.",
+        "ai_base_url_invalid",
+    )
+    if len(url) > MAX_URL_LENGTH:
+        raise invalid
+    if any(ord(char) > 0x7F for char in url):
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "Type the Custom API address in ASCII: a domain name in another script goes "
+            "in its xn-- (punycode) form.",
+            "ai_base_url_invalid",
+        )
+    if not all("!" <= char <= "~" and char != "\\" for char in url):
+        raise invalid
+    try:
+        parsed = urlparse(url)
+        _ = parsed.port
+    except ValueError:
+        raise invalid from None
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "The Custom API address must start with https://.",
+            "ai_base_url_invalid",
+        )
+    if parsed.username is not None or parsed.password is not None or "?" in url or "#" in url:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            "The Custom API address must not contain a user name, password, query or fragment.",
+            "ai_base_url_invalid",
+        )
+    try:
+        _public_http_target(url)
+    except WebError as exc:
+        if exc.code == "unsafe_url":
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "The Custom API address is a private, loopback, link-local or reserved "
+                "network address. Use a public https address.",
+                "ai_base_url_blocked",
+            ) from None
+        if exc.status == HTTPStatus.BAD_GATEWAY:  # the host name could not be resolved
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "The Custom API host could not be found. Check the address.",
+                "ai_base_url_not_found",
+            ) from None
+        raise invalid from None
+    return url
+
+
+def _ai_url_origin(url: str) -> tuple[str, str, int]:
+    """(scheme, host, port) of a URL: a saved Custom API key belongs to one origin."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return scheme, str(parsed.hostname or "").lower(), port
+
+
+def _https_upgrade(old: str, new: str) -> bool:
+    """Whether a redirect only moves ``old`` (http on the default port) to https on the
+    same host and default port: credentials may follow it, as requests itself allows."""
+    try:
+        before, after = _ai_url_origin(old), _ai_url_origin(new)
+    except ValueError:
+        return False
+    return before == ("http", after[1], 80) and after[0] == "https" and after[2] == 443
+
+
+def _same_ai_origin(left: str, right: str) -> bool:
+    try:
+        return bool(left and right) and _ai_url_origin(left) == _ai_url_origin(right)
+    except ValueError:
+        return False
+
+
+def _connect_failed_before_sending(exc: requests.exceptions.ConnectionError) -> bool:
+    """Whether the connection failed before any byte of the request went out."""
+    reason: Any = exc.args[0] if exc.args else None
+    reason = getattr(reason, "reason", reason)  # urllib3's MaxRetryError wraps the cause
+    # NewConnectionError (refused, unreachable) is a ConnectTimeoutError too.
+    return isinstance(reason, urllib3.exceptions.ConnectTimeoutError)
+
+
+def _custom_ai_transport(base_url: str) -> Transport:
+    """The transport for one Custom API, bound to the origin of ``base_url``.
+
+    It keeps the contract of :class:`okline.assistant.Transport`: ``timeout`` is a
+    total deadline (kept by a :class:`DeadlineWatchdog` while connecting, during the
+    TLS handshake, the status line and headers, and the body), ``max_bytes`` caps the
+    answer, a 3xx or a compressed answer is an error and every failure is an
+    :class:`AssistantError`. A request for another origin is refused, so a
+    workspace's key only ever goes to the address it was saved with.
+    """
+    try:
+        origin = _ai_url_origin(base_url)
+    except ValueError:
+        origin = ("", "", 0)
+
+    def send(
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        json_body: Any = None,
+        timeout: float = CHAT_DEADLINE_SECONDS,
+        max_bytes: int = MAX_AI_RESPONSE_BYTES,
+    ) -> tuple[int, dict[str, str], bytes]:
+        return _send_custom_ai_request(
+            origin,
+            method,
+            url,
+            headers=headers,
+            json_body=json_body,
+            timeout=timeout,
+            max_bytes=max_bytes,
+        )
+
+    return send
+
+
+def _send_custom_ai_request(
+    origin: tuple[str, str, int],
+    method: str,
+    url: str,
+    *,
+    headers: Mapping[str, str],
+    json_body: Any,
+    timeout: float,
+    max_bytes: int,
+) -> tuple[int, dict[str, str], bytes]:
+    try:
+        total = float(timeout)
+    except (TypeError, ValueError, OverflowError):
+        total = CHAT_DEADLINE_SECONDS
+    total = max(1.0, total if math.isfinite(total) else CHAT_DEADLINE_SECONDS)
+    deadline = time.monotonic() + total
+    try:
+        limit = int(max_bytes)
+    except (TypeError, ValueError, OverflowError):
+        limit = MAX_AI_RESPONSE_BYTES
+    limit = max(1, min(limit, MAX_AI_EMBEDDING_BYTES))
+    try:
+        same_origin = origin[0] == "https" and _ai_url_origin(url) == origin
+    except ValueError:
+        same_origin = False
+    if not same_origin:
+        raise AssistantError(
+            "the request is not for the saved Custom API address", code="ai_base_url_invalid"
+        )
+    try:
+        # The lookup counts against the request's deadline too.
+        target, addresses = _public_http_target(
+            url, dns_timeout=deadline - time.monotonic()
+        )
+    except WebError as exc:
+        if exc.code == "unsafe_url":
+            raise AssistantError(
+                "the address is a private, loopback, link-local or reserved network address",
+                code="ai_base_url_blocked",
+            ) from None
+        if exc.status == HTTPStatus.BAD_GATEWAY:
+            raise AssistantError(
+                "the host could not be resolved", code="ai_base_url_not_found"
+            ) from None
+        raise AssistantError(
+            "the address is not a valid https URL", code="ai_base_url_invalid"
+        ) from None
+    request_headers: CaseInsensitiveDict[str] = CaseInsensitiveDict(
+        {"Accept": "application/json", "Accept-Encoding": "identity"}
+    )
+    request_headers.update(headers)
+    data: bytes | None = None
+    if json_body is not None:
+        try:
+            data = json.dumps(json_body, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise AssistantError("the request could not be written as JSON") from exc
+        request_headers["Content-Type"] = "application/json"
+    failure = "cannot connect"
+    for address in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssistantError("the provider did not answer in time")
+        # One watchdog and one new session (so new connections) per address: at the
+        # deadline it shuts this attempt's sockets down, whatever phase it is in, and
+        # can never touch the socket of a later request.
+        watchdog = DeadlineWatchdog(deadline)
+        session = requests.Session()
+        session.trust_env = False  # no proxy or .netrc credentials from the environment
+        session.mount("https://", _PinnedAddressAdapter(target, address, watchdog))
+        response: requests.Response | None = None
+        try:
+            # Leaving this block once the deadline has fired raises "did not answer in
+            # time", even through a ``continue``: a request the watchdog stopped may
+            # have reached the server, so no other address is tried after it.
+            with watchdog:
+                try:
+                    response = session.request(
+                        method,
+                        target,
+                        headers=request_headers,
+                        data=data,
+                        timeout=(min(CONNECT_TIMEOUT_SECONDS, remaining), remaining),
+                        allow_redirects=False,
+                        stream=True,
+                    )
+                except requests.exceptions.ConnectTimeout:
+                    failure = "cannot connect (the connection timed out)"
+                    continue  # nothing was sent, so the next address may be tried
+                except requests.exceptions.SSLError as exc:
+                    raise AssistantError(
+                        f"the secure connection failed ({type(exc).__name__})"
+                    ) from exc
+                except requests.exceptions.ConnectionError as exc:
+                    if _connect_failed_before_sending(exc):
+                        failure = "cannot connect (the connection was refused or unreachable)"
+                        continue
+                    # The request may have reached the server: it is never sent again.
+                    raise AssistantError(
+                        "the connection broke before the answer arrived"
+                    ) from exc
+                except requests.exceptions.Timeout as exc:
+                    raise AssistantError("the provider did not answer in time") from exc
+                except (requests.RequestException, OSError, ValueError) as exc:
+                    raise AssistantError(f"cannot connect ({type(exc).__name__})") from exc
+                status = int(response.status_code)
+                if 300 <= status < 400:
+                    raise AssistantError(
+                        f"the provider answered with a redirect (HTTP {status}), which is "
+                        "not followed",
+                        status,
+                    )
+                # The request asks for identity. A compressed answer could inflate far
+                # past the size cap inside one read, so it is refused unread, and the
+                # body is read exactly as sent.
+                encoding = str(response.headers.get("Content-Encoding") or "").strip().lower()
+                if encoding not in ("", "identity"):
+                    raise AssistantError(
+                        "the provider sent a compressed answer, which is not accepted", status
+                    )
+                body = _read_limited(
+                    response, max_bytes=limit, deadline=deadline, status=status, decode=False
+                )
+            return status, dict(response.headers), body
+        finally:
+            if response is not None:
+                response.close()
+            session.close()
+    raise AssistantError(failure)
+
+
+def _ai_error_text(value: Any, *secrets: str) -> str:
+    """A provider failure as the page shows it: keys hidden, URLs shortened."""
+    text = str(value or "")
+    for secret in secrets:
+        # Only a key long enough to be a secret is hidden: a stray "a" typed by
+        # mistake would otherwise garble every word of the reason.
+        if secret and len(secret) >= 8:
+            text = text.replace(secret, "[API key]")
+    return _safe_log_detail(text, 300) or "The AI provider could not be reached."
+
+
+def _require_ai_provider_available(provider: AIProvider) -> None:
+    """A 400 ``ai_provider_unavailable`` for a provider this server cannot run."""
+    available, reason = provider_available(provider.id)
+    if not available:
+        raise WebError(
+            HTTPStatus.BAD_REQUEST,
+            f"{provider.label} is not available on this server: it needs Python 3.10 "
+            "or newer with the anthropic package.",
+            reason or "ai_provider_unavailable",
+        )
+
+
+def _vector_size_problem(size: int, count: int, others: int = 0) -> str:
+    """Why ``count`` search vectors of ``size`` values are not kept; "" when they are.
+
+    ``others`` is how many vector values the other workspaces keep.
+    """
+    if size > MAX_EMBEDDING_DIMENSIONS:
+        return (
+            f"Search vectors of {size} values are too long; at most "
+            f"{MAX_EMBEDDING_DIMENSIONS} are kept."
+        )
+    if size * count > MAX_TENANT_VECTOR_VALUES:
+        return (
+            f"The shop info is too large for search vectors of {size} values "
+            f"({count} parts), so keyword search is used."
+        )
+    if others + size * count > MAX_TOTAL_VECTOR_VALUES:
+        return "The server has no room for more search vectors, so keyword search is used."
+    return ""
+
+
+def _other_workspaces_vector_values(data: Mapping[str, Any], owner_id: str) -> int:
+    """How many search vector values the workspaces other than ``owner_id`` keep."""
+    tenants = data.get("tenants")
+    total = 0
+    for tenant_id, tenant in tenants.items() if isinstance(tenants, dict) else ():
+        if tenant_id == owner_id or not isinstance(tenant, dict):
+            continue
+        chunks = tenant.get("chunks")
+        for item in chunks if isinstance(chunks, list) else ():
+            vector = item.get("embedding") if isinstance(item, dict) else None
+            if isinstance(vector, list):
+                total += len(vector)
+    return total
+
+
+def _question_log_holder(item: Mapping[str, Any]) -> str:
+    """The workspace a logged question counts for. Questions logged before the log
+    knew their workspace count by their asker, which is the owner unless it was staff."""
+    return str(item.get("workspaceId") or item.get("userId") or "")
+
+
+def _trim_question_log(questions: list[dict[str, Any]], workspace_id: str) -> list[dict[str, Any]]:
+    """The question log after a question of ``workspace_id`` was added at its end.
+
+    That workspace keeps at most MAX_ASSISTANT_QUESTIONS_PER_WORKSPACE (its own oldest
+    go first). While the whole log is over MAX_ASSISTANT_QUESTIONS, the workspace that
+    holds the most questions loses its oldest, so a busy workspace cannot push out a
+    quieter one's questions; each keeps at least its share of the log.
+    """
+    if workspace_id:
+        own = [
+            index
+            for index, item in enumerate(questions)
+            if _question_log_holder(item) == workspace_id
+        ]
+        excess = len(own) - max(1, MAX_ASSISTANT_QUESTIONS_PER_WORKSPACE)
+        if excess > 0:
+            dropped = set(own[:excess])
+            questions = [item for index, item in enumerate(questions) if index not in dropped]
+    over = len(questions) - max(1, MAX_ASSISTANT_QUESTIONS)
+    if over <= 0:
+        return questions
+    held: dict[str, list[int]] = {}
+    for index, item in enumerate(questions):
+        held.setdefault(_question_log_holder(item), []).append(index)
+    dropped = set()
+    for _ in range(over):
+        # The biggest holder (on a tie, the one with the oldest question) loses its oldest.
+        holder = max(held, key=lambda key: (len(held[key]), -held[key][0]))
+        dropped.add(held[holder].pop(0))
+        if not held[holder]:
+            del held[holder]
+    return [item for index, item in enumerate(questions) if index not in dropped]
+
+
+def _find_api_source(sources: Any, source_id: str) -> dict[str, Any] | None:
+    """The knowledge API source with ``source_id`` in a source list, or None."""
+    for item in sources if isinstance(sources, list) else []:
+        if isinstance(item, dict) and str(item.get("id") or "") == source_id:
+            return item
+    return None
+
+
+def _manual_answer_key(item: Mapping[str, Any]) -> str:
+    """What makes two approved answers the same: their question, else their id."""
+    question_id = str(item.get("questionId") or "").strip()
+    if question_id:
+        return f"question:{question_id}"
+    item_id = str(item.get("id") or "").strip()
+    if item_id:
+        return f"id:{item_id}"
+    return "text:" + json.dumps(
+        [str(item.get("question") or ""), str(item.get("answer") or "")], ensure_ascii=False
+    )
+
+
+def _merge_manual_answers(target: dict[str, Any], answers: list[dict[str, Any]]) -> bool:
+    """Add ``answers`` to ``target["manualAnswers"]``; True when that list changed.
+
+    One answer per question: of two answers to the same question, the one updated
+    later stays.
+    """
+    merged = [item for item in target.get("manualAnswers") or [] if isinstance(item, dict)]
+    changed = False
+    for answer in answers:
+        key = _manual_answer_key(answer)
+        at = next(
+            (index for index, item in enumerate(merged) if _manual_answer_key(item) == key),
+            None,
+        )
+        if at is None:
+            merged.append(dict(answer))
+            changed = True
+        elif str(answer.get("updatedAt") or "") > str(merged[at].get("updatedAt") or ""):
+            merged[at] = dict(answer)
+            changed = True
+    target["manualAnswers"] = merged
+    return changed
+
+
+def _holds_shop_data(record: Mapping[str, Any]) -> bool:
+    """Whether a tenants record holds shop data of its own, besides approved answers.
+
+    That is shop info, API sources or a chosen AI; chunks, index fields and an AI
+    notice are not, since they are rebuilt or meaningless without the rest.
+    """
+    if str(record.get("knowledgeMarkdown") or "").strip():
+        return True
+    for key in ("knowledgeSections", "apiSources"):
+        value = record.get(key)
+        if isinstance(value, list) and value:
+            return True
+    settings = record.get("settings")
+    return isinstance(settings, Mapping) and bool(str(settings.get("provider") or "").strip())
+
+
+# -- the God's global knowledge: keyword relevance -----------------------------
+# A word is a run of letters and digits; the whole Thai block counts as letters, so
+# Thai vowel and tone marks stay inside their word.
+_KNOWLEDGE_WORD = re.compile(r"(?:[^\W_]|[฀-๿])+")
+_THAI_LETTER = re.compile(r"[฀-๿]")
+# Thai words that say nothing about what a question is about, split out wherever
+# they appear (Thai has no spaces between words): question words, "this one", and
+# words nearly every shop text has (product, of/thing, service, customer).
+_QUERY_SPLIT_WORDS_TH = (
+    "หรือเปล่า", "หรือไม่", "หรือยัง", "เท่าไหร่", "เท่าไร", "อย่างไร", "ยังไง", "อะไร",
+    "ที่ไหน", "เมื่อไหร่", "เมื่อไร", "ทำไม", "กี่", "ตัวนี้", "อันนี้", "แบบนี้",
+    "สินค้า", "ของ", "บริการ", "ลูกค้า",
+)
+# Question and polite endings, taken off the end of a Thai word ("ไหม", "ครับ"...).
+_QUERY_END_WORDS_TH = tuple(
+    sorted(
+        (
+            "ไหม", "มั้ย", "มัย", "เหรอ", "หรอ", "บ้าง", "ครับ", "คับ", "ค่ะ", "คะ", "จ้า",
+            "จ้ะ", "จ๊ะ", "นะ", "น้า", "ฮะ", "ด้วย", "หน่อย", "ได้",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+# Openings such as "may I ask", taken off the start of a Thai word.
+_QUERY_START_WORDS_TH = ("อยากทราบ", "สอบถาม", "อยากรู้", "รบกวน", "ขอถาม")
+_QUERY_STOP_WORDS = frozenset(
+    {
+        "a", "about", "am", "an", "and", "any", "are", "at", "be", "by", "can", "could",
+        "do", "does", "did", "for", "from", "get", "has", "have", "hello", "hi", "how",
+        "i", "if", "in", "is", "it", "its", "item", "items", "many", "me", "much", "my",
+        "no", "not", "of", "ok", "on", "or", "please", "product", "products", "so",
+        "thank", "thanks", "that", "the", "there", "this", "to", "was", "we", "what",
+        "when", "where", "which", "who", "will", "with", "would", "yes", "you", "your",
+    }
+)
+
+
+def _strip_thai_query_word(word: str) -> str:
+    trimmed = True
+    while trimmed:
+        trimmed = False
+        for ending in _QUERY_END_WORDS_TH:
+            if word.endswith(ending) and len(word) > len(ending):
+                word = word[: -len(ending)]
+                trimmed = True
+                break
+        for opening in _QUERY_START_WORDS_TH:
+            if word.startswith(opening) and len(word) > len(opening):
+                word = word[len(opening) :]
+                trimmed = True
+                break
+    return "" if word in _QUERY_END_WORDS_TH else word
+
+
+def _knowledge_query_words(question: str) -> list[str]:
+    """The words of a question that say what it is about, lower-cased.
+
+    Question words, polite endings and the most common shop words are taken out, so
+    that "มีบริการผ่อนชำระไหมคะ" keeps only "ผ่อนชำระ" and "Do you offer free
+    shipping?" keeps "offer", "free" and "shipping". A word without Thai letters is
+    cut to its first MAX_KNOWLEDGE_QUERY_WORD_LENGTH letters.
+    """
+    words: list[str] = []
+    for run in _KNOWLEDGE_WORD.findall(question.casefold()):
+        if not _THAI_LETTER.search(run):
+            if len(run) >= 2 and run not in _QUERY_STOP_WORDS:
+                words.append(run[:MAX_KNOWLEDGE_QUERY_WORD_LENGTH])
+            continue
+        for split_word in _QUERY_SPLIT_WORDS_TH:
+            run = run.replace(split_word, " ")
+        for piece in run.split():
+            word = _strip_thai_query_word(piece)
+            if not _THAI_LETTER.search(word):  # e.g. a code with "ครับ" after it
+                word = word[:MAX_KNOWLEDGE_QUERY_WORD_LENGTH]
+            if len(word) >= 3:  # shorter Thai leftovers are endings, not topics
+                words.append(word)
+    return words
+
+
+@dataclass(frozen=True)
+class _KnowledgeQuery:
+    """What a question looks for in the God's chunks; see _knowledge_query_terms."""
+
+    groups: dict[str, int]  # 3-letter groups of the words with Thai letters -> weight
+    words: dict[str, int]  # the other words (English, digits) -> weight
+    total: int  # all the weights together
+
+
+def _knowledge_query_terms(question: str) -> _KnowledgeQuery:
+    """The terms _global_knowledge_score looks for, each distinct one once.
+
+    A word with Thai letters gives its 3-letter groups (Thai has no spaces between
+    words, so a group may sit anywhere in a chunk). Any other word (English, digits)
+    is looked for as a word, weighted by the number of groups it would have (its
+    length less 2, at least 1), so a question mixing Thai and English keeps its
+    balance. A term the question repeats weighs that many times. Only the first
+    MAX_GLOBAL_KNOWLEDGE_QUERY_TERMS distinct terms are kept, in question order.
+    """
+    groups: dict[str, int] = {}
+    words: dict[str, int] = {}
+    for word in _knowledge_query_words(question):
+        if _THAI_LETTER.search(word):
+            for index in range(len(word) - 2):
+                group = word[index : index + 3]
+                if group in groups:
+                    groups[group] += 1
+                elif len(groups) + len(words) < MAX_GLOBAL_KNOWLEDGE_QUERY_TERMS:
+                    groups[group] = 1
+            continue
+        word = word[:MAX_KNOWLEDGE_QUERY_WORD_LENGTH]  # however it was found
+        weight = max(1, len(word) - 2)
+        if word in words:
+            words[word] += weight
+        elif len(groups) + len(words) < MAX_GLOBAL_KNOWLEDGE_QUERY_TERMS:
+            words[word] = weight
+    return _KnowledgeQuery(groups, words, sum(groups.values()) + sum(words.values()))
+
+
+def _chunk_has_word(word: str, chunk_words: set[str], ordered: list[str]) -> bool:
+    """Whether a chunk holds a question word that has no Thai letter.
+
+    It does when one of its words (``chunk_words``, also given sorted as
+    ``ordered``) is the word, or starts with it ("card" in "cards", "ship" in
+    "shipping"), or is 4 or more letters that start it ("return" for "returned").
+    A word under 3 letters ("xl", "15") must be there whole. Letters inside another
+    word never count: "red" is not in "credit" or "covered".
+    """
+    if word in chunk_words:
+        return True
+    if len(word) < 3:
+        return False
+    at = bisect.bisect_left(ordered, word)
+    if at < len(ordered) and ordered[at].startswith(word):
+        return True
+    return any(word[:end] in chunk_words for end in range(4, len(word)))
+
+
+def _is_word_letter(char: str) -> bool:
+    """Whether ``char`` belongs in a word as _KNOWLEDGE_WORD reads them."""
+    return char.isalnum() or "฀" <= char <= "๿"  # the whole Thai block
+
+
+def _text_has_word_start(text: str, word: str, *, whole: bool) -> bool:
+    """Whether ``word`` starts one of the words of ``text`` (is all of it if ``whole``)."""
+    start = text.find(word)
+    while start >= 0:
+        if start == 0 or not _is_word_letter(text[start - 1]):
+            end = start + len(word)
+            if not whole or end == len(text) or not _is_word_letter(text[end]):
+                return True
+        start = text.find(word, start + 1)
+    return False
+
+
+def _text_has_word(word: str, text: str) -> bool:
+    """_chunk_has_word's answer found in the chunk's text, without listing its words.
+
+    Faster for a question with a few such words; _chunk_has_word is faster for many.
+    """
+    if len(word) < 3:
+        return _text_has_word_start(text, word, whole=True)
+    if _text_has_word_start(text, word, whole=False):
+        return True
+    return any(_text_has_word_start(text, word[:end], whole=True) for end in range(4, len(word)))
+
+
+def _global_knowledge_score(query: _KnowledgeQuery, text: str) -> float:
+    """The share of a question's terms a chunk holds, from 0 to 1.
+
+    ``query`` comes from _knowledge_query_terms and ``text`` is the chunk, lower-cased.
+    A Thai group counts when the chunk has it anywhere (a group has letters only, so
+    where it occurs is inside a word too); any other word counts as _chunk_has_word
+    says. A chunk holding none of the question's Thai groups and none of its other
+    words of 3 or more letters scores 0, so a lone "xl" or "15" is not enough. Unlike
+    the score for a workspace's own chunks, this does not shrink as the chunk grows,
+    so one cut-off fits short and long chunks alike.
+    """
+    matched = 0
+    full = False
+    for group, weight in query.groups.items():
+        if group in text:
+            matched += weight
+            full = True
+    if len(query.words) >= GLOBAL_KNOWLEDGE_WORD_LIST_FROM:
+        # Many words (a long message): list the chunk's words once, then look them up.
+        chunk_words = set(_KNOWLEDGE_WORD.findall(text))
+        ordered = sorted(chunk_words)
+        found = [word for word in query.words if _chunk_has_word(word, chunk_words, ordered)]
+    else:
+        found = [word for word in query.words if _text_has_word(word, text)]
+    for word in found:
+        matched += query.words[word]
+        full = full or len(word) >= 3
+    return matched / query.total if query.total and full else 0.0
+
+
+def _rank_global_knowledge(
+    question: str, chunks: list[Any], *, limit: int
+) -> list[dict[str, Any]]:
+    """The God's chunks a question is about, best first, by keyword matching only.
+
+    A chunk is kept when it scores at least GLOBAL_KNOWLEDGE_MIN_SCORE and at least
+    GLOBAL_KNOWLEDGE_MARGIN of the best chunk's score; at most ``limit`` are kept.
+    """
+    query = _knowledge_query_terms(question)
+    if not query.total or limit <= 0:
+        return []
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        score = _global_knowledge_score(query, str(chunk.get("text") or "").casefold())
+        if score >= GLOBAL_KNOWLEDGE_MIN_SCORE:
+            scored.append((score, chunk))
+    if not scored:
+        return []
+    best = max(score for score, _chunk in scored)
+    kept = [item for item in scored if item[0] >= best * GLOBAL_KNOWLEDGE_MARGIN]
+    kept.sort(key=lambda item: item[0], reverse=True)
+    return [
+        {
+            **{key: value for key, value in chunk.items() if key != "embedding"},
+            "score": round(score, 6),
+        }
+        for score, chunk in kept[:limit]
+    ]
 
 
 ROLE_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -18500,14 +19603,201 @@ def _safe_slug(value: str, fallback: str = "account") -> str:
     return slug[:42] or fallback
 
 
+def _parse_state_bytes(data: bytes) -> Any:
+    """The value held by a state file's bytes: JSON in UTF-8, UTF-16 or UTF-32, with or
+    without a byte order mark (as some Windows editors and PowerShell save them).
+
+    Raises ValueError when they hold none, and RecursionError for JSON nested too
+    deep. Bytes that no strict decoder takes (a lone surrogate, say) hold none, since
+    no save could write them back.
+    """
+    return json.loads(data.decode(json.detect_encoding(data)))
+
+
 def _read_json_file(path: str, default: Any) -> Any:
+    """A state file's value, or ``default`` when it is missing or cannot be read.
+
+    A file that cannot be read (see _parse_state_bytes) is copied aside first (see
+    _keep_unreadable_copy), because the next save writes the whole file anew from
+    ``default``. That is said once for each damage: a damage met again after the file
+    was saved or read whole is said again (its earlier copy is reused when the bytes
+    are the same). While no copy could be made, each later read tries again (and says
+    so once one is made), and no save writes over the file (_keep_before_overwrite).
+    """
     try:
-        with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
+        data = Path(path).read_bytes()
     except FileNotFoundError:
         return default
-    except ValueError:
-        return default
+    try:
+        value = _parse_state_bytes(data)
+    except (ValueError, RecursionError):
+        pass
+    else:
+        if path in _UNREADABLE_KEPT:
+            with _UNREADABLE_LOCK:
+                _UNREADABLE_KEPT.pop(path, None)  # repaired since: saves go by this
+        return value
+    digest = hashlib.sha256(data).digest()
+    with _UNREADABLE_LOCK:
+        entry = _UNREADABLE_KEPT.get(path)
+        said = entry is not None and entry[1] == digest
+        if entry is not None and said and entry[0]:
+            return default  # this damage was copied, and said so, earlier
+        kept = _keep_unreadable_copy(path, data, quiet=said)
+        _UNREADABLE_KEPT[path] = (kept, digest)
+    if kept or not said:
+        _print_quietly(
+            f"LinePassport: {path} cannot be read. LinePassport goes on as if it were "
+            "empty, and "
+            + (
+                "the next save of it writes a new file in its place; a copy of it is "
+                f"kept as {kept}. To put a repaired copy back, stop LinePassport first."
+                if kept
+                else "no copy of it could be kept yet, so no save writes over it until "
+                "one is (each read or save of it tries again)."
+            )
+        )
+    return default
+
+
+# State files found unreadable this run: the copy kept of each (None while no copy
+# could be made) and a digest of the damaged bytes it holds; see _read_json_file.
+_UNREADABLE_KEPT: dict[str, tuple[str | None, bytes]] = {}
+_UNREADABLE_LOCK = threading.Lock()
+
+
+def _keep_unreadable_copy(path: str, data: bytes, *, quiet: bool = False) -> str | None:
+    """Keep ``data``, the bytes of a state file that cannot be read, as
+    ``<path>.unreadable-<time>`` to repair it from; returns the copy's path.
+
+    An earlier copy that holds the same bytes is returned instead of a new one, so a
+    server that restarts over and over does not fill the disk. None when no whole
+    copy can be made: the reason is printed (unless ``quiet``), and a copy cut short
+    (a full disk) is removed again.
+    """
+    target = Path(path)
+    for earlier in sorted(target.parent.glob(target.name + ".unreadable-*")):
+        try:
+            if earlier.stat().st_size == len(data) and earlier.read_bytes() == data:
+                return str(earlier)
+        except OSError:
+            continue  # one that cannot be read (or is gone) is not that copy
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for attempt in range(100):
+        kept = f"{path}.unreadable-{stamp}" + (f"-{attempt}" if attempt else "")
+        if os.path.lexists(kept):
+            continue  # another copy from the same second, or anything else by that name
+        try:
+            # Created with its mode, and never through a name that exists.
+            fd = os.open(kept, flags, 0o600)
+        except FileExistsError:
+            continue
+        except OSError:
+            if not quiet:
+                _print_exc_quietly()
+            return None
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except OSError:
+            if not quiet:
+                _print_exc_quietly()
+            try:
+                os.remove(kept)
+            except OSError:
+                pass
+            return None
+        return kept
+    if not quiet:
+        _print_quietly(
+            f"LinePassport: no copy of {path} could be kept: every name for one from "
+            "this second is taken."
+        )
+    return None
+
+
+class StateFileError(OSError):
+    """A save refused to keep a state file safe (see _keep_before_overwrite).
+
+    ``code`` and ``public`` (the reason, without the file's path) are what a browser is
+    told; the message, with the path, is for the server's log.
+    """
+
+    def __init__(self, message: str, code: str, public: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.public = public
+
+
+def _keep_before_overwrite(path: str) -> None:
+    """Called before a save writes ``path`` anew, for a state file found unreadable this
+    run and neither saved nor read whole since (see _read_json_file). What it holds now
+    is copied first, unless that very damage was copied already. While that fails (a
+    full disk, say) StateFileError is raised and the file stays as it is: it is never
+    replaced with nothing left to repair it from. Nor is a file repaired by hand
+    meanwhile: what is saved was made without it, so the save is refused until
+    LinePassport reads the file again (a restart, for state it keeps in memory).
+
+    That holds only while LinePassport knows the file as unreadable. A file it keeps in
+    memory (sign-ins, accounts, schedules) and has saved since (accounts are saved at
+    every start) is saved over when it is changed by hand, so state files are repaired
+    with LinePassport stopped.
+    """
+    with _UNREADABLE_LOCK:
+        entry = _UNREADABLE_KEPT.get(path)
+        if entry is None:
+            return
+        try:
+            data = Path(path).read_bytes()
+        except FileNotFoundError:
+            del _UNREADABLE_KEPT[path]  # gone since: nothing to keep
+            return
+        digest = hashlib.sha256(data).digest()
+        if entry[0] and entry[1] == digest:
+            return  # the damage that was copied
+        try:
+            _parse_state_bytes(data)
+        except (ValueError, RecursionError):
+            repaired = False
+        else:
+            repaired = True
+        kept: str | None = None
+        if not repaired:
+            kept = _keep_unreadable_copy(path, data, quiet=entry[1] == digest)
+            _UNREADABLE_KEPT[path] = (kept, digest)
+    if repaired:
+        raise StateFileError(
+            f"{path} was repaired after LinePassport found it unreadable, and this save "
+            "would write over the repair with what LinePassport went on with. Restart "
+            "LinePassport so it reads the repaired file.",
+            "state_file_repaired",
+            "A LinePassport data file was changed while LinePassport was running, so it "
+            "is not saved over. Restart LinePassport.",
+        )
+    if not kept:
+        raise StateFileError(
+            f"{path} cannot be read and no copy of it could be kept (a full disk, or a "
+            "folder LinePassport cannot write to), so it is not saved over. Make room "
+            "and try again, or stop LinePassport, repair the file and start it again.",
+            "state_file_unreadable",
+            "A LinePassport data file cannot be read and no copy of it could be kept "
+            "(the disk may be full), so it is not saved over. Make room on the disk and "
+            "try again.",
+        )
+    _print_quietly(
+        f"LinePassport: {path} cannot be read; a copy of it is kept as {kept}, and the "
+        "next save of it writes a new file in its place."
+    )
+
+
+def _saved_whole(path: str) -> None:
+    """A save wrote ``path`` anew: nothing found unreadable in it is left."""
+    if path in _UNREADABLE_KEPT:
+        with _UNREADABLE_LOCK:
+            _UNREADABLE_KEPT.pop(path, None)
 
 
 def _write_json_file(path: str, value: Any) -> None:
@@ -18515,15 +19805,23 @@ def _write_json_file(path: str, value: Any) -> None:
     if parent:
         os.makedirs(parent, exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(value, fh, ensure_ascii=False, indent=2)
-        fh.flush()
-        os.fsync(fh.fileno())
     try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    os.replace(tmp, path)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(value, fh, ensure_ascii=False, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        # A copy cut short (a full disk) is not left behind to fill it further.
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -18614,7 +19912,9 @@ class FileStateStore(StateStore):
         with self.lock:
             path = self._path(key)
             Path(path).parent.mkdir(parents=True, exist_ok=True)
+            _keep_before_overwrite(path)
             _write_json_file(path, value)
+            _saved_whole(path)
 
     def set_many(self, values: dict[str, Any]) -> None:
         with self.lock:
@@ -18622,31 +19922,48 @@ class FileStateStore(StateStore):
             for key in values:
                 path = self._path(key)
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
+                _keep_before_overwrite(path)
                 backups[key] = Path(path).read_bytes() if os.path.exists(path) else None
+            written: list[str] = []
             try:
                 for key, value in values.items():
                     _write_json_file(self._path(key), value)
+                    written.append(key)
             except Exception:
-                for key, raw in reversed(list(backups.items())):
+                # Only the files written so far changed: each goes back to what it held.
+                for key in reversed(written):
                     path = self._path(key)
+                    raw = backups[key]
                     try:
                         if raw is None:
                             if os.path.exists(path):
                                 os.remove(path)
                         else:
                             tmp = path + ".rollback.tmp"
-                            with open(tmp, "wb") as fh:
-                                fh.write(raw)
-                                fh.flush()
-                                os.fsync(fh.fileno())
                             try:
-                                os.chmod(tmp, 0o600)
+                                with open(tmp, "wb") as fh:
+                                    fh.write(raw)
+                                    fh.flush()
+                                    os.fsync(fh.fileno())
+                                try:
+                                    os.chmod(tmp, 0o600)
+                                except OSError:
+                                    pass
+                                os.replace(tmp, path)
                             except OSError:
-                                pass
-                            os.replace(tmp, path)
+                                try:
+                                    os.remove(tmp)
+                                except OSError:
+                                    pass
+                                raise
                     except OSError:
-                        traceback.print_exc()
+                        _print_exc_quietly()
+                        # It keeps what LinePassport just wrote: nothing found
+                        # unreadable is left in it.
+                        _saved_whole(path)
                 raise
+            for key in values:
+                _saved_whole(self._path(key))
 
     def label(self) -> str:
         return "file"
@@ -18728,10 +20045,39 @@ class PostgresStateStore(StateStore):
                 {"accounts": {}},
             ),
         }
-        for key, (path, default) in legacy.items():
-            if self.get(key, None) is not None or not os.path.exists(path):
+        values: dict[str, Any] = {}
+        unreadable: list[str] = []
+        for key, (path, _default) in legacy.items():
+            if self.get(key, None) is not None:
                 continue
-            self.set(key, _read_json_file(path, default))
+            try:
+                data = Path(path).read_bytes()
+            except FileNotFoundError:
+                continue
+            try:
+                values[key] = _parse_state_bytes(data)
+            except (ValueError, RecursionError):
+                kept = _keep_unreadable_copy(path, data)
+                unreadable.append(
+                    f"{path} cannot be read"
+                    + (f" (a copy of it is kept as {kept})" if kept else "")
+                )
+        if unreadable:
+            # Never imported as empty, and the start stops before anything is moved:
+            # the rest of a start saves some keys (accounts, AI settings), and a key
+            # saved once is never imported again. Every such file is named at once.
+            one = len(unreadable) == 1
+            raise RuntimeError(
+                "; ".join(unreadable)
+                + (", so it cannot" if one else ", so they cannot")
+                + " be moved into the database. Repair "
+                + ("it, or move it" if one else "them, or move them")
+                + " out of the way to go on without "
+                + ("it" if one else "them")
+                + ", and start LinePassport again."
+            )
+        for key, value in values.items():
+            self.set(key, value)
 
     def get(self, key: str, default: Any) -> Any:
         with self._connect() as conn, conn.cursor() as cur:
@@ -18881,6 +20227,7 @@ class WebAuth:
             password = secrets.token_urlsafe(24)
             user = self._new_user("local", password, "admin", [], "Local User")
             user["simple"] = True
+            previous = self.data
             self.data = {
                 "users": [user],
                 "sessions": {},
@@ -18889,7 +20236,13 @@ class WebAuth:
                 "updatedAt": _now_iso(),
             }
             token = self.create_session(user["id"])
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                # Not saved (a full disk, say): forgotten, so the next page load sets
+                # up the local user again instead of keeping one nobody can sign in as.
+                self.data = previous
+                raise
             return token
 
     def secure_with_password(
@@ -18934,6 +20287,7 @@ class WebAuth:
             if self.configured():
                 raise WebError(HTTPStatus.CONFLICT, "Web auth is already configured.")
             user = self._new_user(username, password, "admin", [], "Admin")
+            previous = self.data
             self.data = {
                 "users": [user],
                 "sessions": {},
@@ -18941,7 +20295,11 @@ class WebAuth:
                 "updatedAt": _now_iso(),
             }
             token = self.create_session(user["id"])
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.data = previous  # not saved: set up again on the next try
+                raise
             return token
 
     def login(self, username: str, password: str, source: str = "") -> str:
@@ -20123,7 +21481,7 @@ class SessionKeeper:
             try:
                 self.state.keep_sessions_fresh()
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
 
 
 class BroadcastRunner:
@@ -20146,7 +21504,7 @@ class BroadcastRunner:
             try:
                 self.state.run_due_broadcasts()
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
 
 
 class ScheduleEngine:
@@ -20167,7 +21525,7 @@ class ScheduleEngine:
             try:
                 self.state.run_due_schedules()
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
 
 
 class OpsWatcher:
@@ -20236,7 +21594,7 @@ class AiAutoReplyEngine:
             try:
                 self.state.poll_ai_auto_replies()
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
 
 
 class WebState:
@@ -20250,12 +21608,18 @@ class WebState:
         self.inbox_snapshots: dict[str, tuple[float, dict[str, Any]]] = {}
         self.api_rate_lock = threading.RLock()
         self.api_rate_events: dict[tuple[str, ...], list[float]] = {}
+        # Owner id -> (when, whether its AI is set up); see _auto_reply_ai_ready_cached.
+        self.ai_ready_lock = threading.Lock()
+        self.ai_ready_cache: dict[str, tuple[float, bool]] = {}
+        self.ai_ready_generation = 0
         self.store = _make_state_store(config)
         self.secret_cipher = self._load_secret_cipher()
         self._migrate_stored_secrets()
         self.web_auth = WebAuth(self.store)
         self.account_store = AccountStore(config, self.store)
         self._migrate_tenant_data()
+        self._move_staff_answers()
+        self._migrate_ai_providers()
         self.apis: dict[str, OkLine] = {}
         self.logins: dict[str, dict[str, Any]] = {"": {"state": "idle"}}
         self.schedule_lock = threading.RLock()
@@ -20263,6 +21627,53 @@ class WebState:
         self.ai_auto_reply_lock = threading.RLock()
         self.incoming_api_rate: dict[str, list[float]] = {}
         self.ai_auto_reply_inflight: set[tuple[str, str]] = set()
+        # Fair sharing of the auto-reply workers (see the section of that name): each
+        # owner's places taken, at most AI_AUTO_REPLY_JOBS_PER_OWNER (jobs running or
+        # queued in the workers), and the Telegram and LINE OA jobs waiting for one.
+        self.ai_auto_reply_owner_jobs: dict[str, int] = {}
+        self.ai_auto_reply_backlog: dict[str, deque[dict[str, Any]]] = {}
+        # LINE messages wait outside that backlog, their chats' cursors unchanged. For
+        # each owner: the chats each LINE account's latest poll left ready to start
+        # when a place frees up, and whether LINE has the next place when Telegram or
+        # LINE OA jobs wait too.
+        self.ai_auto_reply_line_ready: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        self.ai_auto_reply_line_turn: dict[str, bool] = {}
+        # LINE accounts whose poll is choosing chats: their ready chats do not start
+        # meanwhile, since that poll replaces them (_pop_line_ready).
+        self.ai_auto_reply_line_polling: set[str] = set()
+        # Poll cycles so far: each starts with another LINE account.
+        self.ai_auto_reply_cycles = 0
+        # LINE replies that have ended, counted, and the count when each chat's last
+        # one ended: the poller waits a cycle for a chat whose reply ended after it
+        # read the cursors (see _poll_ai_auto_reply_account).
+        self.ai_auto_reply_settle_count = 0
+        self.ai_auto_reply_settled: dict[tuple[str, str], int] = {}
+        # Cursors of LINE replies that were sent but could not be saved (a store write
+        # failed), by chat, with the enabledAtMs they belong to: the polls go by them,
+        # and the account's next cursor save stores them, so no message is answered
+        # twice.
+        self.ai_auto_reply_unsaved_cursors: dict[
+            tuple[str, str], tuple[int, dict[str, Any]]
+        ] = {}
+        # LINE chats whose reply failed before it was sent while their cursor could
+        # not be saved, or because a read of LinePassport's own data failed, by chat,
+        # with the enabledAtMs they belong to. Each waits, its cursor unchanged, until a
+        # save of its account's cursors works (the account's polls try one first), and
+        # is answered then: a store that fails neither loses the message nor has the AI
+        # asked again at every poll.
+        self.ai_auto_reply_held: dict[tuple[str, str], int] = {}
+        # When each waiting LINE chat began to wait, as first seen (see
+        # _ai_auto_reply_waiting_start), with the enabledAtMs and the cursor time it
+        # was seen against: LINE shows only a chat's last few messages.
+        self.ai_auto_reply_waiting: dict[tuple[str, str], tuple[int, int, int, bool]] = {}
+        # The latest look that found each LINE chat with nothing to answer (by account,
+        # then chat, for the chats the account's latest inbox lists), and for each
+        # account the latest look whose inbox held all its chats (with the chats it
+        # held): the look's time on LINE's clock (_inbox_line_time_ms), with the
+        # enabledAtMs. A chat that waits began after those (see
+        # _ai_auto_reply_idle_bound).
+        self.ai_auto_reply_idle_seen: dict[str, dict[str, tuple[int, int]]] = {}
+        self.ai_auto_reply_looked: dict[str, tuple[int, int, frozenset[str]]] = {}
         self.ai_auto_reply_runtime: dict[str, dict[str, Any]] = {}
         self.ai_auto_reply_rate_events: dict[tuple[str, ...], list[float]] = {}
         self.ai_auto_reply_identity_cache: dict[
@@ -20305,16 +21716,37 @@ class WebState:
         self.presence_saved_at: dict[str, float] = {}
         self.schedule_send_cache: dict[str, list[float]] = {}
         self.schedules: list[dict[str, Any]] = self._load_schedules()
+        # Set while the schedules in memory differ from what is saved (a save failed);
+        # the scheduler tries again at each round, and starts no run meanwhile.
+        self.schedules_unsaved = False
+        self.schedules_save_error: str | None = None
+        # Schedules that went out while saving failed: until a save works, a restart
+        # sends them again (the schedules page says so).
+        self.schedules_unsaved_sent: set[str] = set()
         self.schedule_inflight: set[str] = set()
         self.schedule_executor = ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="linepassport-schedule"
         )
+        # Every workspace's auto replies share these workers. One reply may hold a
+        # worker for a whole ask (about 75 seconds at most), so each owner gets at most
+        # AI_AUTO_REPLY_JOBS_PER_OWNER of them, running or queued (_queue_ai_auto_reply):
+        # a slow provider, or many chats, of one workspace never hold up the others.
         self.ai_auto_reply_executor = ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="linepassport-ai-reply"
+            max_workers=AI_AUTO_REPLY_WORKERS, thread_name_prefix="linepassport-ai-reply"
         )
         # Customer records (CRM): fed from the inbox, written by one worker thread.
         self.crm = CrmService(_make_crm_database(config), self)
         self.crm_cursors: dict[str, dict[str, int]] = {}
+        # A removal deletes the account's CRM rows once it has committed; a write that
+        # began before can store rows after that, and deletes them again
+        # (_crm_purge_late). Removed accounts whose own purge is still to come, and the
+        # customers such late purges deleted for them meanwhile (which count in the
+        # removal's customersDeleted), are guarded by crm_removal_lock, which is taken
+        # last and held over nothing else. crm_purge_lock keeps each purge with its count.
+        self.crm_purge_lock = threading.Lock()
+        self.crm_removal_lock = threading.Lock()
+        self.crm_removal_pending: set[str] = set()
+        self.crm_purged_late: dict[str, int] = {}
         self.crm_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="linepassport-crm-ingest"
         )
@@ -20382,18 +21814,32 @@ class WebState:
         path: str,
         account_id: str = "",
     ) -> None:
+        """Count one request against the user's limits; a 429 when one is used up.
+
+        ``account_id`` is the request's ?accountId=. It gives a route its own bucket
+        per account only on ACCOUNT_SCOPED_RATE_LIMIT_ROUTES, and only for an account
+        the user can open; anything else shares the user's one bucket for that route.
+        """
         user_id = str(user.get("id") or user.get("username") or "anonymous")
         self._consume_api_rate_limit(
             ("user", user_id),
             limit=MAX_AUTHENTICATED_API_REQUESTS_PER_MINUTE,
             window_seconds=60.0,
         )
-        route_limit = AUTHENTICATED_API_RATE_LIMITS.get((method.upper(), path))
+        route = (method.upper(), path)
+        route_limit = AUTHENTICATED_API_RATE_LIMITS.get(route)
         if route_limit is None:
             return
         limit, window_seconds = route_limit
+        scope = "-"
+        if (
+            account_id
+            and route in ACCOUNT_SCOPED_RATE_LIMIT_ROUTES
+            and self.web_auth.can_access_account(user, account_id)
+        ):
+            scope = account_id
         self._consume_api_rate_limit(
-            ("route", user_id, account_id or "-", method.upper(), path),
+            ("route", user_id, scope, *route),
             limit=limit,
             window_seconds=window_seconds,
         )
@@ -20492,16 +21938,27 @@ class WebState:
                 record["apiKey"] = self._encrypt_secret(key)
                 global_changed = True
 
-        encrypt_global_record(global_ai.get("settings"))
-        for source in global_ai.get("apiSources", []):
+        # The shared AI's own settings are deleted by _migrate_ai_providers, so only the
+        # knowledge API sources and each workspace's provider keys are covered here.
+        sources = global_ai.get("apiSources")
+        for source in sources if isinstance(sources, list) else []:
             encrypt_global_record(source)
         knowledge_tenants = global_ai.get("tenants")
         if isinstance(knowledge_tenants, dict):
             for tenant in knowledge_tenants.values():
                 if not isinstance(tenant, dict):
                     continue
-                for source in tenant.get("apiSources", []):
+                tenant_sources = tenant.get("apiSources")
+                for source in tenant_sources if isinstance(tenant_sources, list) else []:
                     encrypt_global_record(source)
+                settings = tenant.get("settings")
+                if not isinstance(settings, dict):
+                    continue
+                encrypt_global_record(settings)  # a flat record from before the map
+                providers = settings.get("providers")
+                if isinstance(providers, dict):
+                    for record in providers.values():
+                        encrypt_global_record(record)
         if global_changed:
             self.store.set("global_ai", global_ai)
 
@@ -20618,7 +22075,9 @@ class WebState:
                 },
             )
 
-        ai_data = self.store.get("ai_settings", {})
+        # Missing: nothing to move. Unreadable (a damaged file): not written over by
+        # this step, which would need a copy of it kept first (None either way).
+        ai_data = self.store.get("ai_settings", None)
         if isinstance(ai_data, dict) and "tenants" not in ai_data:
             tenants = {owner_id: ai_data} if ai_data else {}
             self.store.set("ai_settings", {"tenants": tenants})
@@ -20636,6 +22095,339 @@ class WebState:
             schedules_changed = True
         if schedules_changed:
             self.store.set("schedules", {"schedules": schedules})
+
+    def _move_staff_answers(self) -> None:
+        """Move the God's answers filed under a staff member's id to the team owner.
+
+        Before this release a God answer to a staff member's question went into
+        ``tenants[<staff id>].manualAnswers``, where no AI looks: staff work on their
+        team owner's workspace. Once per install (``STAFF_ANSWERS_MOVED_KEY`` in
+        global_ai, apart from the AI providers flag, so an install that already moved
+        to per-workspace providers gets it too), each such answer joins the owner's
+        approved answers; when the owner already has an answer to the same question,
+        the newer one stays. The owner's chunks are rebuilt for keyword search
+        (_rebuild_chunks_without_ai). A staff record left with nothing of its own is
+        removed. A record whose user or team owner no longer exists is left alone, and
+        so is a global_ai record that cannot be read. No AI is called. A failure is
+        printed and the start goes on; it is tried again on the next start.
+        """
+        try:
+            self._run_staff_answers_move()
+        except Exception:
+            _print_exc_quietly()
+
+    def _run_staff_answers_move(self) -> None:
+        raw_global = self.store.get("global_ai", None)
+        if not isinstance(raw_global, dict):
+            return  # nothing readable: nothing to move, and nothing is written over it
+        data: dict[str, Any] = raw_global
+        if isinstance(data.get(STAFF_ANSWERS_MOVED_KEY), dict):
+            return
+        raw_tenants = data.get("tenants")
+        tenants: dict[str, Any] = raw_tenants if isinstance(raw_tenants, dict) else {}
+        moved = 0
+        changed_owners: set[str] = set()
+        for record_id in list(tenants):
+            record = tenants[record_id]
+            owner_id = self._staff_workspace_owner_id(str(record_id))
+            if not owner_id or not isinstance(record, dict):
+                continue
+            raw_answers = record.get("manualAnswers")
+            answers = [
+                item for item in (raw_answers if isinstance(raw_answers, list) else [])
+                if isinstance(item, dict)
+            ]
+            if answers:
+                owner_record = tenants.get(owner_id)
+                if not isinstance(owner_record, dict):
+                    owner_record = {}
+                    tenants[owner_id] = owner_record
+                for key in ("apiSources", "manualAnswers", "chunks"):
+                    if not isinstance(owner_record.get(key), list):
+                        owner_record[key] = []
+                if _merge_manual_answers(owner_record, answers):
+                    changed_owners.add(owner_id)
+                moved += len(answers)
+            if _holds_shop_data(record):
+                if answers:
+                    record["manualAnswers"] = []
+                    self._rebuild_chunks_without_ai(record, str(record_id))
+            else:
+                del tenants[record_id]
+        for owner_id in changed_owners:  # once each, after every answer is in
+            self._rebuild_chunks_without_ai(tenants[owner_id], owner_id)
+        data[STAFF_ANSWERS_MOVED_KEY] = {"at": _now_iso(), "moved": moved}
+        self.store.set("global_ai", data)
+        self._forget_ai_readiness()
+
+    def _staff_workspace_owner_id(self, user_id: str) -> str:
+        """The team owner's id when ``user_id`` is a staff member whose owner exists."""
+        user = self.web_auth._find_user(user_id) if user_id else None
+        if user is None or not str(user.get("teamOwnerId") or ""):
+            return ""
+        owner_id = str((self.tenant_user(dict(user)) or {}).get("id") or "")
+        return owner_id if owner_id != user_id else ""
+
+    def _rebuild_chunks_without_ai(self, tenant: dict[str, Any], owner_id: str) -> None:
+        """Rebuild a workspace's chunks from its record, with no AI call.
+
+        The vectors carry over (by chunk id) only when every new chunk has one. Else
+        they are all dropped: the index is keyword search, "needs-reindex" when it had
+        vectors (the page then asks for an update), else "keyword" ("empty" for none).
+        """
+        old = {
+            str(chunk.get("id") or ""): chunk["embedding"]
+            for chunk in tenant.get("chunks") or []
+            if isinstance(chunk, dict)
+            and isinstance(chunk.get("embedding"), list)
+            and chunk["embedding"]
+        }
+        fresh = self._build_knowledge_chunks(tenant, scope=f"tenant:{owner_id}")
+        if fresh and all(str(chunk["id"]) in old for chunk in fresh):
+            for chunk in fresh:
+                chunk["embedding"] = old[str(chunk["id"])]
+            tenant["chunks"] = fresh
+            return
+        had_vectors = bool(
+            old
+            or tenant.get("embeddingModel")
+            or tenant.get("embeddingProvider")
+            or tenant.get("indexMode") in {"embedding", "needs-reindex"}
+        )
+        tenant["chunks"] = fresh
+        tenant["embeddingProvider"] = ""
+        tenant["embeddingModel"] = ""
+        tenant["indexMode"] = ("needs-reindex" if had_vectors else "keyword") if fresh else "empty"
+
+    def _migrate_ai_providers(self) -> None:
+        """Move every workspace to its own AI provider, once (flagged in global_ai).
+
+        The shared AI (``global_ai.settings``) and Ollama were removed:
+
+        - ``global_ai.settings`` is deleted, after noting whether it was active
+          (switched on, with a chat model);
+        - the God's knowledge text, API sources and approved answers stay for
+          keyword search; their vectors (from the shared AI's model) are dropped;
+        - a workspace's flat Gemini record moves to ``settings.providers.gemini``
+          without its Ollama-era ``baseUrl``, keeping the vectors Gemini made;
+        - a workspace on Ollama, or one that relied on the active shared AI, keeps
+          its prompt settings, loses its vectors and gets ``aiNotice``
+          "ollama_removed" or "shared_ai_removed"; its enabled auto replies are
+          switched off (``disabledReason`` "ai_removed"), each with a log line. One
+          that relied on a shared AI set to answer only from shop info keeps that
+          (``strictKnowledge``); nothing else of the shared AI's settings carries over.
+
+        Records of staff members are not workspaces and are skipped (their God answers
+        moved to the team owner first, see _move_staff_answers). The notice clears once
+        the owner saves a working AI. Nobody is moved to Gemini with the AI image
+        tool's key. A global_ai record that cannot be read is left as it is. A failure
+        is printed and the start goes on (the readers still understand the old
+        records); it is tried again on the next start.
+        """
+        try:
+            self._run_ai_providers_migration()
+        except Exception:
+            _print_exc_quietly()
+
+    def _run_ai_providers_migration(self) -> None:
+        raw_global = self.store.get("global_ai", None)
+        if not isinstance(raw_global, dict):
+            # Missing: nothing to migrate. Unreadable (a damaged file): this step does
+            # not write over it, and no save does before a copy of it is kept
+            # (_keep_unreadable_copy, _keep_before_overwrite).
+            return
+        data: dict[str, Any] = raw_global
+        if isinstance(data.get(AI_PROVIDERS_MIGRATION_KEY), dict):
+            return
+        now = _now_iso()
+        shared = data.pop("settings", None)
+        shared_active = (
+            isinstance(shared, dict)
+            and bool(shared.get("enabled"))
+            and bool(str(shared.get("chatModel") or "").strip())
+        )
+        # A shared AI told to answer only from shop info kept the workspaces relying on
+        # it to that; they keep it with their own AI. (Its prompt, topK and temperature
+        # never carried over to a workspace's own AI, and still do not.)
+        shared_strict = bool(shared_active and shared.get("strictKnowledge"))
+        # The God's knowledge: keyword search only, for every workspace.
+        raw_chunks = data.get("chunks")
+        global_chunks: list[Any] = raw_chunks if isinstance(raw_chunks, list) else []
+        for chunk in global_chunks:
+            if isinstance(chunk, dict):
+                chunk.pop("embedding", None)
+        if global_chunks:
+            data["indexMode"] = "keyword"
+        elif data.get("indexMode") in {"embedding", "needs-reindex"}:
+            data["indexMode"] = "empty"
+        for key in ("embeddingModel", "indexError"):
+            if data.get(key):
+                data[key] = ""
+        raw_tenants = data.get("tenants")
+        tenants: dict[str, Any] = raw_tenants if isinstance(raw_tenants, dict) else {}
+        notices: dict[str, str] = {}
+        for owner_id, tenant in tenants.items():
+            if not isinstance(tenant, dict) or self._staff_workspace_owner_id(str(owner_id)):
+                continue  # a staff member's record is not a workspace
+            notice = self._migrate_tenant_ai(
+                tenant, shared_active=shared_active, shared_strict=shared_strict, now=now
+            )
+            if notice:
+                notices[str(owner_id)] = notice
+        # Auto replies of the workspaces that lost their AI are switched off.
+        raw_auto = self.store.get("ai_auto_reply", {"accounts": {}})
+        auto: dict[str, Any] = raw_auto if isinstance(raw_auto, dict) else {}
+        raw_accounts = auto.get("accounts")
+        accounts: dict[str, Any] = raw_accounts if isinstance(raw_accounts, dict) else {}
+        new_logs: list[dict[str, Any]] = []
+        for key, record in accounts.items():
+            if not isinstance(record, dict) or not record.get("enabled"):
+                continue
+            account_id = str(record.get("accountId") or key)
+            owner_id = self._auto_reply_workspace_id(account_id, record)
+            if not owner_id:
+                continue
+            notice = notices.get(owner_id, "")
+            if not notice and shared_active and not isinstance(tenants.get(owner_id), dict):
+                # A workspace that never saved AI settings or shop info answered with
+                # the shared AI.
+                settings: dict[str, Any] = {
+                    "provider": "", "aiNotice": "shared_ai_removed", "updatedAt": now
+                }
+                if shared_strict:
+                    settings["strictKnowledge"] = True
+                tenants[owner_id] = {
+                    "settings": settings,
+                    "apiSources": [],
+                    "manualAnswers": [],
+                    "chunks": [],
+                }
+                notice = notices[owner_id] = "shared_ai_removed"
+            if not notice:
+                continue
+            record["enabled"] = False
+            record["disabledReason"] = "ai_removed"
+            record["updatedAt"] = now
+            removed = "Ollama" if notice == "ollama_removed" else "The shared AI"
+            new_logs.append(
+                self._bot_log_entry(
+                    "ai.auto_reply.settings",
+                    account_id=account_id,
+                    ok=False,
+                    detail=(
+                        f"Auto reply was switched off: {removed} is no longer available. "
+                        "Pick an AI provider in Settings > AI, add your API key, then "
+                        "switch auto reply on again."
+                    ),
+                    data={"enabled": False, "disabledReason": "ai_removed", "notice": notice},
+                )
+            )
+        if tenants:
+            data["tenants"] = tenants
+        data[AI_PROVIDERS_MIGRATION_KEY] = {
+            "at": now,
+            "sharedAiWasActive": shared_active,
+            "notices": len(notices),
+            "autoRepliesSwitchedOff": len(new_logs),
+        }
+        values: dict[str, Any] = {"global_ai": data}
+        if new_logs:
+            auto["accounts"] = accounts
+            values["ai_auto_reply"] = auto
+            raw_logs = self.store.get("bot_logs", {"logs": []})
+            logs = raw_logs.get("logs") if isinstance(raw_logs, dict) else None
+            values["bot_logs"] = {
+                "logs": _trim_bot_logs([*(logs if isinstance(logs, list) else []), *new_logs])
+            }
+        self.store.set_many(values)
+        self._forget_ai_readiness()
+
+    def _migrate_tenant_ai(
+        self,
+        tenant: dict[str, Any],
+        *,
+        shared_active: bool,
+        shared_strict: bool = False,
+        now: str,
+    ) -> str:
+        """One workspace's record in the new shape; returns its notice ("" for none)."""
+        raw = tenant.get("settings")
+        settings: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        provider_id = str(settings.get("provider") or "").strip().lower()
+        provider = get_provider(provider_id)
+        notice = str(settings.get("aiNotice") or tenant.get("aiNotice") or "")
+        flat_keys = ("apiKey", "chatModel", "embeddingModel", "baseUrl")
+        vectors_from = ""
+        if provider is not None:
+            raw_providers = settings.get("providers")
+            providers: dict[str, Any] = raw_providers if isinstance(raw_providers, dict) else {}
+            if any(key in settings for key in flat_keys):
+                if not isinstance(providers.get(provider.id), dict):
+                    # A blank search model meant the provider's default; the baseUrl
+                    # was the Ollama address and is dropped. The key stays encrypted.
+                    embedding_model = str(settings.get("embeddingModel") or "").strip()
+                    providers[provider.id] = {
+                        "apiKey": self._encrypt_secret(str(settings.get("apiKey") or "")),
+                        "chatModel": str(settings.get("chatModel") or "").strip(),
+                        "embeddingModel": (
+                            (embedding_model or provider.default_embedding_model)
+                            if provider.embeddings
+                            else ""
+                        ),
+                        "updatedAt": str(settings.get("updatedAt") or now),
+                    }
+                for key in flat_keys:
+                    settings.pop(key, None)
+                settings["providers"] = providers
+                tenant["settings"] = settings
+            entry = providers.get(provider.id)
+            model = str(entry.get("embeddingModel") or "") if isinstance(entry, dict) else ""
+            if tenant.get("embeddingProvider"):
+                vectors_from = str(tenant["embeddingProvider"])  # indexed in the new shape
+            elif model and str(tenant.get("embeddingModel") or "") == model:
+                vectors_from = provider.id  # the old index of this provider's own model
+        elif not notice and (provider_id == "ollama" or shared_active):
+            notice = "ollama_removed" if provider_id == "ollama" else "shared_ai_removed"
+            kept = {
+                key: settings[key]
+                for key in (
+                    "systemPrompt", "strictKnowledge", "topK", "temperature", "timeout",
+                    "providers",
+                )
+                if key in settings
+            }
+            if notice == "shared_ai_removed" and shared_strict:
+                kept.setdefault("strictKnowledge", True)
+            tenant["settings"] = {**kept, "provider": "", "aiNotice": notice, "updatedAt": now}
+            tenant.pop("aiNotice", None)
+        raw_chunks = tenant.get("chunks")
+        chunks: list[Any] = raw_chunks if isinstance(raw_chunks, list) else []
+        if vectors_from and chunks and all(
+            isinstance(chunk, dict) and isinstance(chunk.get("embedding"), list)
+            for chunk in chunks
+        ):
+            tenant["embeddingProvider"] = vectors_from
+        elif tenant.get("embeddingModel") or any(
+            isinstance(chunk, dict) and "embedding" in chunk for chunk in chunks
+        ):
+            # Vectors of an unknown or removed model cannot be compared: keyword search.
+            for chunk in chunks:
+                if isinstance(chunk, dict):
+                    chunk.pop("embedding", None)
+            tenant["embeddingModel"] = ""
+            tenant["embeddingProvider"] = ""
+            tenant["indexMode"] = "keyword" if chunks else "empty"
+        return notice
+
+    def _auto_reply_workspace_id(self, account_id: str, record: Mapping[str, Any]) -> str:
+        """The owner id of the workspace whose AI answers for an auto-reply account."""
+        user = self.web_auth.user_for_account(account_id)
+        if user is None:
+            owner_id = str(record.get("ownerId") or "")
+            user = self.web_auth._find_user(owner_id) if owner_id else None
+            if user is None:
+                return owner_id
+        return str((self.tenant_user(dict(user)) or {}).get("id") or "")
 
     def close(self) -> None:
         self.broadcast_runner.close()
@@ -20656,8 +22448,10 @@ class WebState:
         try:
             self.flush_presence()
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
         self.scheduler.close()
+        with self.ai_auto_reply_lock:
+            self.ai_auto_reply_backlog.clear()  # nothing more starts
         self.ai_auto_reply_executor.shutdown(wait=False, cancel_futures=True)
         self.schedule_executor.shutdown(wait=False, cancel_futures=True)
         with self.lock:
@@ -20702,6 +22496,10 @@ class WebState:
                 return cached
 
         with self.api_lock_for(account_id):
+            if self.account_store.get(account_id) is None:
+                # Removed while this waited for its lock (a removal holds it): nothing
+                # is fetched or kept for it.
+                return {"messageBoxes": []}
             if not force:
                 cached = fresh_snapshot()
                 if cached is not None:
@@ -20813,7 +22611,7 @@ class WebState:
                 try:
                     api.e2ee.load_from_export(session.e2ee)
                 except Exception:
-                    traceback.print_exc()
+                    _print_exc_quietly()
         else:
             session = Session.from_dict(json.loads(raw.decode("utf-8")))
             api = OkLine.from_tokens_file(token_file, config=line_config, redact=redact)
@@ -20829,9 +22627,27 @@ class WebState:
         """Persist future refreshes and report terminal auth failures."""
 
         def persist_refreshed_session() -> None:
+            if account_id and not self._account_listed(account_id):
+                # Removed while LINE renewed the session (its sign-in went with it): a
+                # renewal that ends now does not save it back.
+                return
             self._save_account_tokens(api, token_file)
-            if account_id:
-                self.account_store.mark_session_connected(account_id)
+            if not account_id:
+                return
+            with self.account_store.lock:
+                # The account list changes under this lock, and the same LINE account
+                # added again by the same name (the same id, so this file) writes its
+                # sign-in under it: neither comes between this check and what it does.
+                if self._account_listed(account_id):
+                    self.account_store.mark_session_connected(account_id)
+                    return
+                # Removed while this saved: the removal takes the account off the list
+                # before it deletes the file, so it may have deleted it before this
+                # write. It goes now (whichever delete comes last finds it).
+                try:
+                    os.remove(token_file)
+                except OSError:
+                    pass
 
         api._session_path = None
         api._session_save_hook = persist_refreshed_session
@@ -20875,7 +22691,7 @@ class WebState:
                 if exported_e2ee.get("keys"):
                     persisted_e2ee = exported_e2ee
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
         session.e2ee = persisted_e2ee
         payload = json.dumps(
             session.to_dict(), ensure_ascii=False, separators=(",", ":")
@@ -20925,13 +22741,19 @@ class WebState:
 
     def _refresh_account_session(self, account_id: str, api: OkLine, *, revived: bool) -> bool:
         try:
-            with self.api_lock_for(account_id), api._token_refresh_lock:
-                api.auth.refresh_access_token()
-                if api._session_save_hook is not None:
-                    api._session_save_hook()
+            with self.api_lock_for(account_id):
+                if self.account_store.get(account_id) is None:
+                    # Removed since ``api`` was opened (a removal holds this lock): its
+                    # sign-in is gone, and saving the renewed one would bring it back.
+                    return False
+                with api._token_refresh_lock:
+                    api.auth.refresh_access_token()
+                    if api._session_save_hook is not None:
+                        api._session_save_hook()
         except Exception as exc:
             self.append_bot_log(
                 "line.session.refresh_failed",
+                listed_only=True,
                 account_id=account_id,
                 ok=False,
                 detail=_short_text(str(exc), 300),
@@ -20941,6 +22763,7 @@ class WebState:
         self.invalidate_inbox_snapshot(account_id)
         self.append_bot_log(
             "line.session.refreshed",
+            listed_only=True,
             account_id=account_id,
             detail="revived after expiry" if revived else "renewed before expiry",
         )
@@ -20953,6 +22776,8 @@ class WebState:
         detail = f"LINE session expired or was revoked{code}. Connect the account again."
         changed = self.account_store.mark_session_reauth_required(account_id, detail)
         self.invalidate_inbox_snapshot(account_id)
+        if self.account_store.get(account_id) is None:
+            return  # removed meanwhile: nothing to show for it
         self._set_ai_auto_reply_runtime(
             account_id,
             state="login_required",
@@ -20962,6 +22787,7 @@ class WebState:
         if changed:
             self.append_bot_log(
                 "line.session.reauth_required",
+                listed_only=True,
                 account_id=account_id,
                 ok=False,
                 detail=detail,
@@ -20982,9 +22808,13 @@ class WebState:
                 "LINE session expired or was revoked; connect the account again"
             )
         with self.lock:
-            if cache_key not in self.apis:
-                self.apis[cache_key] = self._new_api(account_id)
-            api = self.apis[cache_key]
+            api = self.apis.get(cache_key)
+            if api is None:
+                api = self._new_api(account_id)
+                # None is kept for an account removed meanwhile: a removal commits, and
+                # then closes what is kept under its id, under this lock.
+                if not account_id or self.account_store.get(account_id) is not None:
+                    self.apis[cache_key] = api
         if require_auth and not api.tokens.access_token:
             raise WebError(
                 HTTPStatus.UNAUTHORIZED, "No session. Start QR login first.", "no_session"
@@ -21327,7 +23157,7 @@ class WebState:
                     try:
                         token_path.unlink(missing_ok=True)
                     except OSError:
-                        traceback.print_exc()
+                        _print_exc_quietly()
                 else:
                     _write_private_bytes(token_file, previous_token)
                 raise
@@ -21387,7 +23217,7 @@ class WebState:
                     try:
                         os.remove(token_file)
                     except OSError:
-                        traceback.print_exc()
+                        _print_exc_quietly()
                 raise
 
     def logout_account(
@@ -21492,28 +23322,133 @@ class WebState:
             self.account_store.data = account_data
             self.web_auth.data = auth_data
             self.schedules = schedules
-            self.ai_auto_reply_runtime.pop(account_id, None)
-            self.ai_auto_reply_inflight = {
-                key for key in self.ai_auto_reply_inflight if key[0] != account_id
-            }
+            self._forget_ai_auto_reply_accounts({account_id})
+            with self.crm_removal_lock:
+                self.crm_removal_pending.add(account_id)
+        # A request or a poll that opened a LINE client for it while it was being
+        # removed leaves nothing open (get_api keeps none for it from now on).
+        self.close_api(account_id)
         self._release_removed_account(account_id, removed)
         removed.pop("credentialFile", None)
         return removed
 
+    def _listed_accounts(self) -> dict[str, dict[str, Any]]:
+        """The accounts by id, read without account_store.lock, under the same terms as
+        _account_listed (for code that holds schedule_lock, say: a removal takes
+        account_store.lock and then schedule_lock, so taking account_store.lock under it
+        could leave the two waiting for each other). The records are the store's own;
+        read them, never change them."""
+        accounts = self.account_store.data.get("accounts")
+        return {
+            str(account.get("id") or ""): account
+            for account in (accounts if isinstance(accounts, list) else [])
+            if isinstance(account, dict)
+        }
+
+    def _account_listed(self, account_id: str) -> bool:
+        """Whether the account list holds ``account_id``, read without its lock.
+
+        For checks made under self.lock, schedule_lock or ai_auto_reply_lock: a removal
+        replaces the list while it holds all three (_commit_account_removal,
+        delete_user), so the answer stands while the caller keeps that lock. Taking
+        account_store.lock there instead would invert the removal's lock order.
+        """
+        accounts = self.account_store.data.get("accounts")
+        return isinstance(accounts, list) and any(
+            isinstance(account, dict) and account.get("id") == account_id
+            for account in accounts
+        )
+
+    def _forget_ai_auto_reply_accounts(self, account_ids: set[str]) -> None:
+        """Forget what the auto replies keep in memory for removed accounts: runtime,
+        in-flight marks, unsaved cursors, held chats, ready chats, when chats began to
+        wait and when they were last seen idle, waiting Telegram and LINE OA jobs, reply
+        limits and the names of their customers and groups. A poll of one that is choosing now keeps nothing either
+        (its flag goes, see _set_line_ready). Replies running now end by themselves."""
+        with self.ai_auto_reply_lock:
+            for account_id in account_ids:
+                self.ai_auto_reply_runtime.pop(account_id, None)
+                self.ai_auto_reply_line_polling.discard(account_id)
+            self.ai_auto_reply_inflight = {
+                key for key in self.ai_auto_reply_inflight if key[0] not in account_ids
+            }
+            self.ai_auto_reply_unsaved_cursors = {
+                key: value
+                for key, value in self.ai_auto_reply_unsaved_cursors.items()
+                if key[0] not in account_ids
+            }
+            self.ai_auto_reply_held = {
+                key: value
+                for key, value in self.ai_auto_reply_held.items()
+                if key[0] not in account_ids
+            }
+            for owner_id in list(self.ai_auto_reply_line_ready):
+                ready_accounts = self.ai_auto_reply_line_ready[owner_id]
+                for account_id in account_ids:
+                    ready_accounts.pop(account_id, None)
+                if not ready_accounts:
+                    del self.ai_auto_reply_line_ready[owner_id]
+            for owner_id in list(self.ai_auto_reply_backlog):
+                backlog = self.ai_auto_reply_backlog[owner_id]
+                kept = deque(
+                    job
+                    for job in backlog
+                    if self._ai_auto_reply_key(job)[0] not in account_ids
+                )
+                if len(kept) == len(backlog):
+                    continue
+                if kept:
+                    self.ai_auto_reply_backlog[owner_id] = kept
+                else:
+                    del self.ai_auto_reply_backlog[owner_id]
+                    self.ai_auto_reply_line_turn.pop(owner_id, None)
+            self.ai_auto_reply_rate_events = {
+                key: stamps
+                for key, stamps in self.ai_auto_reply_rate_events.items()
+                if len(key) < 2 or key[1] not in account_ids
+            }
+            self.ai_auto_reply_waiting = {
+                key: value
+                for key, value in self.ai_auto_reply_waiting.items()
+                if key[0] not in account_ids
+            }
+            for account_id in account_ids:
+                self.ai_auto_reply_idle_seen.pop(account_id, None)
+                self.ai_auto_reply_looked.pop(account_id, None)
+            self.ai_auto_reply_identity_cache = {
+                key: value
+                for key, value in self.ai_auto_reply_identity_cache.items()
+                if key[0] not in account_ids
+            }
+
     def _release_removed_account(self, account_id: str, removed: dict[str, Any]) -> None:
         """Let go of what a removed account used outside the account list."""
         token_file = str(removed.get("tokenFile") or "")
-        if token_file and os.path.exists(token_file):
-            try:
-                os.remove(token_file)
-            except OSError:
-                traceback.print_exc()
+        with self.account_store.lock:
+            # Not when the same LINE account was added again meanwhile by the same name
+            # (the same id, so the same file): it writes its sign-in under this lock.
+            if (
+                token_file
+                and os.path.exists(token_file)
+                and not self._account_listed(account_id)
+            ):
+                try:
+                    os.remove(token_file)
+                except OSError:
+                    _print_exc_quietly()
         self.crm_cursors.pop(account_id, None)
-        try:
-            # Its chats go, and the customers who chatted only through it.
-            removed["customersDeleted"] = self.crm.purge_account(account_id)
-        except Exception:
-            traceback.print_exc()
+        deleted = 0
+        with self.crm_purge_lock:
+            try:
+                # Its chats go, and the customers who chatted only through it.
+                deleted = int(self.crm.purge_account(account_id) or 0)
+            except Exception:
+                _print_exc_quietly()
+            with self.crm_removal_lock:
+                self.crm_removal_pending.discard(account_id)
+                # And those a late write's purge deleted first (see _crm_purge_late).
+                deleted += self.crm_purged_late.pop(account_id, 0)
+        removed["customersDeleted"] = deleted
         if _account_channel(removed) != "line":
             self.telegram.stop(account_id)
             self.telegram_users.stop(account_id)
@@ -21523,7 +23458,7 @@ class WebState:
                 try:
                     os.remove(credential_file)
                 except OSError:
-                    traceback.print_exc()
+                    _print_exc_quietly()
             self.store.set(f"telegram_runtime:{account_id}", {"offset": 0})
             self.store.set(f"lineoa_runtime:{account_id}", {})
         with self.room_state_lock:
@@ -21796,9 +23731,14 @@ class WebState:
         ok: bool = True,
         detail: str = "",
         data: dict[str, Any] | None = None,
+        listed_only: bool = False,
     ) -> None:
+        """Add a line to the activity log. ``listed_only``: not for an account removed
+        meanwhile (checked under schedule_lock, which a removal holds as it commits)."""
         try:
             with self.schedule_lock:
+                if listed_only and account_id and not self._account_listed(account_id):
+                    return
                 raw = self.store.get("bot_logs", {"logs": []})
                 logs = raw.get("logs", []) if isinstance(raw, dict) else []
                 if not isinstance(logs, list):
@@ -21817,7 +23757,7 @@ class WebState:
                 self.store.set("bot_logs", {"logs": logs})
         except Exception:
             # Logging should never prevent the bot action itself from completing.
-            traceback.print_exc()
+            _print_exc_quietly()
 
     def list_bot_logs(
         self,
@@ -21989,7 +23929,7 @@ class WebState:
         try:
             self.process_push_queue()
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
 
     def _ensure_ops_watcher(self, account_id: str) -> None:
         watcher = self.ops_watchers.get(account_id)
@@ -22132,8 +24072,7 @@ class WebState:
         record = self._ai_auto_reply_record(account_id)
         if not record.get("enabled") or not record.get("contactsEnabled"):
             return False
-        owner = self.web_auth.user_for_account(account_id)
-        return bool(self._assistant_settings_for(self._global_ai_all(), owner).get("configured"))
+        return self._auto_reply_ai_ready_cached(self.web_auth.user_for_account(account_id))
 
     def _alerts_wanted(self) -> bool:
         """Someone gets alerts: a browser push subscription or a linked Telegram."""
@@ -22261,7 +24200,7 @@ class WebState:
             # A chat someone took on only alerts that person.
             assignees = self.crm.assignees_for_chats(account_id, chat_mids)
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
             assignees = {}
         for user_id, subscriptions in self._push_recipients(account_id):
             with self.push_lock:
@@ -22424,7 +24363,7 @@ class WebState:
             if exc.subscription_gone:
                 self.remove_push_subscription(str(subscription.get("endpoint") or ""))
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
 
     def _after_inbox_fetch(
         self, account_id: str, payload: dict[str, Any], api: OkLine | None = None
@@ -22449,7 +24388,7 @@ class WebState:
                 self.update_room_state(account_id, own_mid, boxes)
                 self._queue_crm_ingest(account_id, own_mid, boxes)
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
 
     # -- customer records (CRM) ----------------------------------------------
     def _crm_cursor_map(self, account_id: str) -> dict[str, int]:
@@ -22545,16 +24484,16 @@ class WebState:
                     }
                 )
             try:
-                result = self.crm.ingest(
+                result = self._crm_ingest(
+                    account_id,
                     owner_id=owner_id,
-                    account_id=account_id,
                     channel="line",
                     chat_id=chat_id,
                     contact={"externalId": chat_id},
                     messages=items,
                 )
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
                 continue
             if result and (
                 result.get("created")
@@ -22564,6 +24503,48 @@ class WebState:
                 changed = True
         if changed:
             self._bump_crm_version(account_id)
+
+    def _crm_ingest(self, account_id: str, **values: Any) -> Any:
+        """crm.ingest for a chat of ``account_id``; nothing for an account not listed.
+
+        A removal deletes the account's chats after it leaves the account list, so an
+        ingest that began before can land after that: one whose account is gone by the
+        time it ends deletes the account's chats again (see _release_removed_account).
+        """
+        if self.account_store.get(account_id) is None:
+            return {}
+        result = self.crm.ingest(account_id=account_id, **values)
+        if self.account_store.get(account_id) is None:
+            try:
+                self._crm_purge_late(account_id)
+            except Exception:
+                _print_exc_quietly()
+            return {}
+        return result
+
+    def _crm_purge_late(self, account_id: str) -> None:
+        """Delete again what the CRM keeps of a removed account: rows that a write which
+        began before the removal stored after the removal's purge. While that purge is
+        still to come, the customers this deletes count toward its customersDeleted."""
+        with self.crm_purge_lock:
+            deleted = int(self.crm.purge_account(account_id) or 0)
+            with self.crm_removal_lock:
+                if account_id in self.crm_removal_pending:
+                    self.crm_purged_late[account_id] = (
+                        self.crm_purged_late.get(account_id, 0) + deleted
+                    )
+
+    def crm_account_alive(self, account_id: str) -> bool:
+        """For the CRM once it made a chat's rows (to claim or close the chat): False
+        when the account was removed meanwhile, and then those rows go again (the
+        removal's purge may have run before they were made)."""
+        if self.account_store.get(account_id) is not None:
+            return True
+        try:
+            self._crm_purge_late(account_id)
+        except Exception:
+            _print_exc_quietly()
+        return False
 
     # -- the all-channels inbox ----------------------------------------------
     def inbox_accounts(self, user: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -22708,7 +24689,9 @@ class WebState:
             return
         self.inbox_refresh_logged_at[account_id] = now
         detail = _safe_log_detail(exc, 160)
-        print(f"[inbox] {account_id}: refresh failed ({type(exc).__name__}) {detail}", flush=True)
+        _print_quietly(
+            f"[inbox] {account_id}: refresh failed ({type(exc).__name__}) {detail}", stdout=True
+        )
 
     def _inbox_group_row(
         self, account: dict[str, Any], box: dict[str, Any], names: dict[str, str]
@@ -22784,7 +24767,7 @@ class WebState:
             try:
                 self._send_next_broadcast(broadcast)
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
 
     def _send_next_broadcast(self, broadcast: dict[str, Any]) -> None:
         broadcast_id = str(broadcast["id"])
@@ -23152,9 +25135,9 @@ class WebState:
         channel = _account_channel(self.account_store.get(account_id))
         result: dict[str, Any] = {}
         try:
-            result = self.crm.ingest(
+            result = self._crm_ingest(
+                account_id,
                 owner_id=self._account_owner_id(account_id),
-                account_id=account_id,
                 channel=channel,
                 chat_id=chat_id,
                 # Telegram chat ids carry a "tgu" prefix; OA chat ids are the person.
@@ -23175,7 +25158,7 @@ class WebState:
                 track_unread=True,
             )
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
         self._bump_inbox_version(account_id)
         if result and result.get("status") != result.get("previousStatus"):
             self._bump_crm_version(account_id)
@@ -23190,7 +25173,7 @@ class WebState:
                 stored = json.load(handle)
             secret = json.loads(self._decrypt_secret(str(stored.get("secret") or "")) or "{}")
         except (OSError, ValueError):
-            traceback.print_exc()
+            _print_exc_quietly()
             return {}
         return secret if isinstance(secret, dict) else {}
 
@@ -23215,9 +25198,9 @@ class WebState:
         for message in messages:
             outgoing = bool(message.get("outgoing"))
             try:
-                self.crm.ingest(
+                self._crm_ingest(
+                    account_id,
                     owner_id=owner_id,
-                    account_id=account_id,
                     channel=_account_channel(account),
                     chat_id=str(message.get("chatId") or ""),
                     contact={
@@ -23239,11 +25222,14 @@ class WebState:
                     ],
                 )
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
         self._bump_inbox_version(account_id)
         self._bump_crm_version(account_id)
 
     def tg_receive(self, account_id: str, message: dict[str, Any]) -> None:
+        """A message a Telegram account received. It raises only when it could not be
+        stored (a bot's poller then hands it over again later, see BotChannelWorker):
+        what follows a stored message is done once, and its failures are only logged."""
         account = self.account_store.get(account_id)
         if not account:
             return
@@ -23256,9 +25242,9 @@ class WebState:
             )
         else:
             kind, sender_id = "customer", str(message.get("userId") or "")
-        result = self.crm.ingest(
+        result = self._crm_ingest(
+            account_id,
             owner_id=owner_id,
-            account_id=account_id,
             channel=_account_channel(account),
             chat_id=chat_id,
             contact={
@@ -23280,15 +25266,25 @@ class WebState:
             ],
             track_unread=True,
         )
+        if _account_channel(account) == "telegram_bot" and not (result or {}).get("inserted"):
+            # Stored already: handed over again (a restart before its offset was saved),
+            # or its account went meanwhile.
+            return
         if not outgoing:
-            self.note_incoming(account_id, chat_id, _coerce_int(message.get("at")))
+            try:
+                self.note_incoming(account_id, chat_id, _coerce_int(message.get("at")))
+            except Exception:
+                _print_exc_quietly()
         self._bump_inbox_version(account_id)
         if result and (
             result.get("created") or result.get("status") != result.get("previousStatus")
         ):
             self._bump_crm_version(account_id)
         if not outgoing:
-            self._telegram_auto_reply(account_id, owner_id, chat_id, message)
+            try:
+                self._telegram_auto_reply(account_id, owner_id, chat_id, message)
+            except Exception:
+                _print_exc_quietly()
 
     def tg_auth_failed(self, account_id: str) -> None:
         if _account_channel(self.account_store.get(account_id)) == "telegram_user":
@@ -23323,11 +25319,25 @@ class WebState:
             return
         if not self._ai_auto_reply_chat_enabled(record, "contact", chat_id):
             return
+        try:
+            # Reused for a few seconds per owner: a burst of messages costs one read.
+            ai_ready = self._auto_reply_ai_ready_cached(self.web_auth.user_for_account(account_id))
+        except Exception as exc:  # e.g. a stored key that cannot be decrypted
+            self._set_ai_auto_reply_runtime(
+                account_id, state="error", lastError=_safe_log_detail(exc, 500)
+            )
+            return
+        if not ai_ready:
+            # No AI to answer with: passed over quietly, with no rate-limit use and
+            # no log line per message.
+            self._set_ai_auto_reply_runtime(account_id, state="ai_missing", lastError="")
+            return
         inflight_key = (account_id, chat_id)
         with self.ai_auto_reply_lock:
             if inflight_key in self.ai_auto_reply_inflight:
                 return
-        if not self._consume_ai_auto_reply_rate(account_id, chat_id):
+        rate_stamp = self._consume_ai_auto_reply_rate(account_id, chat_id)
+        if rate_stamp is None:
             self.append_bot_log(
                 "ai.auto_reply.rate_limit",
                 account_id=account_id,
@@ -23339,26 +25349,24 @@ class WebState:
         with self.ai_auto_reply_lock:
             self.ai_auto_reply_inflight.add(inflight_key)
         name = str(message.get("name") or "")
-        try:
-            self.ai_auto_reply_executor.submit(
-                self._process_ai_auto_reply,
-                {
-                    "accountId": account_id,
-                    "chatMid": chat_id,
-                    "chatType": "contact",
-                    "question": question[:MAX_ASSISTANT_QUESTION_LENGTH],
-                    "senderMid": chat_id,
-                    "senderName": name,
-                    "chatName": name,
-                    "messageId": message.get("externalId"),
-                    "cursor": None,
-                    "enabledAtMs": enabled_at_ms,
-                    "ownerId": owner_id,
-                },
-            )
-        except RuntimeError:
-            with self.ai_auto_reply_lock:
-                self.ai_auto_reply_inflight.discard(inflight_key)
+        # Started now, or kept in the owner's short backlog while the owner's share of
+        # the workers is taken (these messages have no cursor to come back to).
+        self._queue_ai_auto_reply(
+            {
+                "accountId": account_id,
+                "chatMid": chat_id,
+                "chatType": "contact",
+                "question": question[:MAX_ASSISTANT_QUESTION_LENGTH],
+                "senderMid": chat_id,
+                "senderName": name,
+                "chatName": name,
+                "messageId": message.get("externalId"),
+                "cursor": None,
+                "enabledAtMs": enabled_at_ms,
+                "ownerId": owner_id,
+                "rateStamp": rate_stamp,
+            }
+        )
 
     def add_telegram_bot(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
         owner_id = self._require_account_adder(user)
@@ -23968,9 +25976,9 @@ class WebState:
             )
         else:
             kind, sender_id = "app", ""
-        return self.crm.ingest(
+        return self._crm_ingest(
+            account_id,
             owner_id=self._account_owner_id(account_id),
-            account_id=account_id,
             channel="line_oa",
             chat_id=chat_id,
             contact={"externalId": chat_id, "name": message.get("name")},
@@ -24018,7 +26026,7 @@ class WebState:
             try:
                 self._oa_ingest(account_id, message, live=False)
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
         self._bump_inbox_version(account_id)
         self._bump_crm_version(account_id)
 
@@ -24268,9 +26276,9 @@ class WebState:
             )
         except OAManagerLoginError as exc:
             if exc.code != "cancelled":
-                print(
+                _print_quietly(
                     f"[lineoa] sign-in stopped ({exc.code}): {' > '.join(login.trace[-4:])}",
-                    flush=True,
+                    stdout=True,
                 )
             self._oa_login_update(
                 owner_id, login_id, state="error", error=exc.message,
@@ -24278,7 +26286,7 @@ class WebState:
             )
             return
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
             self._oa_login_update(
                 owner_id, login_id, state="error", error="LINE OA sign-in failed.",
                 errorCode="line_oa_login_failed", qrImage=None, pin=None,
@@ -24577,7 +26585,7 @@ class WebState:
                 self._answer_room(account_id, chat_mid, room, int(now * 1000), by)
                 self._save_room_states(account_id, rooms)
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
 
     def update_room_state(
         self, account_id: str, own_mid: str, boxes: list[dict[str, Any]]
@@ -25066,7 +27074,11 @@ class WebState:
                     question
                     for question in global_ai.get("questions", [])
                     if not isinstance(question, dict)
-                    or str(question.get("userId") or "") != user_id
+                    or (
+                        str(question.get("userId") or "") != user_id
+                        # its workspace's questions, its staff's and auto replies too
+                        and str(question.get("workspaceId") or "") != user_id
+                    )
                 ]
 
                 raw_logs = self.store.get("bot_logs", {"logs": []})
@@ -25122,10 +27134,11 @@ class WebState:
                 self.schedules = schedules
                 for account_id in account_ids:
                     self.close_api(account_id)
-                    self.ai_auto_reply_runtime.pop(account_id, None)
-                self.ai_auto_reply_inflight = {
-                    key for key in self.ai_auto_reply_inflight if key[0] not in account_ids
-                }
+                self._forget_ai_auto_reply_accounts(account_ids)
+                with self.crm_removal_lock:
+                    self.crm_removal_pending.update(
+                        str(account.get("id") or "") for account in removed_accounts
+                    )
         finally:
             for api_lock in reversed(api_locks):
                 api_lock.release()
@@ -25522,31 +27535,41 @@ class WebState:
 
         success_count = sum(1 for item in results if item.get("ok"))
         failure_count = len(results) - success_count
-        with self.incoming_api_lock:
-            latest_root = self._incoming_api_root()
-            latest = next(
-                (
-                    item
-                    for item in latest_root["links"]
-                    if isinstance(item, dict) and str(item.get("id") or "") == link_id
-                ),
-                None,
-            )
-            if latest is not None:
-                latest["requestCount"] = int(latest.get("requestCount") or 0) + 1
-                latest["successCount"] = int(latest.get("successCount") or 0) + success_count
-                latest["failureCount"] = int(latest.get("failureCount") or 0) + failure_count
-                latest["lastUsedAt"] = _now_iso()
-                latest["lastStatus"] = (
-                    "success" if not failure_count else "partial" if success_count else "error"
+        try:
+            with self.incoming_api_lock:
+                latest_root = self._incoming_api_root()
+                latest = next(
+                    (
+                        item
+                        for item in latest_root["links"]
+                        if isinstance(item, dict) and str(item.get("id") or "") == link_id
+                    ),
+                    None,
                 )
-                if failure_count:
-                    latest["lastError"] = str(
-                        next(item.get("error") for item in results if not item.get("ok"))
+                if latest is not None:
+                    latest["requestCount"] = int(latest.get("requestCount") or 0) + 1
+                    latest["successCount"] = (
+                        int(latest.get("successCount") or 0) + success_count
                     )
-                else:
-                    latest.pop("lastError", None)
-                self.store.set("incoming_api", latest_root)
+                    latest["failureCount"] = (
+                        int(latest.get("failureCount") or 0) + failure_count
+                    )
+                    latest["lastUsedAt"] = _now_iso()
+                    latest["lastStatus"] = (
+                        "success" if not failure_count else "partial" if success_count else "error"
+                    )
+                    if failure_count:
+                        latest["lastError"] = str(
+                            next(item.get("error") for item in results if not item.get("ok"))
+                        )
+                    else:
+                        latest.pop("lastError", None)
+                    self.store.set("incoming_api", latest_root)
+        except Exception:
+            # What was sent went out: the request does not fail over the link's counters
+            # (they then miss it), or a caller that tries again would send it again. One
+            # that cannot even be read now (a database that is down) is left as it is.
+            _print_exc_quietly()
         return {
             "ok": failure_count == 0,
             "linkId": link_id,
@@ -25579,13 +27602,32 @@ class WebState:
 
     def save_schedules(self) -> None:
         with self.schedule_lock:
-            self.store.set("schedules", {"schedules": self.schedules})
+            try:
+                self.store.set("schedules", {"schedules": self.schedules})
+            except Exception as exc:
+                self.schedules_unsaved = True
+                reason = _safe_log_detail(exc, 300)
+                if reason != self.schedules_save_error:
+                    # Said once for each reason, not at every round that tries again.
+                    self.schedules_save_error = reason
+                    _print_quietly(
+                        f"LinePassport: the schedules could not be saved ({reason}). "
+                        "No schedule runs until they can be; LinePassport tries again "
+                        "every 10 seconds."
+                    )
+                raise
+            self.schedules_unsaved = False
+            self.schedules_save_error = None
+            self.schedules_unsaved_sent.clear()
 
     def list_schedules(
         self, account_id: str | None = None, user: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         account_id = (account_id or "").strip()
         allowed_ids = self.web_auth.allowed_account_ids(user)
+        # Read before schedule_lock: a removal takes account_store.lock and then
+        # schedule_lock, so taking account_store.lock under it could deadlock.
+        accounts = self.account_store.list_accounts(allowed_ids)
         with self.schedule_lock:
             schedules = [dict(job) for job in self.schedules]
             if account_id:
@@ -25598,8 +27640,22 @@ class WebState:
                 schedules = [job for job in schedules if job.get("accountId") in allowed_ids]
             return {
                 "schedules": schedules,
-                "accounts": self.account_store.list_accounts(allowed_ids),
+                "accounts": accounts,
+                **self._schedules_unsaved_payload(schedules),
             }
+
+    def _schedules_unsaved_payload(self, schedules: list[dict[str, Any]]) -> dict[str, Any]:
+        """Whether the schedules cannot be saved now (none is sent until they can), and
+        which of ``schedules`` went out meanwhile (a restart before a save works sends
+        those again). The caller holds schedule_lock."""
+        return {
+            "schedulesUnsaved": self.schedules_unsaved,
+            "unsavedSent": [
+                str(job.get("id") or "")
+                for job in schedules
+                if str(job.get("id") or "") in self.schedules_unsaved_sent
+            ],
+        }
 
     def create_schedule(self, body: dict[str, Any]) -> dict[str, Any]:
         account_id = _required_account_id(str(body.get("accountId") or ""))
@@ -25609,6 +27665,10 @@ class WebState:
             raise _line_only()
         job = _schedule_from_body(body, account_id=account_id)
         with self.schedule_lock:
+            if not self._account_listed(account_id):
+                # Removed since the check above (a removal turns its schedules off while
+                # it holds schedule_lock): none is added for it.
+                raise WebError(HTTPStatus.BAD_REQUEST, "A valid account is required.")
             count = sum(1 for item in self.schedules if item.get("accountId") == account_id)
             if count >= MAX_SCHEDULES_PER_ACCOUNT:
                 raise WebError(
@@ -25618,7 +27678,12 @@ class WebState:
                 )
             _ensure_schedule_image_quota(self.schedules, job)
             self.schedules.append(job)
-            self.save_schedules()
+            try:
+                self.save_schedules()
+            except Exception:
+                # Not saved, so not kept: a try again does not add it twice.
+                self.schedules = [item for item in self.schedules if item is not job]
+                raise
             self.append_bot_log(
                 "schedule.create",
                 account_id=account_id,
@@ -25632,15 +27697,24 @@ class WebState:
             job = self._find_schedule(schedule_id)
             account_id = _required_account_id(str(body.get("accountId") or ""))
             _ensure_schedule_account(job, account_id)
-            if not self.account_store.get(account_id):
+            # Read under schedule_lock without account_store.lock (see _listed_accounts):
+            # an edit then never brings back a schedule its account's removal turned off.
+            account = self._listed_accounts().get(account_id)
+            if not account:
                 raise WebError(HTTPStatus.BAD_REQUEST, "A valid account is required.")
-            if _account_channel(self.account_store.get(account_id)) != "line":
+            if _account_channel(account) != "line":
                 raise _line_only()
             updated = _schedule_from_body(body, account_id=account_id, existing=job)
             _ensure_schedule_image_quota(self.schedules, updated, replacing_id=schedule_id)
+            previous = dict(job)
             job.clear()
             job.update(updated)
-            self.save_schedules()
+            try:
+                self.save_schedules()
+            except Exception:
+                job.clear()
+                job.update(previous)  # not saved: as it was
+                raise
             self.append_bot_log(
                 "schedule.update",
                 account_id=account_id,
@@ -25655,11 +27729,17 @@ class WebState:
         with self.schedule_lock:
             job = self._find_schedule(schedule_id)
             _ensure_schedule_account(job, account_id)
+            previous = dict(job)
             job["enabled"] = bool(enabled)
             job["status"] = "waiting" if enabled else "paused"
             if enabled:
-                job["nextRunAt"] = _compute_next_epoch(job)
-            self.save_schedules()
+                job["nextRunAt"] = _next_run_from_now(job)
+            try:
+                self.save_schedules()
+            except Exception:
+                job.clear()
+                job.update(previous)  # not saved: as it was
+                raise
             self.append_bot_log(
                 "schedule.resume" if enabled else "schedule.pause",
                 account_id=str(job.get("accountId") or ""),
@@ -25674,11 +27754,15 @@ class WebState:
             job = self._find_schedule(schedule_id)
             _ensure_schedule_account(job, account_id)
             snapshot = dict(job)
-            before = len(self.schedules)
+            previous = self.schedules
             self.schedules = [job for job in self.schedules if job.get("id") != schedule_id]
-            if len(self.schedules) == before:
+            if len(self.schedules) == len(previous):
                 raise WebError(HTTPStatus.NOT_FOUND, "Schedule not found.")
-            self.save_schedules()
+            try:
+                self.save_schedules()
+            except Exception:
+                self.schedules = previous  # not saved: still there
+                raise
             self.append_bot_log(
                 "schedule.delete",
                 account_id=str(snapshot.get("accountId") or ""),
@@ -25692,7 +27776,7 @@ class WebState:
         account_id = _required_account_id(account_id)
         if not self.web_auth.can_access_account(user, account_id):
             raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
-        cleared = 0
+        cleared: list[tuple[dict[str, Any], dict[str, Any], str, bool]] = []
         with self.schedule_lock:
             for job in self.schedules:
                 if job.get("accountId") != account_id:
@@ -25707,11 +27791,12 @@ class WebState:
                     continue
                 old_status = str(job.get("status") or "")
                 was_running = bool(job.get("running"))
+                original = copy.deepcopy(job)
                 job["running"] = False
                 job["lastError"] = None
                 if job.get("enabled"):
                     if not job.get("nextRunAt"):
-                        job["nextRunAt"] = _compute_next_epoch(job)
+                        job["nextRunAt"] = _next_run_from_now(job)
                     job["status"] = "waiting" if job.get("nextRunAt") else "paused"
                 else:
                     job["status"] = "paused"
@@ -25726,6 +27811,16 @@ class WebState:
                         "wasRunning": was_running,
                     },
                 )
+                cleared.append((job, original, old_status, was_running))
+            if cleared:
+                try:
+                    self.save_schedules()
+                except Exception:
+                    for job, original, _old_status, _was_running in cleared:
+                        job.clear()
+                        job.update(original)  # not saved: as they were
+                    raise
+            for job, _original, old_status, was_running in cleared:
                 self.append_bot_log(
                     "schedule.clear_stuck",
                     account_id=account_id,
@@ -25733,13 +27828,11 @@ class WebState:
                     detail=f"reset from {old_status or 'unknown'}",
                     data={"oldStatus": old_status, "wasRunning": was_running},
                 )
-                cleared += 1
-            if cleared:
-                self.save_schedules()
             schedules = [
                 dict(job) for job in self.schedules if job.get("accountId") == account_id
             ]
-        return {"ok": True, "cleared": cleared, "schedules": schedules}
+            unsaved = self._schedules_unsaved_payload(schedules)
+        return {"ok": True, "cleared": len(cleared), "schedules": schedules, **unsaved}
 
     # -- message patterns (tenant-owned) ---------------------------------
     def list_patterns(self, user: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -26196,8 +28289,18 @@ class WebState:
         }
 
     def save_ai_settings(
-        self, body: dict[str, Any], user: dict[str, Any] | None = None
+        self,
+        body: dict[str, Any],
+        user: dict[str, Any] | None = None,
+        *,
+        select: bool = True,
     ) -> dict[str, Any]:
+        """Save one AI image provider's key and model; ``select`` also makes it active.
+
+        A save from the AI image section selects the provider it saves. The Gemini key
+        shared from auto reply's settings passes ``select=False``: it fills the Google
+        slot and leaves the image tool on the provider its owner chose.
+        """
         # Read-modify-write under one lock so a concurrent clear+save can't
         # resurrect a key the admin just removed (self.lock is reentrant).
         with self.lock:
@@ -26255,11 +28358,14 @@ class WebState:
                 record["model"] = model
                 record["aspectRatio"] = image_size
             data[provider] = record
-            # A save selects the active provider; a bare "clear" must not switch it.
-            if not body.get("clearApiKey"):
+            # A save selects the active provider; a bare "clear" must not switch it,
+            # nor does a key shared from auto reply's Gemini (``select`` False).
+            if select and not body.get("clearApiKey"):
                 data["provider"] = provider
             tenants[owner_id] = data
             self.store.set("ai_settings", root)
+            # The Google key also answers for a workspace on Gemini without its own.
+            self._forget_ai_readiness()
             return {"ok": True, **self.ai_settings(user)}
 
     def generate_ai_image(
@@ -26281,13 +28387,17 @@ class WebState:
             "name": result["name"],
         }
 
-    # -- Global Ollama assistant and RAG ---------------------------------
+    # -- AI for auto reply: each workspace's own provider and key -------------
     def _global_ai_all(self) -> dict[str, Any]:
+        """The ``global_ai`` record.
+
+        ``tenants`` holds each workspace's AI settings, shop knowledge and chunks,
+        ``questions`` every workspace's question log, and the other fields the God's
+        shared knowledge. There is no shared AI any more: each workspace uses its own.
+        """
         data = self.store.get("global_ai", {})
         if not isinstance(data, dict):
             data = {}
-        if not isinstance(data.get("settings"), dict):
-            data["settings"] = {}
         if not isinstance(data.get("apiSources"), list):
             data["apiSources"] = []
         if not isinstance(data.get("manualAnswers"), list):
@@ -26321,304 +28431,456 @@ class WebState:
                 tenant[key] = []
         return owner_id, tenant
 
-    def _global_ai_private_settings(self, data: dict[str, Any]) -> dict[str, Any]:
-        raw = data.get("settings")
-        settings = raw if isinstance(raw, dict) else {}
+    def _tenant_ai_record(
+        self, data: dict[str, Any], user: dict[str, Any] | None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """``(tenant, settings)`` as stored for the workspace ``user`` works in.
+
+        Both are ``{}`` when missing; nothing is added to ``data``.
+        """
+        tenant_user = self.tenant_user(user) or {}
+        owner_id = str(tenant_user.get("id") or "")
+        raw_tenant = data["tenants"].get(owner_id) if owner_id else None
+        tenant: dict[str, Any] = raw_tenant if isinstance(raw_tenant, dict) else {}
+        raw_settings = tenant.get("settings")
+        return tenant, (raw_settings if isinstance(raw_settings, dict) else {})
+
+    @staticmethod
+    def _tenant_ai_settings(raw: Any) -> dict[str, Any]:
+        """The provider-independent part of a workspace's AI settings, normalized.
+
+        Missing or broken values get their defaults. A stored temperature of 0 stays 0.
+        """
+        settings: Mapping[str, Any] = raw if isinstance(raw, Mapping) else {}
         try:
             top_k = max(1, min(int(settings.get("topK") or 5), 12))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             top_k = 5
+        raw_temperature = settings.get("temperature")
         try:
-            temperature = max(0.0, min(float(settings.get("temperature") or 0.2), 2.0))
-        except (TypeError, ValueError):
+            temperature = (
+                0.2
+                if raw_temperature is None
+                or raw_temperature == ""
+                or isinstance(raw_temperature, bool)
+                else float(raw_temperature)
+            )
+        except (TypeError, ValueError, OverflowError):
+            temperature = 0.2
+        if not math.isfinite(temperature):
             temperature = 0.2
         try:
-            timeout = max(5.0, min(float(settings.get("timeout") or 120), 600.0))
-        except (TypeError, ValueError):
+            timeout = float(settings.get("timeout") or 120)
+        except (TypeError, ValueError, OverflowError):
+            timeout = 120.0
+        if not math.isfinite(timeout):
             timeout = 120.0
         return {
             "enabled": bool(settings.get("enabled")),
-            "baseUrl": str(settings.get("baseUrl") or DEFAULT_OLLAMA_BASE_URL),
-            "apiKey": self._decrypt_secret(str(settings.get("apiKey") or "")),
-            "chatModel": str(settings.get("chatModel") or "").strip(),
-            "embeddingModel": str(settings.get("embeddingModel") or "").strip(),
             "systemPrompt": str(
                 settings.get("systemPrompt") or DEFAULT_ASSISTANT_SYSTEM_PROMPT
             ).strip(),
             "strictKnowledge": bool(settings.get("strictKnowledge", False)),
             "topK": top_k,
-            "temperature": temperature,
-            "timeout": timeout,
+            "temperature": max(0.0, min(temperature, 2.0)),
+            "timeout": max(5.0, min(timeout, 600.0)),
         }
 
-    def global_ai_settings(self, *, reveal: bool = False) -> dict[str, Any]:
-        data = self._global_ai_all()
-        settings = self._global_ai_private_settings(data)
-        if reveal:
-            return settings
-        questions = [item for item in data["questions"] if isinstance(item, dict)]
+    def _tenant_ai_provider_entry(
+        self, settings: Mapping[str, Any], provider: AIProvider
+    ) -> dict[str, Any]:
+        """One provider's saved key (decrypted), models and Custom API address.
+
+        Reads ``settings["providers"][id]``, and also a record saved before that map
+        existed: the flat ``{provider: "gemini", apiKey, chatModel, embeddingModel}``
+        shape, whose blank search model meant Gemini's default and whose ``baseUrl``
+        was an Ollama address (ignored). ``saved`` says whether anything was stored.
+        """
+        providers = settings.get("providers")
+        raw = providers.get(provider.id) if isinstance(providers, Mapping) else None
+        legacy = False
+        if not isinstance(raw, Mapping):
+            raw = {}
+            flat = str(settings.get("provider") or "").strip().lower()
+            if flat == provider.id and any(
+                key in settings for key in ("apiKey", "chatModel", "embeddingModel")
+            ):
+                raw, legacy = settings, True
+        embedding_model = str(raw.get("embeddingModel") or "").strip()
+        if legacy and not embedding_model:
+            embedding_model = provider.default_embedding_model
         return {
-            "enabled": settings["enabled"],
-            "baseUrl": settings["baseUrl"],
-            "hasApiKey": bool(settings["apiKey"]),
-            "apiKeyPreview": _mask_secret(settings["apiKey"]),
-            "chatModel": settings["chatModel"],
-            "embeddingModel": settings["embeddingModel"],
-            "systemPrompt": settings["systemPrompt"],
-            "strictKnowledge": settings["strictKnowledge"],
-            "topK": settings["topK"],
-            "temperature": settings["temperature"],
-            "timeout": settings["timeout"],
-            "configured": bool(settings["enabled"] and settings["chatModel"]),
-            "chunkCount": len(data["chunks"]),
-            "unansweredCount": sum(
-                1 for item in questions if item.get("status") == "unanswered"
+            "apiKey": self._decrypt_secret(str(raw.get("apiKey") or "")),
+            "chatModel": str(raw.get("chatModel") or "").strip(),
+            "embeddingModel": embedding_model if provider.embeddings else "",
+            "baseUrl": (
+                str(raw.get("baseUrl") or "").strip()
+                if provider.needs_base_url and not legacy
+                else ""
             ),
-            "indexMode": str(data.get("indexMode") or "none"),
-            "indexError": str(data.get("indexError") or ""),
-            "indexedAt": str(data.get("indexedAt") or ""),
+            "saved": bool(raw),
         }
 
-    def save_global_ai_settings(self, body: dict[str, Any]) -> dict[str, Any]:
-        with self.lock:
-            data = self._global_ai_all()
-            current = self._global_ai_private_settings(data)
-            try:
-                base_url = normalize_ollama_base_url(
-                    str(body.get("baseUrl") or current["baseUrl"])
-                )
-            except ValueError as exc:
-                raise WebError(HTTPStatus.BAD_REQUEST, str(exc), "ollama_url_invalid") from exc
-            raw_key = body.get("apiKey")
-            if body.get("clearApiKey"):
-                api_key = ""
-            elif raw_key is None or not str(raw_key).strip():
-                api_key = current["apiKey"]
-            else:
-                api_key = str(raw_key).strip()
-            chat_model = str(body.get("chatModel") or current["chatModel"]).strip()[:200]
-            embedding_model = str(
-                body.get("embeddingModel") or current["embeddingModel"]
-            ).strip()[:200]
-            system_prompt = str(body.get("systemPrompt") or current["systemPrompt"]).strip()[
-                :20_000
-            ]
-            try:
-                top_k = max(1, min(int(body.get("topK", current["topK"])), 12))
-                temperature = max(
-                    0.0,
-                    min(float(body.get("temperature", current["temperature"])), 2.0),
-                )
-                timeout = max(5.0, min(float(body.get("timeout", current["timeout"])), 600.0))
-            except (TypeError, ValueError) as exc:
-                raise WebError(
-                    HTTPStatus.BAD_REQUEST,
-                    "AI numeric settings are invalid.",
-                    "ai_settings_invalid",
-                ) from exc
-            previous_embedding_model = current["embeddingModel"]
-            data["settings"] = {
-                "enabled": bool(body.get("enabled", current["enabled"])),
-                "baseUrl": base_url,
-                "apiKey": self._encrypt_secret(api_key),
-                "chatModel": chat_model,
-                "embeddingModel": embedding_model,
-                "systemPrompt": system_prompt or DEFAULT_ASSISTANT_SYSTEM_PROMPT,
-                "strictKnowledge": bool(
-                    body.get("strictKnowledge", current["strictKnowledge"])
-                ),
-                "topK": top_k,
-                "temperature": temperature,
-                "timeout": timeout,
-                "updatedAt": _now_iso(),
-            }
-            if embedding_model != previous_embedding_model:
-                for chunk in data["chunks"]:
-                    if isinstance(chunk, dict):
-                        chunk.pop("embedding", None)
-                for tenant in data["tenants"].values():
-                    if not isinstance(tenant, dict):
-                        continue
-                    for chunk in tenant.get("chunks", []):
-                        if isinstance(chunk, dict):
-                            chunk.pop("embedding", None)
-                    tenant["indexMode"] = "needs-reindex"
-                    tenant["indexError"] = ""
-                data["indexMode"] = "needs-reindex"
-                data["indexError"] = ""
-            self.store.set("global_ai", data)
-        return {"ok": True, **self.global_ai_settings()}
+    def _tenant_ai_providers_map(self, settings: Mapping[str, Any]) -> dict[str, Any]:
+        """A copy of the saved per-provider records, keys still encrypted.
 
-    # -- per-shop assistant brain (Gemini key or Ollama) ----------------------
+        A record saved before the map existed (one flat provider) is moved in, so its
+        key stays with its provider; its Ollama-era ``baseUrl`` is dropped.
+        """
+        providers = settings.get("providers")
+        result: dict[str, Any] = (
+            {
+                str(key): dict(value)
+                for key, value in providers.items()
+                if isinstance(value, Mapping)
+            }
+            if isinstance(providers, Mapping)
+            else {}
+        )
+        flat = get_provider(str(settings.get("provider") or ""))
+        if (
+            flat is not None
+            and flat.id not in result
+            and any(key in settings for key in ("apiKey", "chatModel", "embeddingModel"))
+        ):
+            entry = self._tenant_ai_provider_entry(settings, flat)
+            result[flat.id] = {
+                "apiKey": self._encrypt_secret(entry["apiKey"]),
+                "chatModel": entry["chatModel"],
+                "embeddingModel": entry["embeddingModel"],
+                "updatedAt": str(settings.get("updatedAt") or ""),
+            }
+        return result
+
     def _assistant_settings_for(
         self, data: dict[str, Any], user: dict[str, Any] | None
     ) -> dict[str, Any]:
-        """Effective assistant settings: the shop's own brain, else God's global one."""
-        tenant_user = self.tenant_user(user) or {}
-        owner_id = str(tenant_user.get("id") or "")
-        tenant = data["tenants"].get(owner_id) if owner_id else None
-        raw = tenant.get("settings") if isinstance(tenant, dict) else None
-        if isinstance(raw, dict) and raw.get("provider") in {"gemini", "ollama"}:
-            provider = str(raw["provider"])
-            settings = self._global_ai_private_settings({"settings": raw})
-            settings["provider"] = provider
-            settings["source"] = "tenant"
-            if provider == "gemini":
-                key = settings["apiKey"] or self._ai_provider_view(
-                    self._ai_all(tenant_user), "google"
-                )["apiKey"]
-                settings["apiKey"] = key
-                settings["chatModel"] = settings["chatModel"] or DEFAULT_GEMINI_CHAT_MODEL
-                settings["embeddingModel"] = (
-                    settings["embeddingModel"] or DEFAULT_GEMINI_EMBEDDING_MODEL
-                )
-                settings["configured"] = bool(settings["enabled"] and key)
-            else:
-                settings["configured"] = bool(settings["enabled"] and settings["chatModel"])
+        """The AI a workspace answers with: its own provider, key and models.
+
+        There is no shared fallback. With no settings, or a provider the registry does
+        not know (including the removed "ollama" and "global"), the result is a full
+        not-configured record: provider "", source "none", configured and enabled
+        False, empty key, address and models, and the normalized prompt settings.
+        ``notice`` says why a workspace lost its AI (set by the startup migration).
+        """
+        tenant, record = self._tenant_ai_record(data, user)
+        settings = self._tenant_ai_settings(record)
+        settings.update(
+            {
+                "notice": str(record.get("aiNotice") or tenant.get("aiNotice") or ""),
+                "apiKey": "",
+                "baseUrl": "",
+                "chatModel": "",
+                "embeddingModel": "",
+            }
+        )
+        provider = get_provider(str(record.get("provider") or ""))
+        if provider is None:
+            settings.update(
+                {"provider": "", "source": "none", "configured": False, "enabled": False}
+            )
             return settings
-        settings = self._global_ai_private_settings(data)
-        settings["provider"] = "ollama"
-        settings["source"] = "global"
-        settings["configured"] = bool(settings["enabled"] and settings["chatModel"])
+        entry = self._tenant_ai_provider_entry(record, provider)
+        api_key = str(entry["apiKey"])
+        if provider.id == "gemini" and not api_key:
+            # The AI image tool's Google key works for Gemini chat too.
+            api_key = self._ai_provider_view(
+                self._ai_all(self.tenant_user(user) or {}), "google"
+            )["apiKey"]
+        chat_model = str(entry["chatModel"]) or provider.default_chat_model
+        available, _reason = provider_available(provider.id)
+        settings.update(
+            {
+                "provider": provider.id,
+                "source": "tenant",
+                "apiKey": api_key,
+                "baseUrl": entry["baseUrl"],
+                "chatModel": chat_model,
+                "embeddingModel": entry["embeddingModel"],
+            }
+        )
+        settings["configured"] = bool(
+            settings["enabled"]
+            and available
+            and chat_model
+            and (api_key or not provider.key_required)
+            and (entry["baseUrl"] or not provider.needs_base_url)
+        )
         return settings
 
-    def _assistant_client(self, settings: dict[str, Any]) -> OllamaClient | GeminiClient:
-        if settings.get("provider") == "gemini":
-            return GeminiClient(
-                str(settings.get("apiKey") or ""), timeout=float(settings.get("timeout") or 120)
+    def _assistant_ai_client(self, settings: Mapping[str, Any]) -> AIClient:
+        """The client for a workspace's AI (settings as _assistant_settings_for gives).
+
+        One chat call takes at most 60 seconds. The Custom API goes through the
+        public-address transport, bound to its saved address.
+        """
+        provider = get_provider(str(settings.get("provider") or ""))
+        if provider is None:
+            raise AssistantError("No AI provider is set up.", code="assistant_not_configured")
+        base_url = str(settings.get("baseUrl") or "")
+        try:
+            timeout = min(
+                float(settings.get("timeout") or CHAT_DEADLINE_SECONDS), CHAT_DEADLINE_SECONDS
             )
-        return self._ollama_client(settings)
+        except (TypeError, ValueError, OverflowError):
+            timeout = CHAT_DEADLINE_SECONDS
+        return make_ai_client(
+            provider.id,
+            api_key=str(settings.get("apiKey") or ""),
+            base_url=base_url,
+            transport=_custom_ai_transport(base_url) if provider.needs_base_url else None,
+            timeout=timeout,
+        )
+
+    @staticmethod
+    def _tenant_vectors_usable(
+        tenant: Mapping[str, Any],
+        settings: Mapping[str, Any],
+        chunks: list[dict[str, Any]],
+    ) -> bool:
+        """Whether a workspace's chunks can be ranked by vectors with ``settings``.
+
+        Only when its index was built by the provider and search model in use now
+        (stored as embeddingProvider and embeddingModel) and every chunk has a vector
+        of the same size: vectors of another model do not compare.
+        """
+        provider = get_provider(str(settings.get("provider") or ""))
+        model = str(settings.get("embeddingModel") or "")
+        if not chunks or provider is None or not provider.embeddings or not model:
+            return False
+        if (
+            str(tenant.get("embeddingProvider") or "") != provider.id
+            or str(tenant.get("embeddingModel") or "") != model
+        ):
+            return False
+        first = chunks[0].get("embedding")
+        size = len(first) if isinstance(first, list) else 0
+        return bool(size) and all(
+            isinstance(chunk.get("embedding"), list) and len(chunk["embedding"]) == size
+            for chunk in chunks
+        )
 
     def assistant_settings(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        """GET /api/assistant/settings: the workspace's AI and every provider it can pick.
+
+        ``providers`` follows the registry order, each with that provider's own saved
+        key preview, models and (Custom API) address. Nothing comes from the God.
+        Someone who cannot edit the AI (``canEdit`` false: staff, or a role without
+        manage_accounts) gets no key preview and no Custom API address, only whether a
+        key is saved.
+        """
         data = self._global_ai_all()
         settings = self._assistant_settings_for(data, user)
-        global_settings = self._global_ai_private_settings(data)
-        tenant_user = self.tenant_user(user) or {}
+        _tenant, record = self._tenant_ai_record(data, user)
+        image_key = self._ai_provider_view(
+            self._ai_all(self.tenant_user(user) or {}), "google"
+        )["apiKey"]
+        can_edit = bool(
+            self.web_auth.has_permission(user, "manage_accounts")
+            and not (user or {}).get("teamOwnerId")
+        )
+
+        def preview(key: str) -> str:
+            return _mask_secret(key) if can_edit else ""
+
+        def address(base_url: str) -> str:
+            return base_url if can_edit else ""
+
+        providers: list[dict[str, Any]] = []
+        for provider in provider_registry():
+            entry = self._tenant_ai_provider_entry(record, provider)
+            available, reason = provider_available(provider.id)
+            providers.append(
+                {
+                    **provider.public_fields(),
+                    "available": available,
+                    "unavailableReason": "" if available else reason,
+                    "hasApiKey": bool(entry["apiKey"]),
+                    "apiKeyPreview": preview(str(entry["apiKey"])),
+                    "chatModel": entry["chatModel"],
+                    "embeddingModel": entry["embeddingModel"],
+                    "baseUrl": address(str(entry["baseUrl"])),
+                }
+            )
         return {
             "ok": True,
             "provider": settings["provider"],
             "source": settings["source"],
             "configured": settings["configured"],
             "enabled": settings["enabled"],
+            "canEdit": can_edit,
+            "notice": settings["notice"],
+            "imageKeyAvailable": bool(image_key),
             "hasApiKey": bool(settings["apiKey"]),
-            "apiKeyPreview": _mask_secret(settings["apiKey"]),
-            "baseUrl": settings["baseUrl"],
+            "apiKeyPreview": preview(str(settings["apiKey"])),
+            "baseUrl": address(str(settings["baseUrl"])),
             "chatModel": settings["chatModel"],
             "embeddingModel": settings["embeddingModel"],
             "strictKnowledge": settings["strictKnowledge"],
             "temperature": settings["temperature"],
             "topK": settings["topK"],
             "systemPrompt": settings["systemPrompt"],
-            "imageKeyAvailable": bool(
-                self._ai_provider_view(self._ai_all(tenant_user), "google")["apiKey"]
-            ),
-            "globalAvailable": bool(
-                global_settings["enabled"] and global_settings["chatModel"]
-            ),
-            "canEdit": self.web_auth.has_permission(user, "manage_accounts")
-            and not (user or {}).get("teamOwnerId"),
-            "defaults": {
-                "geminiChatModel": DEFAULT_GEMINI_CHAT_MODEL,
-                "geminiEmbeddingModel": DEFAULT_GEMINI_EMBEDDING_MODEL,
-                "ollamaBaseUrl": DEFAULT_OLLAMA_BASE_URL,
-            },
+            "providers": providers,
         }
 
     def save_assistant_settings(
         self, body: dict[str, Any], user: dict[str, Any] | None
     ) -> dict[str, Any]:
+        """POST /api/assistant/settings: save the workspace's AI, then test it.
+
+        A key belongs to one provider: a blank key keeps that provider's saved one,
+        ``clearApiKey`` removes it, and switching providers never moves a key. A saved
+        Custom API key is dropped when the address moves to another origin without a
+        new key. A blank chat model means the provider's default (the Custom API needs
+        one). The test is a short chat after the save; a failure comes back as
+        ``test: {ok: false, error}``, never as an error response.
+        """
         if not self.web_auth.has_permission(user, "manage_accounts") or (user or {}).get(
             "teamOwnerId"
         ):
             raise WebError(HTTPStatus.FORBIDDEN, "Only the shop owner can change the AI.")
         owner_id = self._assistant_owner_id(user)
-        provider = str(body.get("provider") or "").strip().lower()
-        if provider not in {"gemini", "ollama", "global"}:
-            raise WebError(HTTPStatus.BAD_REQUEST, "Choose Gemini or Ollama.", "ai_settings_invalid")
+        provider = get_provider(str(body.get("provider") or ""))
+        if provider is None:
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "Choose an AI provider from the list.",
+                "ai_settings_invalid",
+            )
+        _require_ai_provider_available(provider)
+        raw_key = _api_key_value(body.get("apiKey"))
+        clear_key = bool(body.get("clearApiKey"))
+        base_url = ""
+        if provider.needs_base_url:
+            raw_url = body.get("baseUrl")
+            if raw_url is None:
+                _tenant, saved_record = self._tenant_ai_record(self._global_ai_all(), user)
+                raw_url = self._tenant_ai_provider_entry(saved_record, provider)["baseUrl"]
+            # Resolves the host, so it runs before the lock.
+            base_url = _custom_ai_base_url(raw_url)
         with self.lock:
             data = self._global_ai_all()
             _, tenant = self._tenant_ai_knowledge(data, user)
-            previous = tenant.get("settings") if isinstance(tenant.get("settings"), dict) else {}
-            previous_embedding = str((previous or {}).get("embeddingModel") or "")
-            previous_provider = str((previous or {}).get("provider") or "")
-            if provider == "global":
-                tenant.pop("settings", None)
+            raw_previous = tenant.get("settings")
+            previous: dict[str, Any] = raw_previous if isinstance(raw_previous, dict) else {}
+            current = self._tenant_ai_settings(previous)
+            entry = self._tenant_ai_provider_entry(previous, provider)
+            if clear_key:
+                api_key = ""
+            elif raw_key:
+                api_key = raw_key
+            elif provider.needs_base_url and not _same_ai_origin(entry["baseUrl"], base_url):
+                api_key = ""  # the saved key belongs to the old address
             else:
-                current = self._global_ai_private_settings({"settings": previous or {}})
-                raw_key = _api_key_value(body.get("apiKey"))
-                if body.get("clearApiKey"):
-                    api_key = ""
-                elif raw_key:
-                    api_key = raw_key
-                else:
-                    api_key = current["apiKey"] if previous_provider == provider else ""
-                base_url = DEFAULT_OLLAMA_BASE_URL
-                if provider == "ollama":
-                    try:
-                        base_url = normalize_ollama_base_url(
-                            str(body.get("baseUrl") or current["baseUrl"])
-                        )
-                    except ValueError as exc:
-                        raise WebError(
-                            HTTPStatus.BAD_REQUEST, str(exc), "ollama_url_invalid"
-                        ) from exc
-                    if not str(body.get("chatModel") or "").strip():
-                        raise WebError(
-                            HTTPStatus.BAD_REQUEST,
-                            "Pick the Ollama chat model.",
-                            "ai_settings_invalid",
-                        )
-                try:
-                    temperature = max(
-                        0.0, min(float(body.get("temperature", current["temperature"])), 2.0)
-                    )
-                    top_k = max(1, min(int(body.get("topK", current["topK"])), 12))
-                except (TypeError, ValueError) as exc:
-                    raise WebError(
-                        HTTPStatus.BAD_REQUEST,
-                        "AI numeric settings are invalid.",
-                        "ai_settings_invalid",
-                    ) from exc
-                tenant["settings"] = {
-                    "provider": provider,
-                    "enabled": True,
-                    "baseUrl": base_url,
-                    "apiKey": self._encrypt_secret(api_key),
-                    "chatModel": str(body.get("chatModel") or "").strip()[:200],
-                    "embeddingModel": str(body.get("embeddingModel") or "").strip()[:200],
-                    "systemPrompt": str(
-                        body.get("systemPrompt") or current["systemPrompt"]
-                    ).strip()[:20_000]
-                    or DEFAULT_ASSISTANT_SYSTEM_PROMPT,
-                    "strictKnowledge": bool(
-                        body.get("strictKnowledge", current["strictKnowledge"])
-                    ),
-                    "topK": top_k,
-                    "temperature": temperature,
-                    "timeout": current["timeout"],
-                    "updatedAt": _now_iso(),
-                }
-                if provider == "gemini" and raw_key:
-                    # One Gemini key per shop: share it with the AI image tool
-                    # when that slot is still empty.
-                    self._share_gemini_key_with_image_ai(user, raw_key)
-            new_settings = tenant.get("settings") or {}
-            if (
-                str(new_settings.get("embeddingModel") or "") != previous_embedding
-                or str(new_settings.get("provider") or "") != previous_provider
-            ):
+                api_key = str(entry["apiKey"])
+            image_key = (
+                self._ai_provider_view(self._ai_all(self.tenant_user(user) or {}), "google")[
+                    "apiKey"
+                ]
+                if provider.id == "gemini"
+                else ""
+            )
+            has_key = bool(api_key or image_key) or not provider.key_required
+            if not has_key and not clear_key:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    f"Enter the {provider.label} API key.",
+                    "ai_key_required",
+                )
+            if "chatModel" in body:
+                chat_model = str(body.get("chatModel") or "").strip()[:200]
+            else:
+                chat_model = str(entry["chatModel"])
+            if provider.needs_base_url and not chat_model:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    "Type the name of the model your Custom API serves.",
+                    "ai_model_required",
+                )
+            if not provider.embeddings:
+                embedding_model = ""
+            elif "embeddingModel" in body:
+                # Blank: keyword search only.
+                embedding_model = str(body.get("embeddingModel") or "").strip()[:200]
+            elif entry["saved"]:
+                embedding_model = str(entry["embeddingModel"])
+            else:
+                embedding_model = provider.default_embedding_model
+            try:
+                temperature = max(
+                    0.0, min(float(body.get("temperature", current["temperature"])), 2.0)
+                )
+                top_k = max(1, min(int(body.get("topK", current["topK"])), 12))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise WebError(
+                    HTTPStatus.BAD_REQUEST,
+                    "AI numeric settings are invalid.",
+                    "ai_settings_invalid",
+                ) from exc
+            if not math.isfinite(temperature):
+                temperature = current["temperature"]
+            now = _now_iso()
+            provider_record: dict[str, Any] = {
+                "apiKey": self._encrypt_secret(api_key),
+                "chatModel": chat_model,
+                "embeddingModel": embedding_model,
+                "updatedAt": now,
+            }
+            if provider.needs_base_url:
+                provider_record["baseUrl"] = base_url
+            providers_map = self._tenant_ai_providers_map(previous)
+            providers_map[provider.id] = provider_record
+            new_settings: dict[str, Any] = {
+                "provider": provider.id,
+                "enabled": True,
+                "providers": providers_map,
+                "systemPrompt": str(
+                    body.get("systemPrompt") or current["systemPrompt"]
+                ).strip()[:20_000]
+                or DEFAULT_ASSISTANT_SYSTEM_PROMPT,
+                "strictKnowledge": bool(
+                    body.get("strictKnowledge", current["strictKnowledge"])
+                ),
+                "topK": top_k,
+                "temperature": temperature,
+                "timeout": current["timeout"],
+                "updatedAt": now,
+            }
+            # The notice about a removed AI stays until a working AI is saved.
+            notice = str(previous.get("aiNotice") or tenant.get("aiNotice") or "")
+            if has_key:
+                tenant.pop("aiNotice", None)
+            elif notice:
+                new_settings["aiNotice"] = notice
+            # Vectors from another provider, address or search model do not compare.
+            old_provider = get_provider(str(previous.get("provider") or ""))
+            old_search = ("", "", "")
+            if old_provider is not None:
+                old_entry = self._tenant_ai_provider_entry(previous, old_provider)
+                old_search = (
+                    old_provider.id,
+                    str(old_entry["embeddingModel"]),
+                    str(old_entry["baseUrl"]),
+                )
+            if old_search != (provider.id, embedding_model, base_url):
                 for chunk in tenant.get("chunks", []):
                     if isinstance(chunk, dict):
                         chunk.pop("embedding", None)
                 tenant["indexMode"] = "needs-reindex"
+            tenant["settings"] = new_settings
             self.store.set("global_ai", data)
+            self._forget_ai_readiness()
+            if provider.id == "gemini" and raw_key and not clear_key:
+                # One Gemini key per shop: share it with the AI image tool
+                # when that slot is still empty.
+                self._share_gemini_key_with_image_ai(user, raw_key)
         test: dict[str, Any] = {"ok": True, "error": ""}
         if body.get("test", True):
             test = self.test_assistant_settings(user)
         try:
             self.reindex_assistant_knowledge({"id": owner_id})
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
         return {**self.assistant_settings(user), "test": test}
 
     def _share_gemini_key_with_image_ai(self, user: dict[str, Any] | None, key: str) -> None:
@@ -26627,120 +28889,110 @@ class WebState:
         google: dict[str, Any] = raw_google if isinstance(raw_google, dict) else {}
         if self._decrypt_secret(str(google.get("apiKey") or "")):
             return
-        self.save_ai_settings({"provider": "google", "apiKey": key}, user)
+        # Fills the empty Google slot only: the image tool keeps the provider it is on.
+        self.save_ai_settings({"provider": "google", "apiKey": key}, user, select=False)
 
     def test_assistant_settings(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        """A short JSON chat with the saved AI: ``{ok, error, model}``. Never raises."""
         settings = self._assistant_settings_for(self._global_ai_all(), user)
         if not settings["configured"]:
             return {"ok": False, "error": "not_configured"}
         try:
-            client = self._assistant_client(settings)
-            if settings["provider"] == "gemini":
-                result = client.chat(
-                    model=settings["chatModel"],
-                    question="ping",
-                    context="",
-                    system_prompt="Reply with answer 'pong'.",
-                    strict_knowledge=False,
-                    temperature=0.0,
-                )
-                return {"ok": True, "error": "", "model": result.get("model")}
-            models = client.list_models()
-            names = {str(item.get("name") or "") for item in models}
-            if settings["chatModel"] not in names and f"{settings['chatModel']}:latest" not in names:
-                return {
-                    "ok": False,
-                    "error": f"Model {settings['chatModel']} is not installed in Ollama.",
-                    "models": sorted(names),
-                }
-            return {"ok": True, "error": "", "models": sorted(names)}
-        except OllamaError as exc:
-            return {"ok": False, "error": _safe_log_detail(exc, 500)}
-
-    def _ollama_client(self, settings: dict[str, Any] | None = None) -> OllamaClient:
-        cfg = settings or self.global_ai_settings(reveal=True)
-        return OllamaClient(
-            str(cfg.get("baseUrl") or DEFAULT_OLLAMA_BASE_URL),
-            api_key=str(cfg.get("apiKey") or ""),
-            timeout=float(cfg.get("timeout") or 120),
-        )
-
-    def test_global_ai(self, body: dict[str, Any]) -> dict[str, Any]:
-        settings = self.global_ai_settings(reveal=True)
-        if body.get("baseUrl"):
-            try:
-                settings["baseUrl"] = normalize_ollama_base_url(str(body["baseUrl"]))
-            except ValueError as exc:
-                raise WebError(HTTPStatus.BAD_REQUEST, str(exc), "ollama_url_invalid") from exc
-        if str(body.get("apiKey") or "").strip():
-            settings["apiKey"] = str(body["apiKey"]).strip()
-        try:
-            models = self._ollama_client(settings).list_models()
-        except OllamaError as exc:
-            raise WebError(HTTPStatus.BAD_GATEWAY, str(exc), "ollama_unavailable") from exc
-        return {"ok": True, "baseUrl": settings["baseUrl"], "models": models}
+            result = self._assistant_ai_client(settings).chat(
+                model=settings["chatModel"],
+                question="ping",
+                context="",
+                system_prompt="This is a connection test. Reply with the answer 'pong'.",
+                strict_knowledge=False,
+                temperature=0.0,
+            )
+        except AssistantError as exc:
+            return {"ok": False, "error": _ai_error_text(exc, settings["apiKey"])}
+        except Exception as exc:  # a failed test is a result, never a server error
+            return {
+                "ok": False,
+                "error": _ai_error_text(
+                    f"The AI test failed ({type(exc).__name__}).", settings["apiKey"]
+                ),
+            }
+        return {
+            "ok": True,
+            "error": "",
+            "model": str(result.get("model") or settings["chatModel"])[:MAX_AI_MODEL_NAME_LENGTH],
+        }
 
     def ai_models(self, body: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
-        """The models a shop's Gemini key or Ollama server offers (Refresh models).
+        """POST /api/ai/models: the models a provider offers (Refresh models).
 
-        Uses the key or URL typed in the form, else the saved one, so the lists can be
-        refreshed before saving. Nothing is saved. With purpose "image" (the AI image
-        section) the saved Gemini key tried first is that section's own Google key, the
-        one it shows; otherwise it is the auto-reply key.
+        Tries the key typed in the form, then that provider's saved key (the Custom
+        API's only while the typed address keeps the saved origin), then for Gemini
+        the AI image tool's Google key, so the lists can be refreshed before saving.
+        Nothing is saved. With purpose "image" (the AI image section) the saved
+        Gemini key tried first is that section's own Google key, the one it shows.
+        The Custom API is for the workspace owner, and its address passes the
+        public-address checks before any request.
         """
-        provider = str(body.get("provider") or "").strip().lower()
-        if provider not in {"gemini", "ollama"}:
-            raise WebError(HTTPStatus.BAD_REQUEST, "Choose Gemini or Ollama.", "ai_settings_invalid")
-        settings = self._assistant_settings_for(self._global_ai_all(), user)
-        saved = (
-            settings
-            if settings["source"] == "tenant" and settings["provider"] == provider
-            else {}
-        )
-        key = ""
-        if provider == "gemini":
-            brain_key = str(saved.get("apiKey") or "")
+        provider = get_provider(str(body.get("provider") or ""))
+        if provider is None:
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                "Choose an AI provider from the list.",
+                "ai_settings_invalid",
+            )
+        _require_ai_provider_available(provider)
+        typed_key = _api_key_value(body.get("apiKey"))
+        _tenant, record = self._tenant_ai_record(self._global_ai_all(), user)
+        entry = self._tenant_ai_provider_entry(record, provider)
+        saved_key = str(entry["apiKey"])
+        base_url = ""
+        saved_keys: list[str] = [saved_key]
+        if provider.needs_base_url:
+            if not self.web_auth.has_permission(user, "manage_accounts") or (
+                user or {}
+            ).get("teamOwnerId"):
+                raise WebError(
+                    HTTPStatus.FORBIDDEN, "Only the shop owner can use a Custom API."
+                )
+            raw_url = body.get("baseUrl")
+            base_url = _custom_ai_base_url(
+                raw_url if raw_url is not None and str(raw_url).strip() else entry["baseUrl"]
+            )
+            if not _same_ai_origin(str(entry["baseUrl"]), base_url):
+                saved_keys = []  # a saved key only goes to the address it was saved for
+        elif provider.id == "gemini":
             if body.get("purpose") == "image":
                 # The same user /api/ai/settings reads, so the key the section shows.
-                saved_keys = [self._ai_provider_view(self._ai_all(user), "google")["apiKey"], brain_key]
+                saved_keys = [self._ai_provider_view(self._ai_all(user), "google")["apiKey"], saved_key]
             else:
                 saved_keys = [
-                    brain_key,
+                    saved_key,
                     self._ai_provider_view(self._ai_all(self.tenant_user(user) or {}), "google")[
                         "apiKey"
                     ],
                 ]
-            key = next(
-                (item for item in (_api_key_value(body.get("apiKey")), *saved_keys) if item), ""
+        key = next((item for item in (typed_key, *saved_keys) if item), "")
+        if provider.key_required and not key and provider.models_source != "static":
+            raise WebError(
+                HTTPStatus.BAD_REQUEST,
+                f"Enter the {provider.label} API key first.",
+                "ai_key_required",
             )
-            if not key:
-                raise WebError(
-                    HTTPStatus.BAD_REQUEST, "Enter the Gemini API key first.", "ai_key_required"
-                )
-        else:
-            try:
-                base_url = normalize_ollama_base_url(
-                    str(body.get("baseUrl") or saved.get("baseUrl") or DEFAULT_OLLAMA_BASE_URL)
-                )
-            except ValueError as exc:
-                raise WebError(HTTPStatus.BAD_REQUEST, str(exc), "ollama_url_invalid") from exc
         try:
-            if provider == "gemini":
-                models = GeminiClient(key, timeout=30).list_models()
-            else:
-                models = OllamaClient(base_url, timeout=30).list_models()
-        except (OllamaError, ValueError, TypeError) as exc:
+            models = make_ai_client(
+                provider.id,
+                api_key=key,
+                base_url=base_url,
+                transport=_custom_ai_transport(base_url) if provider.needs_base_url else None,
+            ).list_models(timeout=MODEL_LIST_TIMEOUT_SECONDS)
+        except (AssistantError, ValueError, TypeError) as exc:
             # A client error may repeat what it was given (a header echoes the key).
-            # Only a key long enough to be a secret is hidden: a stray "a" typed by
-            # mistake would otherwise garble every word of the reason.
-            detail = str(exc).replace(key, "[API key]") if len(key) >= 8 else str(exc)
             # 422, not 502, so the message gets through Cloudflare.
             raise WebError(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
-                _safe_log_detail(detail, 300) or "The models could not be loaded.",
+                _ai_error_text(exc, key, typed_key, *saved_keys),
                 "ai_models_unavailable",
             ) from None
-        return {"ok": True, "provider": provider, **_ai_model_lists(provider, models)}
+        return {"ok": True, "provider": provider.id, **_ai_model_lists(provider.id, models)}
 
     @staticmethod
     def _knowledge_source_view(source: dict[str, Any]) -> dict[str, Any]:
@@ -26962,8 +29214,13 @@ class WebState:
                 api_key = ""
             elif str(body.get("apiKey") or "").strip():
                 api_key = str(body["apiKey"]).strip()
-            else:
+            elif existing is not None and _same_ai_origin(str(existing.get("url") or ""), url):
                 api_key = current_key
+            else:
+                # A saved key stays with the address it was saved for: a source moved
+                # to another one needs its key typed again.
+                api_key = ""
+            key_cleared = bool(current_key) and not api_key and not body.get("clearApiKey")
             record = existing or {"id": uuid.uuid4().hex, "createdAt": _now_iso()}
             record.update(
                 {
@@ -26979,7 +29236,7 @@ class WebState:
                 sources.append(record)
             tenant["apiSources"] = sources
             self.store.set("global_ai", data)
-        return {"ok": True, **self.assistant_knowledge(user)}
+        return {"ok": True, "keyCleared": key_cleared, **self.assistant_knowledge(user)}
 
     def delete_assistant_api_source(
         self, source_id: str, user: dict[str, Any] | None
@@ -27048,8 +29305,13 @@ class WebState:
                 api_key = ""
             elif str(body.get("apiKey") or "").strip():
                 api_key = str(body["apiKey"]).strip()
-            else:
+            elif existing is not None and _same_ai_origin(str(existing.get("url") or ""), url):
                 api_key = current_key
+            else:
+                # A saved key stays with the address it was saved for: a source moved
+                # to another one needs its key typed again.
+                api_key = ""
+            key_cleared = bool(current_key) and not api_key and not body.get("clearApiKey")
             record = existing or {"id": uuid.uuid4().hex, "createdAt": _now_iso()}
             record.update(
                 {
@@ -27065,7 +29327,7 @@ class WebState:
                 sources.append(record)
             data["apiSources"] = sources
             self.store.set("global_ai", data)
-        return {"ok": True, **self.global_ai_knowledge()}
+        return {"ok": True, "keyCleared": key_cleared, **self.global_ai_knowledge()}
 
     def delete_global_ai_api_source(self, source_id: str) -> dict[str, Any]:
         with self.lock:
@@ -27100,64 +29362,56 @@ class WebState:
         return current
 
     def sync_global_ai_api_source(self, source_id: str) -> dict[str, Any]:
-        data = self._global_ai_all()
-        source = next(
-            (
-                item
-                for item in data["apiSources"]
-                if isinstance(item, dict) and str(item.get("id") or "") == source_id
-            ),
-            None,
-        )
+        """Fetch one of the God's knowledge API sources again, then rebuild the index."""
+        self._sync_api_source(source_id, lambda data: data["apiSources"])
+        return {"ok": True, **self.reindex_global_ai()}
+
+    def _sync_api_source(
+        self, source_id: str, sources_of: Callable[[dict[str, Any]], list[Any]]
+    ) -> None:
+        """Fetch a knowledge API source and save what came back, or why it failed.
+
+        ``sources_of`` picks the source list from a global_ai record (the God's, or a
+        workspace's). The fetch (up to 20 seconds) works on a copy, outside the lock.
+        Then, under the lock, only the source's content, lastSyncAt and lastError go
+        into a fresh read of the record, so whatever was saved meanwhile (a logged
+        question, any workspace's AI settings) stays. A source deleted meanwhile stays
+        deleted (404). A failed fetch saves lastError and raises again.
+        """
+        source = _find_api_source(sources_of(self._global_ai_all()), source_id)
         if source is None:
             raise WebError(HTTPStatus.NOT_FOUND, "Knowledge API source not found.")
-        headers = {"Accept": "application/json, text/plain, text/markdown"}
-        api_key = self._decrypt_secret(str(source.get("apiKey") or ""))
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        response: requests.Response | None = None
+        fetched = dict(source)
         try:
-            response, _ = _open_public_response(
-                "GET", str(source.get("url") or ""), timeout=20, headers=headers
-            )
-            raw = _read_limited_response(response, MAX_KNOWLEDGE_API_BYTES)
-            if not response.ok:
-                raise WebError(
-                    HTTPStatus.BAD_GATEWAY,
-                    f"Knowledge API returned HTTP {response.status_code}.",
-                    "knowledge_api_error",
-                )
-            content_type = str(response.headers.get("content-type") or "").lower()
-            decoded = raw.decode(response.encoding or "utf-8", errors="replace")
-            if "json" in content_type:
-                try:
-                    parsed = json.loads(decoded)
-                except ValueError as exc:
-                    raise WebError(
-                        HTTPStatus.BAD_GATEWAY,
-                        "Knowledge API returned invalid JSON.",
-                        "knowledge_api_invalid_json",
-                    ) from exc
-                selected = self._json_path_value(parsed, str(source.get("jsonPath") or ""))
-                content = (
-                    selected
-                    if isinstance(selected, str)
-                    else json.dumps(selected, ensure_ascii=False, indent=2)
-                )
-            else:
-                content = decoded
-            source["content"] = str(content)[:MAX_GLOBAL_KNOWLEDGE_LENGTH]
-            source["lastSyncAt"] = _now_iso()
-            source["lastError"] = ""
+            self._sync_knowledge_source_record(fetched)
         except Exception as exc:
-            source["lastError"] = _safe_log_detail(exc, 500)
-            self.store.set("global_ai", data)
+            self._save_api_source_fields(
+                source_id, sources_of, {"lastError": _safe_log_detail(exc, 500)}
+            )
             raise
-        finally:
-            if response is not None:
-                response.close()
-        self.store.set("global_ai", data)
-        return {"ok": True, **self.reindex_global_ai()}
+        saved = self._save_api_source_fields(
+            source_id,
+            sources_of,
+            {key: fetched[key] for key in ("content", "lastSyncAt", "lastError")},
+        )
+        if not saved:
+            raise WebError(HTTPStatus.NOT_FOUND, "Knowledge API source not found.")
+
+    def _save_api_source_fields(
+        self,
+        source_id: str,
+        sources_of: Callable[[dict[str, Any]], list[Any]],
+        fields: dict[str, Any],
+    ) -> bool:
+        """Write ``fields`` into a source of the latest global_ai; False when it is gone."""
+        with self.lock:
+            latest = self._global_ai_all()
+            current = _find_api_source(sources_of(latest), source_id)
+            if current is None:
+                return False
+            current.update(fields)
+            self.store.set("global_ai", latest)
+            return True
 
     def _sync_knowledge_source_record(self, source: dict[str, Any]) -> None:
         headers = {"Accept": "application/json, text/plain, text/markdown"}
@@ -27205,25 +29459,10 @@ class WebState:
     def sync_assistant_api_source(
         self, source_id: str, user: dict[str, Any] | None
     ) -> dict[str, Any]:
-        data = self._global_ai_all()
-        _, tenant = self._tenant_ai_knowledge(data, user)
-        source = next(
-            (
-                item
-                for item in tenant["apiSources"]
-                if isinstance(item, dict) and str(item.get("id") or "") == source_id
-            ),
-            None,
+        """Fetch one of a workspace's knowledge API sources again, then reindex."""
+        self._sync_api_source(
+            source_id, lambda data: self._tenant_ai_knowledge(data, user)[1]["apiSources"]
         )
-        if source is None:
-            raise WebError(HTTPStatus.NOT_FOUND, "Knowledge API source not found.")
-        try:
-            self._sync_knowledge_source_record(source)
-        except Exception as exc:
-            source["lastError"] = _safe_log_detail(exc, 500)
-            self.store.set("global_ai", data)
-            raise
-        self.store.set("global_ai", data)
         return {"ok": True, **self.reindex_assistant_knowledge(user)}
 
     @staticmethod
@@ -27281,64 +29520,158 @@ class WebState:
         return chunks
 
     def reindex_assistant_knowledge(self, user: dict[str, Any] | None) -> dict[str, Any]:
+        """Rebuild a workspace's search index from its shop info.
+
+        Chunks get vectors only from a provider with embeddings and a search model
+        chosen; Claude, Z.ai, DeepSeek, Grok and Kimi (no embeddings) and a blank
+        search model index for keyword search without calling the AI. On any provider
+        failure the index falls back to keyword search, with the reason (key hidden)
+        in indexError. ``embeddingProvider`` and ``embeddingModel`` record what made
+        the vectors, so a question only compares vectors of the same model.
+        """
         data = self._global_ai_all()
         settings = self._assistant_settings_for(data, user)
         owner_id, tenant = self._tenant_ai_knowledge(data, user)
         chunks = self._build_knowledge_chunks(tenant, scope=f"tenant:{owner_id}")
-        index_mode = "keyword"
+        provider = get_provider(str(settings["provider"] or ""))
+        embedding_model = str(settings["embeddingModel"] or "")
+        vectors: dict[str, list[float]] = {}
         index_error = ""
-        embedding_model = settings["embeddingModel"]
-        if chunks and embedding_model and (settings["provider"] != "gemini" or settings["apiKey"]):
+        if (
+            chunks
+            and settings["configured"]
+            and provider is not None
+            and provider.embeddings
+            and embedding_model
+        ):
             try:
-                client = self._assistant_client(settings)
-                for start in range(0, len(chunks), 32):
-                    batch = chunks[start : start + 32]
-                    vectors = client.embed(
-                        embedding_model, [str(item["text"]) for item in batch]
-                    )
-                    for item, vector in zip(batch, vectors):
-                        item["embedding"] = vector
-                index_mode = "embedding"
-            except OllamaError as exc:
-                index_error = str(exc)
-        tenant["chunks"] = chunks
-        tenant["embeddingModel"] = embedding_model if index_mode == "embedding" else ""
-        tenant["indexMode"] = index_mode if chunks else "empty"
-        tenant["indexError"] = index_error
-        tenant["indexedAt"] = _now_iso()
+                vectors = self._embed_knowledge_chunks(
+                    settings,
+                    provider,
+                    embedding_model,
+                    chunks,
+                    others=_other_workspaces_vector_values(data, owner_id),
+                )
+            except AssistantError as exc:
+                index_error = _ai_error_text(exc, settings["apiKey"])
+            except Exception as exc:  # the keyword index always works
+                index_error = _ai_error_text(
+                    f"The search model could not be used ({type(exc).__name__}).",
+                    settings["apiKey"],
+                )
+        made_by = (provider.id, embedding_model) if vectors and provider else ("", "")
         with self.lock:
-            self.store.set("global_ai", data)
+            # The AI calls above can take a while: write into the latest record, so a
+            # question logged or knowledge saved meanwhile is not lost.
+            latest = self._global_ai_all()
+            _, current = self._tenant_ai_knowledge(latest, user)
+            fresh = self._build_knowledge_chunks(current, scope=f"tenant:{owner_id}")
+            now_settings = self._assistant_settings_for(latest, user)
+            now_uses = (str(now_settings["provider"]), str(now_settings["embeddingModel"]))
+            # A chunk id hashes its text, so a vector carries over to the same chunk:
+            # from this run, or from a run for the same model that finished first.
+            stored: dict[str, Any] = {}
+            if now_uses[1] and (
+                str(current.get("embeddingProvider") or ""),
+                str(current.get("embeddingModel") or ""),
+            ) == now_uses:
+                stored = {
+                    str(item.get("id") or ""): item.get("embedding")
+                    for item in current.get("chunks", [])
+                    if isinstance(item, dict) and isinstance(item.get("embedding"), list)
+                }
+            if made_by == now_uses:
+                stored.update(vectors)
+            for item in fresh:
+                vector = stored.get(str(item["id"]))
+                if isinstance(vector, list) and vector:
+                    item["embedding"] = vector
+            embedded = bool(fresh) and bool(now_uses[1]) and all(
+                isinstance(item.get("embedding"), list) for item in fresh
+            )
+            if embedded:
+                # Vectors carried over from an earlier run obey the same limits.
+                problem = _vector_size_problem(
+                    max(len(item["embedding"]) for item in fresh),
+                    len(fresh),
+                    _other_workspaces_vector_values(latest, owner_id),
+                )
+                if problem:
+                    embedded = False
+                    index_error = index_error or problem
+            if not embedded:
+                for item in fresh:
+                    item.pop("embedding", None)
+            current["chunks"] = fresh
+            current["embeddingProvider"] = now_uses[0] if embedded else ""
+            current["embeddingModel"] = now_uses[1] if embedded else ""
+            current["indexMode"] = ("embedding" if embedded else "keyword") if fresh else "empty"
+            current["indexError"] = "" if embedded else index_error
+            current["indexedAt"] = _now_iso()
+            self.store.set("global_ai", latest)
         return self.assistant_knowledge(user)
+
+    def _embed_knowledge_chunks(
+        self,
+        settings: Mapping[str, Any],
+        provider: AIProvider,
+        model: str,
+        chunks: list[dict[str, Any]],
+        *,
+        others: int = 0,
+    ) -> dict[str, list[float]]:
+        """One search vector per chunk id from the workspace's provider.
+
+        Batches follow the provider's ``embed_batch``. An answer with the wrong number
+        of vectors, or vectors of different sizes, is an AssistantError, and so is a
+        vector longer than MAX_EMBEDDING_DIMENSIONS, or vectors that would hold more
+        than MAX_TENANT_VECTOR_VALUES values for all the chunks, or more than
+        MAX_TOTAL_VECTOR_VALUES with the ``others`` that other workspaces keep: the
+        record every workspace shares stays small, and the caller falls back to
+        keyword search.
+        """
+        client = self._assistant_ai_client(settings)
+        batch_size = max(1, int(provider.embed_batch or 16))
+        vectors: dict[str, list[float]] = {}
+        size = 0
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            answer = client.embed(model, [str(item.get("text") or "") for item in batch])
+            if not isinstance(answer, list) or len(answer) != len(batch):
+                count = len(answer) if isinstance(answer, list) else 0
+                raise AssistantError(
+                    f"{provider.label} returned {count} search vectors for {len(batch)} texts."
+                )
+            for item, vector in zip(batch, answer):
+                if not isinstance(vector, list) or not vector or (size and len(vector) != size):
+                    raise AssistantError(
+                        f"{provider.label} returned search vectors of different sizes."
+                    )
+                if not size:
+                    problem = _vector_size_problem(len(vector), len(chunks), others)
+                    if problem:
+                        raise AssistantError(f"{provider.label}: {problem}")
+                size = len(vector)
+                vectors[str(item["id"])] = vector
+        return vectors
 
     def _build_global_ai_chunks(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         return self._build_knowledge_chunks(data, scope="global")
 
     def reindex_global_ai(self) -> dict[str, Any]:
-        data = self._global_ai_all()
-        settings = self._global_ai_private_settings(data)
-        chunks = self._build_global_ai_chunks(data)
-        index_mode = "keyword"
-        index_error = ""
-        embedding_model = settings["embeddingModel"]
-        if chunks and embedding_model:
-            try:
-                client = self._ollama_client(settings)
-                for start in range(0, len(chunks), 32):
-                    batch = chunks[start : start + 32]
-                    vectors = client.embed(
-                        embedding_model, [str(item["text"]) for item in batch]
-                    )
-                    for item, vector in zip(batch, vectors):
-                        item["embedding"] = vector
-                index_mode = "embedding"
-            except OllamaError as exc:
-                index_error = str(exc)
-        data["chunks"] = chunks
-        data["embeddingModel"] = embedding_model if index_mode == "embedding" else ""
-        data["indexMode"] = index_mode if chunks else "empty"
-        data["indexError"] = index_error
-        data["indexedAt"] = _now_iso()
+        """Rebuild the God's shared knowledge index for keyword search; no AI is called.
+
+        Every workspace's questions search it by keyword (the workspaces use many
+        providers, so no single embedding model fits), so the chunks carry no vectors.
+        """
         with self.lock:
+            data = self._global_ai_all()
+            chunks = self._build_global_ai_chunks(data)
+            data["chunks"] = chunks
+            data["embeddingModel"] = ""
+            data["indexMode"] = "keyword" if chunks else "empty"
+            data["indexError"] = ""
+            data["indexedAt"] = _now_iso()
             self.store.set("global_ai", data)
         return self.global_ai_knowledge()
 
@@ -27405,6 +29738,9 @@ class WebState:
         with self.ai_auto_reply_lock:
             runtime = dict(self.ai_auto_reply_runtime.get(account_id) or {})
         enabled = bool(record.get("enabled"))
+        settings = self._assistant_settings_for(
+            self._global_ai_all(), self._account_ai_owner(account_id, user)
+        )
         if self.account_store.requires_reauth(account_id):
             runtime["state"] = "login_required"
             runtime["lastError"] = str(
@@ -27413,20 +29749,24 @@ class WebState:
             )
         elif not enabled:
             runtime["state"] = "off"
+        elif not settings.get("configured"):
+            # Switched on, but the workspace has no AI to answer with: messages are
+            # passed over quietly until one is set up.
+            runtime["state"] = "ai_missing"
+            runtime["lastError"] = ""
         elif not record.get("contactsEnabled") and not self._ai_auto_reply_group_scope_enabled(
             record
         ):
             runtime["state"] = "idle"
-        elif not runtime.get("state"):
+        elif not runtime.get("state") or runtime.get("state") == "ai_missing":
             runtime["state"] = "starting"
-        settings = self._assistant_settings_for(
-            self._global_ai_all(), self._account_ai_owner(account_id, user)
-        )
         return {
             "ok": True,
             "accountId": account_id,
             "accountLabel": str(account.get("label") or account_id),
             "enabled": enabled,
+            # "ai_removed": switched off when the shared AI and Ollama were removed.
+            "disabledReason": "" if enabled else str(record.get("disabledReason") or ""),
             "aiProvider": settings["provider"],
             "aiSource": settings["source"],
             "replyCount": self._auto_reply_count(account_id),
@@ -27450,6 +29790,66 @@ class WebState:
     ) -> dict[str, Any] | None:
         """Auto-replies run on the account owner's AI brain and shop data."""
         return self.web_auth.user_for_account(account_id) or self.tenant_user(user)
+
+    def _auto_reply_ai_ready(self, owner: dict[str, Any] | None) -> bool:
+        """Whether the workspace ``owner`` works in has an AI set up to answer with."""
+        if owner is None:
+            return False
+        return bool(self._assistant_settings_for(self._global_ai_all(), owner)["configured"])
+
+    def _auto_reply_ai_ready_cached(
+        self, owner: dict[str, Any] | None, *, fresh: bool = False
+    ) -> bool:
+        """_auto_reply_ai_ready, reused per owner for AI_READY_CACHE_SECONDS.
+
+        Each check reads and parses the whole global_ai record, so the checks that run
+        once per incoming message (Telegram, LINE OA, the reply workers) share one
+        answer. ``fresh`` always reads, and keeps what it read for the others. Saving
+        the AI settings, and the startup migrations, forget every answer
+        (_forget_ai_readiness); an answer read while that happened is not kept.
+        """
+        if owner is None:
+            return False
+        owner_id = str(owner.get("id") or "")
+        now = time.monotonic()
+        with self.ai_ready_lock:
+            generation = self.ai_ready_generation
+            cached = self.ai_ready_cache.get(owner_id)
+        if (
+            not fresh
+            and owner_id
+            and cached is not None
+            and now - cached[0] < AI_READY_CACHE_SECONDS
+        ):
+            return cached[1]
+        ready = self._auto_reply_ai_ready(owner)
+        if owner_id:
+            with self.ai_ready_lock:
+                if self.ai_ready_generation == generation:
+                    self.ai_ready_cache[owner_id] = (now, ready)
+        return ready
+
+    def _forget_ai_readiness(self) -> None:
+        """Drop every remembered readiness answer; call after the new state is stored."""
+        with self.ai_ready_lock:
+            self.ai_ready_generation += 1
+            self.ai_ready_cache.clear()
+
+    def _auto_reply_error_detail(self, exc: Exception, owner: dict[str, Any] | None) -> str:
+        """A failed auto reply as its log line and lastError show it, AI key hidden.
+
+        The ask path already hides the key in provider errors; this also covers any
+        other failure that might repeat it.
+        """
+        text = str(exc)
+        if owner is not None:
+            try:
+                key = str(self._assistant_settings_for(self._global_ai_all(), owner)["apiKey"])
+            except Exception:
+                key = ""
+            if len(key) >= 8:
+                text = text.replace(key, "[API key]")
+        return _safe_log_detail(text, 2000)
 
     def _auto_reply_count(self, account_id: str) -> int:
         """Customer questions the AI answered (KPI history, last 90 days)."""
@@ -27550,28 +29950,57 @@ class WebState:
             )
         now = _now_iso()
         owner = self.web_auth.user_for_account(account_id) or user or {}
-        updated = dict(current)
-        updated.update(
-            {
-                "accountId": account_id,
-                "ownerId": str(
-                    account.get("ownerId") or owner.get("id") or (user or {}).get("id") or ""
-                ),
-                "enabled": enabled,
-                "contactsEnabled": contacts_enabled,
-                "groupsEnabled": groups_enabled,
-                "groupReplyMode": group_reply_mode,
-                "selectedGroupMids": selected_group_mids,
-                "updatedAt": now,
-            }
-        )
-        if enabled and not bool(current.get("enabled")):
-            updated["enabledAtMs"] = int(time.time() * 1000)
-            updated["lastSeen"] = {}
+        settings = {
+            "accountId": account_id,
+            "ownerId": str(
+                account.get("ownerId") or owner.get("id") or (user or {}).get("id") or ""
+            ),
+            "enabled": enabled,
+            "contactsEnabled": contacts_enabled,
+            "groupsEnabled": groups_enabled,
+            "groupReplyMode": group_reply_mode,
+            "selectedGroupMids": selected_group_mids,
+            "updatedAt": now,
+        }
         with self.ai_auto_reply_lock:
+            if not self._account_listed(account_id):
+                # Removed meanwhile (a removal drops its record under this lock): no
+                # record, runtime or log line is made for it.
+                raise WebError(HTTPStatus.NOT_FOUND, "Account not found.")
             data = self._ai_auto_reply_all()
+            # Onto the record as it is now, not as read above: the chat cursors that
+            # replies saved meanwhile stay.
+            raw = data["accounts"].get(account_id)
+            updated = self._ai_auto_reply_defaults(account_id)
+            if isinstance(raw, dict):
+                updated.update(raw)
+            if not isinstance(updated.get("lastSeen"), dict):
+                updated["lastSeen"] = {}
+            was_enabled = bool(updated.get("enabled"))
+            updated.update(settings)
+            if enabled and not was_enabled:
+                updated["enabledAtMs"] = int(time.time() * 1000)
+                updated["lastSeen"] = {}
+            if enabled:
+                updated.pop("disabledReason", None)
             data["accounts"][account_id] = updated
             self.store.set("ai_auto_reply", data)
+            if not (enabled and was_enabled):
+                # Switched off, or on anew: cursors kept from replies that could not
+                # be saved, chats held for a save that works and when chats began to
+                # wait belong to the run before.
+                for key in [
+                    key for key in self.ai_auto_reply_unsaved_cursors if key[0] == account_id
+                ]:
+                    del self.ai_auto_reply_unsaved_cursors[key]
+                for key in [key for key in self.ai_auto_reply_held if key[0] == account_id]:
+                    del self.ai_auto_reply_held[key]
+                for key in [
+                    key for key in self.ai_auto_reply_waiting if key[0] == account_id
+                ]:
+                    del self.ai_auto_reply_waiting[key]
+                self.ai_auto_reply_idle_seen.pop(account_id, None)
+                self.ai_auto_reply_looked.pop(account_id, None)
             runtime = self.ai_auto_reply_runtime.setdefault(account_id, {})
             runtime["state"] = (
                 "starting"
@@ -27591,6 +30020,7 @@ class WebState:
         self.append_bot_log(
             "ai.auto_reply.settings",
             account_id=account_id,
+            listed_only=True,
             detail=(
                 f"enabled={enabled}, contacts={contacts_enabled}, groups={groups_enabled}, "
                 f"group_mode={group_reply_mode}, selected_groups={len(selected_group_mids)}"
@@ -27663,6 +30093,26 @@ class WebState:
         ]
         return {"time": latest_time, "ids": ids[-20:]}
 
+    @staticmethod
+    def _later_ai_auto_reply_cursor(stored: Any, cursor: dict[str, Any]) -> dict[str, Any]:
+        """A chat's cursor once ``cursor`` is saved over ``stored``: it never moves back
+        (a reply chosen from an earlier look at the chat can end after a later look
+        moved the cursor on), and at the same time it holds the ids of both."""
+        if not isinstance(stored, dict):
+            return cursor
+
+        def ids_of(value: dict[str, Any]) -> list[str]:
+            raw = value.get("ids")
+            return [str(item) for item in raw if item] if isinstance(raw, list) else []
+
+        stored_time = _coerce_int(stored.get("time"))
+        cursor_time = _coerce_int(cursor.get("time"))
+        if cursor_time != stored_time:
+            return cursor if cursor_time > stored_time else stored
+        ids = ids_of(stored)
+        ids += [item for item in ids_of(cursor) if item not in ids]
+        return {"time": cursor_time, "ids": ids[-20:]}
+
     @classmethod
     def _ai_auto_reply_unseen(
         cls,
@@ -27687,15 +30137,129 @@ class WebState:
             unseen.append(message)
         return unseen
 
+    def _ai_auto_reply_waiting_start(
+        self,
+        key: tuple[str, str],
+        enabled_at_ms: int,
+        cursor: Any,
+        messages: list[dict[str, Any]],
+        unseen: list[dict[str, Any]],
+        own_mid: str,
+    ) -> tuple[int, bool]:
+        """Where a chat with a message to answer goes in the order (oldest first), and
+        whether the start of its wait is only bounded (LINE no longer showed it when
+        the chat was first seen waiting).
+
+        That start is the time of the first of the incoming messages that end
+        ``unseen`` (oldest first). LINE gives only a chat's last
+        INBOX_SNAPSHOT_MESSAGES_PER_BOX messages (``messages``), so that run can begin
+        before them. Then the start seen at an earlier poll is used (kept in
+        ai_auto_reply_waiting until the chat's cursor moves), or else the earliest the
+        run can begin: the latest of the chat's ``cursor`` time (enabledAtMs with none)
+        and _ai_auto_reply_idle_bound. That is never later than the chat began to wait,
+        and in the order such a bounded chat goes AI_AUTO_REPLY_LOOK_SLACK_MS later,
+        after a chat seen to begin then (a start once seen stays exact, also when LINE
+        shows only later messages of the chat). So a chat that sent many messages at
+        once (a photo album)
+        goes after every chat that waited at the look that found it with nothing to
+        answer (their messages were in that look's inbox), and at worst that much
+        behind a chat that began to wait just after it.
+        """
+        since = 0
+        bounded = False  # an outgoing message among the unseen ones: the run is seen whole
+        for message in reversed(unseen):
+            if str(message.get("from") or "") in {"", own_mid}:
+                bounded = True
+                break
+            since = _message_time(message)
+        cursor_time = _coerce_int(cursor.get("time")) if isinstance(cursor, dict) else 0
+        earliest = cursor_time if cursor_time else max(0, int(enabled_at_ms or 0))
+        hidden = (
+            not bounded
+            and len(unseen) == len(messages)
+            and len(messages) >= INBOX_SNAPSHOT_MESSAGES_PER_BOX
+        )
+        exact = not hidden  # the start was seen, not bounded
+        with self.ai_auto_reply_lock:
+            known = self.ai_auto_reply_waiting.get(key)
+            if hidden:
+                if known is not None and known[:2] == (enabled_at_ms, earliest):
+                    since = known[2]
+                    exact = len(known) > 3 and bool(known[3])
+                else:
+                    since = max(
+                        earliest,
+                        self._ai_auto_reply_idle_bound(key, enabled_at_ms, cursor_time),
+                    )
+            self.ai_auto_reply_waiting[key] = (enabled_at_ms, earliest, since, exact)
+        return (since if exact else since + AI_AUTO_REPLY_LOOK_SLACK_MS), not exact
+
+    def _ai_auto_reply_box_idle(
+        self, box: dict[str, Any], cursor: Any, enabled_at_ms: int, own_mid: str
+    ) -> bool:
+        """Whether nothing waits to be answered in a chat the inbox lists: its newest
+        message is the account's own, or its ``cursor`` saw all its messages."""
+        messages = _message_box_messages(box)
+        if not messages:
+            return False
+        messages.sort(
+            key=lambda message: (
+                _message_time(message),
+                self._ai_auto_reply_message_key(message),
+            )
+        )
+        if str(messages[-1].get("from") or "") in {"", own_mid}:
+            return True
+        return isinstance(cursor, dict) and not self._ai_auto_reply_unseen(
+            messages, cursor, enabled_at_ms
+        )
+
+    def _ai_auto_reply_idle_bound(
+        self, key: tuple[str, str], enabled_at_ms: int, cursor_time: int
+    ) -> int:
+        """A time a waiting chat whose start LINE no longer shows began after (0 when
+        none is known): the latest look that found the chat with nothing to answer
+        (its messages then were all seen, so those it waits with came later), or, for a
+        chat with no cursor, the latest look whose inbox held all the account's chats
+        but not this one (LINE lists every chat with a message, so it had none yet). A
+        look's time is the newest message time in the inbox it read, on LINE's clock
+        (_inbox_line_time_ms), less AI_AUTO_REPLY_LOOK_SLACK_MS. The caller holds
+        ai_auto_reply_lock."""
+        seen = self.ai_auto_reply_idle_seen.get(key[0], {}).get(key[1])
+        if seen is not None and seen[0] == enabled_at_ms:
+            return seen[1] - AI_AUTO_REPLY_LOOK_SLACK_MS
+        looked = self.ai_auto_reply_looked.get(key[0])
+        if (
+            not cursor_time
+            and looked is not None
+            and looked[0] == enabled_at_ms
+            and key[1] not in looked[2]
+        ):
+            return looked[1] - AI_AUTO_REPLY_LOOK_SLACK_MS
+        return 0
+
     def _save_ai_auto_reply_cursors(
         self,
         account_id: str,
         enabled_at_ms: int,
         cursors: dict[str, dict[str, Any]],
     ) -> None:
-        if not cursors:
-            return
         with self.ai_auto_reply_lock:
+            # Cursors of earlier replies that could not be saved go in with these.
+            unsaved = {
+                key: cursor
+                for key, (at_ms, cursor) in self.ai_auto_reply_unsaved_cursors.items()
+                if key[0] == account_id and at_ms == enabled_at_ms
+            }
+            # Chats held until a save of the account works: this is one.
+            held = [
+                key
+                for key, at_ms in self.ai_auto_reply_held.items()
+                if key[0] == account_id and at_ms == enabled_at_ms
+            ]
+            cursors = {**{key[1]: cursor for key, cursor in unsaved.items()}, **cursors}
+            if not cursors and not held:
+                return
             data = self._ai_auto_reply_all()
             record = data["accounts"].get(account_id)
             if (
@@ -27703,12 +30267,20 @@ class WebState:
                 or not record.get("enabled")
                 or _coerce_int(record.get("enabledAtMs")) != enabled_at_ms
             ):
+                # Switched off (or on again since): those cursors no longer count.
+                for key in unsaved:
+                    self.ai_auto_reply_unsaved_cursors.pop(key, None)
+                for key in held:
+                    self.ai_auto_reply_held.pop(key, None)
                 return
             last_seen = record.get("lastSeen")
             if not isinstance(last_seen, dict):
                 last_seen = {}
                 record["lastSeen"] = last_seen
-            last_seen.update(cursors)
+            for chat_mid, cursor in cursors.items():
+                last_seen[chat_mid] = self._later_ai_auto_reply_cursor(
+                    last_seen.get(chat_mid), cursor
+                )
             if len(last_seen) > MAX_AI_AUTO_REPLY_CHATS:
                 ordered = sorted(
                     last_seen.items(),
@@ -27717,6 +30289,17 @@ class WebState:
                 )
                 record["lastSeen"] = dict(ordered[:MAX_AI_AUTO_REPLY_CHATS])
             self.store.set("ai_auto_reply", data)
+            if unsaved:
+                # Those chats' cursors are stored only now: a poll cycle that read the
+                # cursors before this waits a cycle for them, as for a reply that ends
+                # (see _poll_ai_auto_reply_account).
+                self.ai_auto_reply_settle_count += 1
+                for key in unsaved:
+                    self.ai_auto_reply_unsaved_cursors.pop(key, None)
+                    self.ai_auto_reply_settled[key] = self.ai_auto_reply_settle_count
+            for key in held:
+                # Saving works: a poll answers them now (no cursor of theirs was stored).
+                self.ai_auto_reply_held.pop(key, None)
 
     def _ai_auto_reply_enabled(
         self, account_id: str, enabled_at_ms: int, chat_type: str, chat_mid: str
@@ -27729,7 +30312,12 @@ class WebState:
             return False
         return self._ai_auto_reply_chat_enabled(record, chat_type, chat_mid)
 
-    def _consume_ai_auto_reply_rate(self, account_id: str, chat_mid: str) -> bool:
+    def _consume_ai_auto_reply_rate(self, account_id: str, chat_mid: str) -> float | None:
+        """Count one auto reply against the chat's and the account's limits.
+
+        Returns the time it was counted at (see _refund_ai_auto_reply_rate), or None
+        when either limit is reached and nothing was counted.
+        """
         now = time.monotonic()
         cutoff = now - 60.0
         with self.ai_auto_reply_lock:
@@ -27751,17 +30339,32 @@ class WebState:
             ):
                 self.ai_auto_reply_rate_events[account_key] = account_events
                 self.ai_auto_reply_rate_events[chat_key] = chat_events
-                return False
+                return None
             account_events.append(now)
             chat_events.append(now)
             self.ai_auto_reply_rate_events[account_key] = account_events
             self.ai_auto_reply_rate_events[chat_key] = chat_events
-            return True
+            return now
+
+    def _ai_auto_reply_account_full(self, account_id: str) -> bool:
+        """Whether the account has used its auto replies of the last minute."""
+        cutoff = time.monotonic() - 60.0
+        with self.ai_auto_reply_lock:
+            stamps = self.ai_auto_reply_rate_events.get(("account", account_id), [])
+            used = sum(1 for stamp in stamps if stamp > cutoff)
+        return used >= MAX_AI_AUTO_REPLIES_PER_ACCOUNT_PER_MINUTE
 
     def _set_ai_auto_reply_runtime(
-        self, account_id: str, **values: Any
+        self, account_id: str, *, polled: bool = False, **values: Any
     ) -> dict[str, Any]:
+        """Update an account's runtime record; none is kept for an account that is not
+        listed (removed meanwhile). ``polled``: only while the account's poll is on (see
+        _set_line_ready)."""
         with self.ai_auto_reply_lock:
+            if polled and account_id not in self.ai_auto_reply_line_polling:
+                return {}
+            if not self._account_listed(account_id):
+                return {}
             runtime = self.ai_auto_reply_runtime.setdefault(account_id, {})
             runtime.update(values)
             return dict(runtime)
@@ -27825,8 +30428,11 @@ class WebState:
         }
         if resolved:
             with self.ai_auto_reply_lock:
-                for mid, name in resolved.items():
-                    self.ai_auto_reply_identity_cache[(account_id, mid)] = (now, name)
+                # None kept for an account removed meanwhile (its removal holds this lock
+                # as it forgets the names).
+                if self._account_listed(account_id):
+                    for mid, name in resolved.items():
+                        self.ai_auto_reply_identity_cache[(account_id, mid)] = (now, name)
                 if len(self.ai_auto_reply_identity_cache) > MAX_AI_AUTO_REPLY_IDENTITY_CACHE:
                     newest = sorted(
                         self.ai_auto_reply_identity_cache.items(),
@@ -27844,6 +30450,8 @@ class WebState:
             )
 
     def _ai_auto_reply_poll_error(self, account_id: str, exc: Exception) -> None:
+        if self.account_store.get(account_id) is None:
+            return  # removed meanwhile: nothing of it is kept or shown
         detail = _safe_log_detail(exc, 1000)
         if isinstance(exc, LineAuthError) or self.account_store.requires_reauth(account_id):
             if not self.account_store.requires_reauth(account_id) and isinstance(
@@ -27873,6 +30481,7 @@ class WebState:
             )
             self.append_bot_log(
                 "ai.auto_reply.error",
+                listed_only=True,
                 account_id=account_id,
                 ok=False,
                 detail=detail,
@@ -27882,38 +30491,104 @@ class WebState:
         try:
             self.refresh_inbox_for_all_accounts()
         except Exception:
-            traceback.print_exc()
-        data = self._ai_auto_reply_all()
-        records = [
-            dict(record)
-            for record in data["accounts"].values()
-            if isinstance(record, dict) and record.get("enabled")
-        ]
-        for record in records:
-            account_id = str(record.get("accountId") or "")
-            if not account_id:
-                continue
-            if _account_channel(self.account_store.get(account_id)) != "line":
-                continue  # Telegram replies are driven by incoming messages
-            if self.account_store.requires_reauth(account_id):
-                account = self.account_store.get(account_id) or {}
-                self._set_ai_auto_reply_runtime(
-                    account_id,
-                    state="login_required",
-                    lastError=str(
-                        account.get("sessionError")
-                        or "LINE session expired or was revoked. Connect the account again."
-                    ),
-                )
-                continue
-            try:
-                self._poll_ai_auto_reply_account(account_id, record)
-            except Exception as exc:
-                self._ai_auto_reply_poll_error(account_id, exc)
+            _print_exc_quietly()
+        with self.ai_auto_reply_lock:
+            # Replies that had ended by now have their cursors in the read below.
+            read_mark = self.ai_auto_reply_settle_count
+            # A chat's mark is kept while a look at the cursors from before it may
+            # still be acted on: this cycle's, or a ready LINE chat's (_pop_line_ready).
+            keep_after = min(
+                [read_mark]
+                + [
+                    _coerce_int(entry.get("readMark"))
+                    for accounts in self.ai_auto_reply_line_ready.values()
+                    for entries in accounts.values()
+                    for entry in entries
+                ]
+            )
+            self.ai_auto_reply_settled = {
+                key: mark
+                for key, mark in self.ai_auto_reply_settled.items()
+                if mark > keep_after
+            }
+            self.ai_auto_reply_cycles += 1
+            cycle = self.ai_auto_reply_cycles
+        # Whether each owner's AI is set up: read once a cycle at most, and only for
+        # an owner with a message to answer.
+        ready_memo: dict[str, bool] = {}
+        polled: set[str] = set()
+        try:
+            data = self._ai_auto_reply_all()
+            records = [
+                dict(record)
+                for record in data["accounts"].values()
+                if isinstance(record, dict) and record.get("enabled")
+            ]
+            # Each cycle starts with another account, so no account of an owner always
+            # gets the places that are free first.
+            if records:
+                shift = cycle % len(records)
+                records = records[shift:] + records[:shift]
+            for record in records:
+                account_id = str(record.get("accountId") or "")
+                if not account_id:
+                    continue
+                account = self.account_store.get(account_id)
+                if account is None:
+                    continue  # removed since the records were read
+                if _account_channel(account) != "line":
+                    continue  # Telegram replies are driven by incoming messages
+                if self.account_store.requires_reauth(account_id):
+                    account = self.account_store.get(account_id) or {}
+                    self._set_ai_auto_reply_runtime(
+                        account_id,
+                        state="login_required",
+                        lastError=str(
+                            account.get("sessionError")
+                            or "LINE session expired or was revoked. Connect the account again."
+                        ),
+                    )
+                    continue
+                try:
+                    self._poll_ai_auto_reply_account(
+                        account_id, record, ready_memo, read_mark=read_mark
+                    )
+                except Exception as exc:
+                    self._ai_auto_reply_poll_error(account_id, exc)
+                else:
+                    polled.add(account_id)
+        finally:
+            # A cycle that failed (reading the records, say) leaves nothing ready.
+            self._settle_line_ready(polled)
 
     def _poll_ai_auto_reply_account(
-        self, account_id: str, record: dict[str, Any]
+        self,
+        account_id: str,
+        record: dict[str, Any],
+        ready_memo: dict[str, bool] | None = None,
+        *,
+        read_mark: int | None = None,
     ) -> None:
+        """Answer the newest incoming message of each chat of one LINE account.
+
+        A chat's cursor (``record["lastSeen"]``) moves past a message once that message
+        is answered or passed over. ``read_mark`` is ``ai_auto_reply_settle_count`` as
+        it was just before ``record`` was read (its value now when not given). A
+        message waits for a later cycle, its chat's cursor unchanged and no rate used,
+        while its chat has a reply in progress, when its chat's last reply ended after
+        that read (the cursor that reply saved is not in ``record``), while its chat is
+        held for a save that works (ai_auto_reply_held), while the account has used its
+        replies of the last minute, and while the owner's places are all taken
+        (AI_AUTO_REPLY_JOBS_PER_OWNER). In that last case up to
+        MAX_AI_AUTO_REPLY_READY_PER_ACCOUNT such chats are left ready, so a place that
+        frees up soon after starts one (_free_ai_auto_reply_slot); the others are not
+        read until a later poll has room for them. Chats are taken in the order they
+        began to wait, oldest first. So a message is answered at most once, and one
+        that had to wait is answered later.
+        """
+        if read_mark is None:
+            with self.ai_auto_reply_lock:
+                read_mark = self.ai_auto_reply_settle_count
         account = self.account_store.get(account_id)
         if account is None:
             raise RuntimeError("LINE account no longer exists")
@@ -27921,11 +30596,108 @@ class WebState:
         if owner is None or not owner.get("active", True):
             raise RuntimeError("Account owner is unavailable")
         enabled_at_ms = _coerce_int(record.get("enabledAtMs"))
+        owner_id = str(owner.get("id") or "")
         api = self.get_api(account_id)
+        # A candidate holds one of its owner's places, its chat's in-flight mark and the
+        # rate it used from the moment it is chosen. If anything fails before it reaches
+        # the workers, it gives all three back and its chat's cursor stays, so the
+        # message comes up again.
+        candidates: list[dict[str, Any]] = []
+        ready: list[dict[str, Any]] = []
+        started = 0
+        done = False
+        with self.ai_auto_reply_lock:
+            # The chats its last poll left ready wait while this one chooses, since it
+            # replaces them (_set_line_ready): no chat it chooses starts twice.
+            self.ai_auto_reply_line_polling.add(account_id)
+            held = any(
+                key[0] == account_id and at_ms == enabled_at_ms
+                for key, at_ms in self.ai_auto_reply_held.items()
+            )
+        try:
+            if held:
+                # Chats are held until a save of the account works: one is tried first,
+                # so they can be answered in this poll (while saving fails, the poll
+                # fails here, before it reads anything).
+                self._save_ai_auto_reply_cursors(account_id, enabled_at_ms, {})
+            ai_ready, cursor_updates = self._collect_ai_auto_reply_candidates(
+                account_id,
+                account,
+                owner,
+                record,
+                api,
+                candidates,
+                ready,
+                read_mark=read_mark,
+                ready_memo=ready_memo,
+            )
+            self._save_ai_auto_reply_cursors(account_id, enabled_at_ms, cursor_updates)
+            self._set_ai_auto_reply_runtime(
+                account_id,
+                polled=True,
+                state="ai_missing" if ai_ready is False else "running",
+                lastPollAt=_now_iso(),
+                lastError="",
+            )
+            for candidate in candidates:
+                started += 1  # from here on the job gives its place back itself
+                if not self._start_ai_auto_reply_job(candidate):
+                    raise RuntimeError("The auto-reply workers have stopped.")
+            done = True
+        finally:
+            # Only a poll that worked leaves chats ready; a failed one leaves none.
+            self._set_line_ready(owner_id, account_id, ready if done else [])
+            for candidate in candidates[started:]:
+                self._drop_ai_auto_reply_candidate(candidate)
+        # Places that freed up while it chose start the chats it left ready.
+        self._start_line_ready(owner_id)
+
+    def _collect_ai_auto_reply_candidates(
+        self,
+        account_id: str,
+        account: dict[str, Any],
+        owner: dict[str, Any],
+        record: dict[str, Any],
+        api: OkLine,
+        candidates: list[dict[str, Any]],
+        ready: list[dict[str, Any]],
+        *,
+        read_mark: int,
+        ready_memo: dict[str, bool] | None,
+    ) -> tuple[bool | None, dict[str, dict[str, Any]]]:
+        """Choose the LINE chats to answer now; see _poll_ai_auto_reply_account.
+
+        Each chosen chat is added to ``candidates`` at once, holding one of the owner's
+        places, its chat's in-flight mark and the rate it used. Chats left waiting for
+        a place are added to ``ready`` (at most MAX_AI_AUTO_REPLY_READY_PER_ACCOUNT),
+        holding nothing. Chats with a message to answer are taken in the order they
+        began to wait, oldest first (LINE lists the newest first). A waiting chat that
+        could neither start nor be listed is not read, and no chat is while the account
+        has used its replies of the last minute: reading a sealed message can take a
+        LINE request, while the account's api lock is held. Returns whether the owner's
+        AI is set up (None when no message needed to know) and the new cursors of the
+        chats passed over.
+        """
+        enabled_at_ms = _coerce_int(record.get("enabledAtMs"))
+        # Without an AI the messages are still read, so the chats' cursors move on and
+        # nothing old is answered once an AI is set up; none of them is answered.
+        # Whether there is one is only read once a message would be answered (None
+        # until then), and once a cycle per owner (``ready_memo``).
+        ai_ready: bool | None = None
+        owner_id = str(owner.get("id") or "")
+        memo: dict[str, bool] = {} if ready_memo is None else ready_memo
+        cursor_updates: dict[str, dict[str, Any]] = {}
         with self.api_lock_for(account_id):
+            with self.ai_auto_reply_lock:
+                still_polled = account_id in self.ai_auto_reply_line_polling
+            if not still_polled or self.account_store.get(account_id) is None:
+                # Removed (perhaps added again) while this poll waited for the
+                # account's lock, which a removal holds: nothing to choose.
+                return ai_ready, cursor_updates
             boxes = self.inbox_message_boxes(
                 account_id, api, max_age=self.inbox_max_age(account_id)
             )
+            look_ms = _inbox_line_time_ms(boxes)
             own_mid = str(account.get("mid") or "")
             if not own_mid:
                 profile = api.get_profile()
@@ -27939,12 +30711,17 @@ class WebState:
                 if isinstance(boxes, dict)
                 else []
             )
-            cursor_updates: dict[str, dict[str, Any]] = {}
-            candidates: list[dict[str, Any]] = []
             last_seen_raw = record.get("lastSeen")
             last_seen: dict[str, Any] = (
                 last_seen_raw if isinstance(last_seen_raw, dict) else {}
             )
+            # The chats with a message to answer: when each began to wait, its chat,
+            # type, latest message and cursor.
+            waiting: list[
+                tuple[tuple[int, bool], str, str, dict[str, Any], dict[str, Any]]
+            ] = []
+            # The chats looked at with nothing to answer.
+            idle: set[str] = set()
             for box in raw_boxes:
                 if not isinstance(box, dict):
                     continue
@@ -27966,17 +30743,36 @@ class WebState:
                 with self.ai_auto_reply_lock:
                     if inflight_key in self.ai_auto_reply_inflight:
                         continue
-                unseen = self._ai_auto_reply_unseen(
-                    messages,
-                    last_seen.get(chat_mid) if isinstance(last_seen, dict) else None,
-                    enabled_at_ms,
+                    settled = self.ai_auto_reply_settled.get(inflight_key, 0)
+                    unsaved = self.ai_auto_reply_unsaved_cursors.get(inflight_key)
+                    held = self.ai_auto_reply_held.get(inflight_key)
+                    if held is not None and held != enabled_at_ms:
+                        del self.ai_auto_reply_held[inflight_key]  # a run before this one
+                        held = None
+                if settled > read_mark:
+                    # Its last reply ended after ``record`` was read, so the cursor that
+                    # reply saved is not in it: answering now could answer twice.
+                    continue
+                if held is not None:
+                    # Its reply failed while the store failed: it waits, its cursor
+                    # unchanged, until a save works (see ai_auto_reply_held).
+                    continue
+                compared = (
+                    unsaved[1]
+                    if unsaved is not None and unsaved[0] == enabled_at_ms
+                    else last_seen.get(chat_mid)
                 )
+                unseen = self._ai_auto_reply_unseen(messages, compared, enabled_at_ms)
                 if not unseen:
+                    idle.add(chat_mid)
                     if chat_mid not in last_seen:
                         cursor_updates[chat_mid] = cursor
                     continue
                 latest = unseen[-1]
                 direction_incoming = str(latest.get("from") or "") not in {"", own_mid}
+                if not direction_incoming:
+                    # Its newest message is the account's own: nothing waits in it.
+                    idle.add(chat_mid)
                 type_enabled = self._ai_auto_reply_chat_enabled(
                     record, chat_type, chat_mid
                 )
@@ -27987,12 +30783,130 @@ class WebState:
                 if not type_enabled or not direction_incoming or content_type != 0:
                     cursor_updates[chat_mid] = cursor
                     continue
+                waiting.append(
+                    (
+                        self._ai_auto_reply_waiting_start(
+                            inflight_key, enabled_at_ms, compared, messages, unseen, own_mid
+                        ),
+                        chat_mid,
+                        chat_type,
+                        latest,
+                        cursor,
+                    )
+                )
+            every_box = boxes.get("messageBoxes") if isinstance(boxes, dict) else None
+            if not isinstance(every_box, list):
+                every_box = []
+            # The chats the inbox lists past those examined above with nothing waiting
+            # in them either (the account's own message is the newest, or the cursor saw
+            # them all), so a returning customer is not ranked by an old look.
+            for box in every_box[MAX_AI_AUTO_REPLY_CHATS:]:
+                chat_mid = _message_box_id(box) if isinstance(box, dict) else ""
+                if (
+                    chat_mid
+                    and self._ai_auto_reply_chat_type(chat_mid)
+                    and self._ai_auto_reply_box_idle(
+                        box, last_seen.get(chat_mid), enabled_at_ms, own_mid
+                    )
+                ):
+                    idle.add(chat_mid)
+            with self.ai_auto_reply_lock:
+                # Starts kept for this account's chats that wait no more go (a held
+                # chat keeps its own: it still waits).
+                still_waiting = {(account_id, item[1]) for item in waiting}
+                for key in [
+                    key
+                    for key in self.ai_auto_reply_waiting
+                    if key[0] == account_id
+                    and key not in still_waiting
+                    and key not in self.ai_auto_reply_held
+                ]:
+                    del self.ai_auto_reply_waiting[key]
+                if look_ms is not None:
+                    # This look, for the next ones (its waiting chats were ranked by the
+                    # looks before it). A chat its inbox lists keeps the latest look that
+                    # found it idle, whether this one examined it or not; the others are
+                    # forgotten (LINE lists at most INBOX_SNAPSHOT_CHAT_LIMIT).
+                    listed = {
+                        _message_box_id(box) for box in every_box if isinstance(box, dict)
+                    }
+                    listed.discard("")
+                    seen = {
+                        chat_mid: value
+                        for chat_mid, value in self.ai_auto_reply_idle_seen.get(
+                            account_id, {}
+                        ).items()
+                        if chat_mid in listed
+                    }
+                    for chat_mid in idle:
+                        seen[chat_mid] = (enabled_at_ms, look_ms)
+                    if seen:
+                        self.ai_auto_reply_idle_seen[account_id] = seen
+                    else:
+                        self.ai_auto_reply_idle_seen.pop(account_id, None)
+                    if len(every_box) < INBOX_SNAPSHOT_CHAT_LIMIT and not (
+                        isinstance(boxes, dict) and boxes.get("hasNext")
+                    ):
+                        # Fewer chats than LINE was asked for: it listed them all.
+                        self.ai_auto_reply_looked[account_id] = (
+                            enabled_at_ms,
+                            look_ms,
+                            frozenset(listed),
+                        )
+            # The chat that has waited longest comes first, for the free places, the
+            # ready list and the reads alike, so a customer who wrote once is not kept
+            # waiting by ongoing conversations. The sort keeps LINE's order for chats
+            # that began to wait at the same time.
+            waiting.sort(key=lambda item: item[0])
+            for _since, chat_mid, chat_type, latest, cursor in waiting:
+                inflight_key = (account_id, chat_mid)
+                if self._ai_auto_reply_account_full(account_id):
+                    # The account has used its replies of the last minute: the chat
+                    # waits, its cursor unchanged, for a poll after that minute.
+                    continue
+                if (
+                    len(ready) >= MAX_AI_AUTO_REPLY_READY_PER_ACCOUNT
+                    and not self._line_place_free(owner_id)
+                ):
+                    # It could neither start nor be listed ready: it waits, unread and
+                    # its cursor unchanged, for a poll that has room for it.
+                    continue
+                if ai_ready is None:
+                    if owner_id not in memo:
+                        memo[owner_id] = self._auto_reply_ai_ready_cached(owner, fresh=True)
+                    ai_ready = memo[owner_id]
+                if not ai_ready:
+                    # Passed over quietly: no rate-limit use and no log line per message.
+                    cursor_updates[chat_mid] = cursor
+                    continue
                 summary = _message_summary(api, latest, {})
                 question = str(summary.get("text") or "").strip()
                 if not question or question == "[encrypted]":
                     cursor_updates[chat_mid] = cursor
                     continue
-                if not self._consume_ai_auto_reply_rate(account_id, chat_mid):
+                job = {
+                    "accountId": account_id,
+                    "chatMid": chat_mid,
+                    "chatType": chat_type,
+                    "question": question[:MAX_ASSISTANT_QUESTION_LENGTH],
+                    "senderMid": str(latest.get("from") or ""),
+                    "messageId": self._ai_auto_reply_message_key(latest),
+                    "cursor": cursor,
+                    "enabledAtMs": enabled_at_ms,
+                    "ownerId": owner_id,
+                }
+                if not self._take_line_auto_reply_place(owner_id):
+                    # The owner's places are all taken: the chat waits, its cursor
+                    # unchanged and no rate used, ready for a place that frees up.
+                    if len(ready) < MAX_AI_AUTO_REPLY_READY_PER_ACCOUNT:
+                        ready.append({**job, "readMark": read_mark})
+                    continue
+                rate_stamp = self._consume_ai_auto_reply_rate(account_id, chat_mid)
+                if rate_stamp is None:
+                    self._free_ai_auto_reply_slot(owner_id)
+                    if self._ai_auto_reply_account_full(account_id):
+                        continue  # waits, as above
+                    # Its chat's own limit: this message is passed over.
                     cursor_updates[chat_mid] = cursor
                     self.append_bot_log(
                         "ai.auto_reply.rate_limit",
@@ -28002,41 +30916,308 @@ class WebState:
                         data={"chatMid": chat_mid, "chatType": chat_type},
                     )
                     continue
-                with self.ai_auto_reply_lock:
-                    self.ai_auto_reply_inflight.add(inflight_key)
-                candidates.append(
-                    {
-                        "accountId": account_id,
-                        "chatMid": chat_mid,
-                        "chatType": chat_type,
-                        "question": question[:MAX_ASSISTANT_QUESTION_LENGTH],
-                        "senderMid": str(latest.get("from") or ""),
-                        "messageId": self._ai_auto_reply_message_key(latest),
-                        "cursor": cursor,
-                        "enabledAtMs": enabled_at_ms,
-                        "ownerId": str(owner.get("id") or ""),
-                    }
-                )
+                candidate = {**job, "rateStamp": rate_stamp}
+                if not self._mark_ai_auto_reply_inflight(inflight_key):
+                    # Started meanwhile some other way (which this account's poll
+                    # rules out by holding back its ready chats): give it all back.
+                    self._refund_ai_auto_reply_rate(candidate)
+                    self._free_ai_auto_reply_slot(owner_id)
+                    continue
+                candidates.append(candidate)
 
             self._hydrate_ai_auto_reply_candidate_identities(
                 account_id, api, candidates
             )
+        return ai_ready, cursor_updates
 
-        self._save_ai_auto_reply_cursors(account_id, enabled_at_ms, cursor_updates)
-        self._set_ai_auto_reply_runtime(
-            account_id, state="running", lastPollAt=_now_iso(), lastError=""
-        )
-        for candidate in candidates:
-            try:
-                self.ai_auto_reply_executor.submit(
-                    self._process_ai_auto_reply, candidate
+    # -- Fair sharing of the auto-reply workers ------------------------------------
+    # Every job holds one of its owner's AI_AUTO_REPLY_JOBS_PER_OWNER places, and its
+    # chat's in-flight mark, from the moment it is chosen until it ends, however it
+    # ends. A Telegram or LINE OA job that finds the places all taken waits in the
+    # owner's backlog. A LINE message that finds them all taken waits for a later poll
+    # with its chat's cursor unchanged and no rate used; the poll leaves the chats that
+    # have waited longest ready (MAX_AI_AUTO_REPLY_READY_PER_ACCOUNT). A place that
+    # frees up starts the first of those (until the account's next poll replaces them,
+    # and for at most AI_AUTO_REPLY_READY_SECONDS) or the owner's oldest waiting
+    # Telegram or LINE OA job, in turn while both wait, so neither kind of message
+    # holds up the other. With neither waiting the place is free; LINE chats past the
+    # ready ones wait for the next poll.
+
+    @staticmethod
+    def _ai_auto_reply_key(candidate: Mapping[str, Any]) -> tuple[str, str]:
+        return (str(candidate.get("accountId") or ""), str(candidate.get("chatMid") or ""))
+
+    def _take_line_auto_reply_place(self, owner_id: str) -> bool:
+        """Take a free place of the owner's for a LINE job; False when all are taken."""
+        with self.ai_auto_reply_lock:
+            count = self.ai_auto_reply_owner_jobs.get(owner_id, 0)
+            if count >= AI_AUTO_REPLY_JOBS_PER_OWNER:
+                return False
+            self.ai_auto_reply_owner_jobs[owner_id] = count + 1
+            return True
+
+    def _line_place_free(self, owner_id: str) -> bool:
+        """Whether the owner has a free place now (it may be taken by the time it is
+        asked for)."""
+        with self.ai_auto_reply_lock:
+            return self.ai_auto_reply_owner_jobs.get(owner_id, 0) < AI_AUTO_REPLY_JOBS_PER_OWNER
+
+    def _mark_ai_auto_reply_inflight(self, key: tuple[str, str]) -> bool:
+        """Set a chat's in-flight mark; False when it is set already."""
+        with self.ai_auto_reply_lock:
+            if key in self.ai_auto_reply_inflight:
+                return False
+            self.ai_auto_reply_inflight.add(key)
+            return True
+
+    def _set_line_ready(
+        self, owner_id: str, account_id: str, ready: list[dict[str, Any]]
+    ) -> None:
+        """Replace a LINE account's ready chats with those its latest poll left (none
+        when it failed, or when the account was removed meanwhile), and let them start
+        again (see _pop_line_ready). The account keeps its turn among the owner's."""
+        now = time.monotonic()
+        with self.ai_auto_reply_lock:
+            if account_id not in self.ai_auto_reply_line_polling:
+                # Removed while its poll ran (_forget_ai_auto_reply_accounts): nothing
+                # of it is kept.
+                ready = []
+            self.ai_auto_reply_line_polling.discard(account_id)
+            for other in list(self.ai_auto_reply_line_ready):
+                accounts = self.ai_auto_reply_line_ready[other]
+                if other != owner_id or not ready:
+                    accounts.pop(account_id, None)
+                if not accounts:
+                    del self.ai_auto_reply_line_ready[other]
+            if ready:
+                self.ai_auto_reply_line_ready.setdefault(owner_id, {})[account_id] = [
+                    {**entry, "readyAt": now} for entry in ready
+                ]
+
+    def _settle_line_ready(self, polled: set[str]) -> None:
+        """After a poll cycle, forget the ready chats of the LINE accounts it did not
+        poll (switched off, signed out, removed; a failed poll forgets its own)."""
+        with self.ai_auto_reply_lock:
+            for owner_id in list(self.ai_auto_reply_line_ready):
+                accounts = self.ai_auto_reply_line_ready[owner_id]
+                for account_id in [key for key in accounts if key not in polled]:
+                    del accounts[account_id]
+                if not accounts:
+                    del self.ai_auto_reply_line_ready[owner_id]
+
+    def _pop_line_ready(self, owner_id: str) -> dict[str, Any] | None:
+        """The owner's next ready LINE chat that can start now, or None.
+
+        It is taken off the ready list with its chat's in-flight mark set and the rate
+        it uses counted, and its account goes to the end of the owner's turn. The ready
+        chats of an account whose poll is choosing again stay put (that poll replaces
+        them), as do those of an account that has used its replies of the last minute.
+        A chat whose poll stored it more than AI_AUTO_REPLY_READY_SECONDS ago, that has
+        a reply running, that is held for a save that works (ai_auto_reply_held) or
+        whose reply ended after that poll read the cursors is dropped; so is one whose
+        chat used its replies of the last minute (the next poll passes it over). The
+        caller holds the lock.
+        """
+        accounts = self.ai_auto_reply_line_ready.get(owner_id)
+        if not accounts:
+            return None
+        oldest = time.monotonic() - AI_AUTO_REPLY_READY_SECONDS
+        found: dict[str, Any] | None = None
+        for account_id in list(accounts):
+            if (
+                account_id in self.ai_auto_reply_line_polling
+                or self._ai_auto_reply_account_full(account_id)
+            ):
+                continue
+            entries = accounts[account_id]
+            while entries:
+                entry = entries.pop(0)
+                key = self._ai_auto_reply_key(entry)
+                if (
+                    float(entry.get("readyAt") or 0.0) < oldest
+                    or key in self.ai_auto_reply_inflight
+                    or key in self.ai_auto_reply_held
+                    or self.ai_auto_reply_settled.get(key, 0)
+                    > _coerce_int(entry.get("readMark"))
+                ):
+                    continue
+                stamp = self._consume_ai_auto_reply_rate(account_id, key[1])
+                if stamp is None:
+                    continue
+                self.ai_auto_reply_inflight.add(key)
+                found = {**entry, "rateStamp": stamp}
+                break
+            if not entries:
+                del accounts[account_id]
+            elif found is not None:
+                accounts[account_id] = accounts.pop(account_id)  # the others come first
+            if found is not None:
+                break
+        if not accounts:
+            del self.ai_auto_reply_line_ready[owner_id]
+        return found
+
+    def _start_line_ready(self, owner_id: str) -> None:
+        """Start the owner's ready LINE chats on its free places: places that freed up
+        while a poll chose, with that account's ready chats held back."""
+        while True:
+            with self.ai_auto_reply_lock:
+                count = self.ai_auto_reply_owner_jobs.get(owner_id, 0)
+                if count >= AI_AUTO_REPLY_JOBS_PER_OWNER:
+                    return
+                job = self._pop_line_ready(owner_id)
+                if job is None:
+                    return
+                self.ai_auto_reply_owner_jobs[owner_id] = count + 1
+            if not self._start_ai_auto_reply_job(job):
+                return
+
+    def _refund_ai_auto_reply_rate(self, candidate: Mapping[str, Any]) -> None:
+        """Give back the rate a job used: it was never asked (a LINE job that never
+        reached the workers, a waiting job dropped)."""
+        stamp = candidate.get("rateStamp")
+        if not isinstance(stamp, float):
+            return
+        account_id, chat_mid = self._ai_auto_reply_key(candidate)
+        with self.ai_auto_reply_lock:
+            for key in (("account", account_id), ("chat", account_id, chat_mid)):
+                events = self.ai_auto_reply_rate_events.get(key)
+                if events and stamp in events:
+                    events.remove(stamp)
+
+    def _free_ai_auto_reply_slot(self, owner_id: str) -> None:
+        """Give a place back to whoever of the owner waits for one; see the section.
+
+        The place starts one of the owner's ready LINE chats or its oldest waiting
+        Telegram or LINE OA job, taking turns while both wait. With neither, it is free.
+        """
+        while True:
+            with self.ai_auto_reply_lock:
+                backlog = self.ai_auto_reply_backlog.get(owner_id)
+                job: dict[str, Any] | None = None
+                if backlog and not self.ai_auto_reply_line_turn.get(owner_id, True):
+                    self.ai_auto_reply_line_turn[owner_id] = True  # LINE's turn next
+                else:
+                    job = self._pop_line_ready(owner_id)
+                    if job is not None and backlog:
+                        self.ai_auto_reply_line_turn[owner_id] = False
+                if job is None and backlog:
+                    job = backlog.popleft()
+                    if not backlog:
+                        del self.ai_auto_reply_backlog[owner_id]
+                        self.ai_auto_reply_line_turn.pop(owner_id, None)
+                if job is None:
+                    count = self.ai_auto_reply_owner_jobs.get(owner_id, 0) - 1
+                    if count > 0:
+                        self.ai_auto_reply_owner_jobs[owner_id] = count
+                    else:
+                        self.ai_auto_reply_owner_jobs.pop(owner_id, None)
+                    return
+            if self._submit_ai_auto_reply_job(job):
+                return
+            # The workers have stopped: that job is dropped too and the place moves on.
+            self._refund_ai_auto_reply_rate(job)
+
+    def _submit_ai_auto_reply_job(self, candidate: dict[str, Any]) -> bool:
+        """Hand a job that holds a place to the workers; False when they have stopped."""
+        try:
+            self.ai_auto_reply_executor.submit(self._run_ai_auto_reply_job, candidate)
+        except RuntimeError:  # shut down: the server is stopping
+            with self.ai_auto_reply_lock:
+                self.ai_auto_reply_inflight.discard(self._ai_auto_reply_key(candidate))
+            return False
+        return True
+
+    def _start_ai_auto_reply_job(self, candidate: dict[str, Any]) -> bool:
+        """Start a job that holds a place; False (and nothing held) if it cannot run."""
+        if self._submit_ai_auto_reply_job(candidate):
+            return True
+        self._refund_ai_auto_reply_rate(candidate)
+        self._free_ai_auto_reply_slot(str(candidate.get("ownerId") or ""))
+        return False
+
+    def _drop_ai_auto_reply_candidate(self, candidate: dict[str, Any]) -> None:
+        """A chosen LINE job that never reached the workers gives back its place, its
+        chat's mark and the rate it used."""
+        with self.ai_auto_reply_lock:
+            self._refund_ai_auto_reply_rate(candidate)
+            self.ai_auto_reply_inflight.discard(self._ai_auto_reply_key(candidate))
+        self._free_ai_auto_reply_slot(str(candidate.get("ownerId") or ""))
+
+    def _run_ai_auto_reply_job(self, candidate: dict[str, Any]) -> None:
+        """What a worker runs: the reply, then its place goes to the next job."""
+        try:
+            if "readyAt" in candidate:
+                self._name_ready_ai_auto_reply(candidate)
+            self._process_ai_auto_reply(candidate)
+        finally:
+            self._free_ai_auto_reply_slot(str(candidate.get("ownerId") or ""))
+
+    def _name_ready_ai_auto_reply(self, candidate: dict[str, Any]) -> None:
+        """Look up the names of a LINE chat started from the ready list (a poll looks
+        them up only for the chats it starts); they only label the activity log."""
+        account_id = str(candidate.get("accountId") or "")
+        if self.account_store.get(account_id) is None:
+            return  # removed: no session to look them up with (and none to open)
+        try:
+            api = self.get_api(account_id)
+            with self.api_lock_for(account_id):
+                if self.account_store.get(account_id) is None:
+                    return  # removed while this waited for its lock (a removal holds it)
+                self._hydrate_ai_auto_reply_candidate_identities(
+                    account_id, api, [candidate]
                 )
-            except RuntimeError:
-                with self.ai_auto_reply_lock:
-                    self.ai_auto_reply_inflight.discard(
-                        (account_id, str(candidate.get("chatMid") or ""))
-                    )
-                raise
+        except Exception:
+            pass
+
+    def _queue_ai_auto_reply(self, candidate: dict[str, Any]) -> bool:
+        """Start a Telegram or LINE OA reply, or keep it in its owner's backlog.
+
+        The caller has set the chat's in-flight mark. These messages have no cursor to
+        come back to, so while the owner's places are all taken the job waits in the
+        owner's backlog. When more than AI_AUTO_REPLY_BACKLOG_PER_OWNER are waiting the
+        oldest is dropped, with an "ai.auto_reply.dropped" log line; it gives back the
+        rate it used, and its chat can be answered again. Returns False when the
+        workers have stopped.
+        """
+        owner_id = str(candidate.get("ownerId") or "")
+        dropped: dict[str, Any] | None = None
+        with self.ai_auto_reply_lock:
+            count = self.ai_auto_reply_owner_jobs.get(owner_id, 0)
+            start = count < AI_AUTO_REPLY_JOBS_PER_OWNER
+            if start:
+                self.ai_auto_reply_owner_jobs[owner_id] = count + 1
+            else:
+                backlog = self.ai_auto_reply_backlog.setdefault(owner_id, deque())
+                backlog.append(candidate)
+                if len(backlog) > max(0, AI_AUTO_REPLY_BACKLOG_PER_OWNER):
+                    dropped = backlog.popleft()
+                    self.ai_auto_reply_inflight.discard(self._ai_auto_reply_key(dropped))
+                    self._refund_ai_auto_reply_rate(dropped)
+                    if not backlog:
+                        del self.ai_auto_reply_backlog[owner_id]
+        if dropped is not None:
+            chat_mid = str(dropped.get("chatMid") or "")
+            chat_type = str(dropped.get("chatType") or "")
+            self.append_bot_log(
+                "ai.auto_reply.dropped",
+                listed_only=True,
+                account_id=str(dropped.get("accountId") or ""),
+                ok=False,
+                detail=(
+                    f"{chat_type}:{chat_mid}: too many messages were waiting for an AI "
+                    "reply; the oldest was not answered."
+                ),
+                data={
+                    "chatMid": chat_mid,
+                    "chatType": chat_type,
+                    "question": str(dropped.get("question") or ""),
+                    "messageId": dropped.get("messageId"),
+                },
+            )
+        if start:
+            return self._start_ai_auto_reply_job(candidate)
+        return True
 
     def _process_ai_auto_reply(self, candidate: dict[str, Any]) -> None:
         account_id = str(candidate.get("accountId") or "")
@@ -28052,9 +31233,23 @@ class WebState:
             "senderName": str(candidate.get("senderName") or ""),
         }
         inflight_key = (account_id, chat_mid)
+        owner: dict[str, Any] | None = None
+        sent = False
+        # Set when a read of LinePassport's own data fails: that says nothing about the
+        # message, so the message is not passed over (see the finally).
+        read_failed = False
+
+        def read(fn: Callable[..., Any], *args: Any) -> Any:
+            nonlocal read_failed
+            try:
+                return fn(*args)
+            except Exception:
+                read_failed = True
+                raise
+
         try:
-            if not self._ai_auto_reply_enabled(
-                account_id, enabled_at_ms, chat_type, chat_mid
+            if not read(
+                self._ai_auto_reply_enabled, account_id, enabled_at_ms, chat_type, chat_mid
             ):
                 return
             owner = self.web_auth.user_for_account(account_id)
@@ -28064,8 +31259,13 @@ class WebState:
                 or not owner.get("active", True)
             ):
                 raise RuntimeError("Account owner is unavailable")
+            if not read(self._auto_reply_ai_ready_cached, owner):
+                # The AI went away after the message was queued: passed over quietly.
+                self._set_ai_auto_reply_runtime(account_id, state="ai_missing", lastError="")
+                return
             self.append_bot_log(
                 "ai.auto_reply.received",
+                listed_only=True,
                 account_id=account_id,
                 detail=question,
                 data={
@@ -28075,6 +31275,7 @@ class WebState:
                 },
             )
             channel = _account_channel(self.account_store.get(account_id))
+            ai_record = read(self._global_ai_all)
             generated = self.ask_global_ai(
                 question,
                 owner,
@@ -28082,13 +31283,18 @@ class WebState:
                 account_id=account_id,
                 chat_mid=chat_mid,
                 chat_type=chat_type,
+                data=ai_record,
+                settings=read(self._assistant_settings_for, ai_record, owner),
             )
+            if self.account_store.get(account_id) is None:
+                return  # removed while the AI answered: nothing more of it
             question_record = generated.get("question", {})
             answer = str(question_record.get("answer") or "").strip()
             can_answer = bool(answer)
             outbound = answer if can_answer else AI_AUTO_REPLY_FALLBACK
             self.append_bot_log(
                 "ai.auto_reply.answered" if can_answer else "ai.auto_reply.unanswered",
+                listed_only=True,
                 account_id=account_id,
                 ok=can_answer,
                 detail=outbound,
@@ -28099,13 +31305,15 @@ class WebState:
                     **conversation,
                 },
             )
-            if not self._ai_auto_reply_enabled(
-                account_id, enabled_at_ms, chat_type, chat_mid
+            if not read(
+                self._ai_auto_reply_enabled, account_id, enabled_at_ms, chat_type, chat_mid
             ):
                 return
             message_id = self.channel_send_text(account_id, chat_mid, outbound, by="ai")
+            sent = True
             self.append_bot_log(
                 "ai.auto_reply.sent",
+                listed_only=True,
                 account_id=account_id,
                 detail=outbound,
                 data={
@@ -28115,13 +31323,19 @@ class WebState:
                 },
             )
             with self.ai_auto_reply_lock:
-                runtime = self.ai_auto_reply_runtime.setdefault(account_id, {})
-                runtime["state"] = "running"
-                runtime["lastReplyAt"] = _now_iso()
-                runtime["lastError"] = ""
-                runtime["replyCount"] = int(runtime.get("replyCount") or 0) + 1
+                if self._account_listed(account_id):  # none for an account removed since
+                    runtime = self.ai_auto_reply_runtime.setdefault(account_id, {})
+                    runtime["state"] = "running"
+                    runtime["lastReplyAt"] = _now_iso()
+                    runtime["lastError"] = ""
+                    runtime["replyCount"] = int(runtime.get("replyCount") or 0) + 1
         except Exception as exc:
-            detail = _safe_log_detail(exc, 2000)
+            if self.account_store.get(account_id) is None:
+                return  # removed meanwhile: nothing of it is kept or shown
+            if isinstance(exc, WebError) and exc.code == "assistant_not_configured":
+                self._set_ai_auto_reply_runtime(account_id, state="ai_missing", lastError="")
+                return
+            detail = self._auto_reply_error_detail(exc, owner)
             runtime_state = (
                 "login_required"
                 if isinstance(exc, LineAuthError)
@@ -28133,6 +31347,7 @@ class WebState:
             )
             self.append_bot_log(
                 "ai.auto_reply.error",
+                listed_only=True,
                 account_id=account_id,
                 ok=False,
                 detail=detail,
@@ -28143,12 +31358,51 @@ class WebState:
             )
         finally:
             cursor = candidate.get("cursor")
-            if isinstance(cursor, dict):
-                self._save_ai_auto_reply_cursors(
-                    account_id, enabled_at_ms, {chat_mid: cursor}
-                )
-            with self.ai_auto_reply_lock:
-                self.ai_auto_reply_inflight.discard(inflight_key)
+            hold = False
+            try:
+                if not isinstance(cursor, dict) or self.account_store.get(account_id) is None:
+                    pass  # no cursor (Telegram, LINE OA), or removed meanwhile: none kept
+                elif read_failed and not sent:
+                    # Not passed over for a failed read: held until a save of the
+                    # account works, then answered (see ai_auto_reply_held).
+                    hold = True
+                else:
+                    try:
+                        self._save_ai_auto_reply_cursors(
+                            account_id, enabled_at_ms, {chat_mid: cursor}
+                        )
+                    except Exception as exc:
+                        if sent:
+                            # Kept until a later save stores it, so no poll answers this
+                            # message again meanwhile (none for an account removed since:
+                            # checked under the lock its removal holds as it forgets).
+                            with self.ai_auto_reply_lock:
+                                if self._account_listed(account_id):
+                                    self.ai_auto_reply_unsaved_cursors[inflight_key] = (
+                                        enabled_at_ms,
+                                        cursor,
+                                    )
+                        else:
+                            # Not sent, and not passed over either: held until a save
+                            # works, then answered, rather than tried again (the AI
+                            # asked again) at every poll while saving fails.
+                            hold = True
+                        self._ai_auto_reply_poll_error(account_id, exc)
+            finally:
+                # The cursor is saved (or the chat held) before the in-flight mark goes,
+                # and the poller learns when, so it never answers this message again
+                # from cursors it read before the save (see _poll_ai_auto_reply_account).
+                with self.ai_auto_reply_lock:
+                    if hold and self._account_listed(account_id):
+                        # (Checked here, under the lock its removal holds as it forgets:
+                        # none is kept for an account removed since.)
+                        self.ai_auto_reply_held[inflight_key] = enabled_at_ms
+                    self.ai_auto_reply_inflight.discard(inflight_key)
+                    if isinstance(cursor, dict):
+                        self.ai_auto_reply_settle_count += 1
+                        self.ai_auto_reply_settled[inflight_key] = (
+                            self.ai_auto_reply_settle_count
+                        )
 
     @staticmethod
     def _public_assistant_question(item: dict[str, Any]) -> dict[str, Any]:
@@ -28180,49 +31434,82 @@ class WebState:
         account_id: str = "",
         chat_mid: str = "",
         chat_type: str = "",
+        data: dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Ask the AI of ``user``'s workspace about ``question``, and log the question.
+
+        ``data`` is the global_ai record and ``settings`` the workspace's AI settings
+        (_assistant_settings_for), when the caller has just read them. The answer comes
+        back even when the question log cannot be saved; ``logged`` says whether it was.
+        """
         question = question.strip()
         if not question:
             raise WebError(HTTPStatus.BAD_REQUEST, "Question is required.")
         if len(question) > MAX_ASSISTANT_QUESTION_LENGTH:
             raise WebError(HTTPStatus.BAD_REQUEST, "Question is too long.")
-        data = self._global_ai_all()
-        settings = self._assistant_settings_for(data, user)
-        _, tenant = self._tenant_ai_knowledge(data, self.tenant_user(user))
+        if data is None:
+            data = self._global_ai_all()
+        if settings is None:
+            settings = self._assistant_settings_for(data, user)
+        workspace_id, tenant = self._tenant_ai_knowledge(data, self.tenant_user(user))
         if not settings["configured"]:
             raise WebError(
                 HTTPStatus.CONFLICT,
                 "AI assistant is not configured.",
                 "assistant_not_configured",
             )
-        client = self._assistant_client(settings)
+        try:
+            client = self._assistant_ai_client(settings)
+        except AssistantError as exc:
+            raise WebError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                _ai_error_text(exc, settings["apiKey"]),
+                "ai_unavailable",
+            ) from exc
+        # The shop's own info: by vectors when its index was built with the search
+        # model in use now, else by keyword.
+        own_chunks = [item for item in tenant["chunks"] if isinstance(item, dict)]
         query_embedding: list[float] | None = None
-        # A shop with its own AI brain answers from its own data only: the
-        # global index was embedded by a different model.
-        shared_chunks = data["chunks"] if settings["source"] == "global" else []
-        knowledge_chunks = [
-            item for item in [*shared_chunks, *tenant["chunks"]] if isinstance(item, dict)
-        ]
-        if (
-            knowledge_chunks
-            and settings["embeddingModel"]
-            and all(isinstance(item.get("embedding"), list) for item in knowledge_chunks)
-        ):
+        if self._tenant_vectors_usable(tenant, settings, own_chunks):
             try:
-                query_embedding = client.embed(settings["embeddingModel"], [question])[0]
-            except OllamaError:
-                query_embedding = None
+                vectors = client.embed(
+                    settings["embeddingModel"],
+                    [question],
+                    timeout=QUESTION_EMBEDDING_TIMEOUT_SECONDS,
+                )
+            except AssistantError:
+                vectors = []
+            first = vectors[0] if vectors else None
+            # A vector of another size cannot be compared: keyword search instead.
+            if isinstance(first, list) and len(first) == len(own_chunks[0]["embedding"]):
+                query_embedding = first
         ranked = rank_chunks(
             question,
-            knowledge_chunks,
+            own_chunks,
             query_embedding=query_embedding,
             top_k=settings["topK"],
         )
-        context = "\n\n---\n\n".join(
-            f"SOURCE: {item.get('sourceName', 'Knowledge')}\n{item.get('text', '')}"
-            for item in ranked
+        # The God's knowledge, for every workspace: ranked apart by keyword (no single
+        # search model fits every workspace's AI) and only when it is about the
+        # question. It comes after the shop's own info.
+        shared = _rank_global_knowledge(
+            question,
+            data["chunks"],
+            limit=min(GLOBAL_KNOWLEDGE_MAX_CHUNKS, int(settings["topK"])),
         )
-        if settings["strictKnowledge"] and not ranked:
+        context = "\n\n---\n\n".join(
+            [
+                f"SOURCE: {item.get('sourceName') or 'Knowledge'}\n{item.get('text', '')}"
+                for item in ranked
+            ]
+            + [
+                f"SOURCE: {item.get('sourceName') or 'Knowledge'} (shared information)\n"
+                f"{item.get('text', '')}"
+                for item in shared
+            ]
+        )
+        if settings["strictKnowledge"] and not ranked and not shared:
             result = {
                 "answer": "",
                 "canAnswer": False,
@@ -28239,10 +31526,22 @@ class WebState:
                     strict_knowledge=settings["strictKnowledge"],
                     temperature=settings["temperature"],
                 )
-            except OllamaError as exc:
-                raise WebError(HTTPStatus.BAD_GATEWAY, str(exc), "ollama_unavailable") from exc
+            except AssistantError as exc:
+                # 422, not 502, so the provider's (scrubbed) reason gets through Cloudflare.
+                raise WebError(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    _ai_error_text(exc, settings["apiKey"]),
+                    "ai_unavailable",
+                ) from exc
         can_answer = bool(result.get("canAnswer"))
-        answer = str(result.get("answer") or "").strip() if can_answer else ""
+        # What the AI sent is cut to a sane size before it is stored (every logged
+        # question lives in the record all workspaces share) or sent to a customer.
+        answer = (
+            str(result.get("answer") or "").strip()[:MAX_AI_ANSWER_LENGTH].rstrip()
+            if can_answer
+            else ""
+        )
+        model_name = str(result.get("model") or settings["chatModel"])[:MAX_AI_MODEL_NAME_LENGTH]
         now = _now_iso()
         item = {
             "id": uuid.uuid4().hex,
@@ -28257,28 +31556,52 @@ class WebState:
             "answer": answer,
             "status": "answered" if answer else "unanswered",
             "confidence": float(result.get("confidence") or 0),
+            # Both kinds are cited; "scope" says which is the God's shared knowledge.
             "sources": [
                 {
                     "name": str(chunk.get("sourceName") or "Knowledge"),
                     "score": float(chunk.get("score") or 0),
+                    "scope": scope,
                 }
-                for chunk in ranked
+                for scope, chunks in (("shop", ranked), ("global", shared))
+                for chunk in chunks
             ],
-            "model": str(result.get("model") or settings["chatModel"]),
+            "model": model_name,
             "createdAt": now,
             "updatedAt": now,
             "source": str(source or "web")[:40],
             "accountId": str(account_id or "")[:120],
             "chatMid": str(chat_mid or "")[:120],
             "chatType": str(chat_type or "")[:20],
+            "workspaceId": workspace_id,
         }
-        with self.lock:
-            latest = self._global_ai_all()
-            questions = [q for q in latest["questions"] if isinstance(q, dict)]
-            questions.append(item)
-            latest["questions"] = questions[-MAX_ASSISTANT_QUESTIONS:]
-            self.store.set("global_ai", latest)
-        return {"ok": True, "question": self._public_assistant_question(item)}
+        logged = True
+        try:
+            with self.lock:
+                # Nothing is kept, in the log every workspace shares, of a workspace
+                # deleted or an auto reply's account removed while the AI answered
+                # (either removal holds self.lock as it commits).
+                if (account_id and not self._account_listed(account_id)) or (
+                    workspace_id and self.web_auth._find_user(workspace_id) is None
+                ):
+                    logged = False
+                else:
+                    latest = self._global_ai_all()
+                    questions = [q for q in latest["questions"] if isinstance(q, dict)]
+                    questions.append(item)
+                    latest["questions"] = _trim_question_log(questions, workspace_id)
+                    self.store.set("global_ai", latest)
+        except Exception:
+            # Only the question log misses it (a full disk, say): the answer, already
+            # paid for, still goes back (Try a conversation shows it with a note), and
+            # an auto reply is still sent.
+            _print_exc_quietly()
+            logged = False
+        return {
+            "ok": True,
+            "question": self._public_assistant_question(item),
+            "logged": logged,
+        }
 
     def assistant_history(
         self, user: dict[str, Any] | None, *, limit: int = 100
@@ -28294,8 +31617,8 @@ class WebState:
         effective = self._assistant_settings_for(data, user)
         return {
             "questions": items[: max(1, min(int(limit), 500))],
+            # Only what the page reads: nothing of another workspace or the God.
             "settings": {
-                **self.global_ai_settings(),
                 "configured": effective["configured"],
                 "provider": effective["provider"],
                 "source": effective["source"],
@@ -28343,7 +31666,9 @@ class WebState:
             target["status"] = "resolved"
             target["resolvedBy"] = responder
             target["updatedAt"] = _now_iso()
-            target_owner_id = str(target.get("userId") or "").strip()
+            # The answer joins the knowledge of the workspace that asked: a question
+            # from staff belongs to their team owner's shop, not to the staff member.
+            target_owner_id = self._question_workspace_id(target)
             if target_owner_id:
                 tenants = data["tenants"]
                 tenant = tenants.get(target_owner_id)
@@ -28380,6 +31705,8 @@ class WebState:
                 manual.append(record)
             manual_owner["manualAnswers"] = manual
             self.store.set("global_ai", data)
+        # A question without a workspace joins the God's global answers, which are
+        # searched by keyword only, so that rebuild calls no AI.
         knowledge = (
             self.reindex_assistant_knowledge({"id": target_owner_id})
             if target_owner_id
@@ -28390,6 +31717,24 @@ class WebState:
             "question": self._public_assistant_question(target),
             "knowledge": knowledge,
         }
+
+    def _question_workspace_id(self, question: Mapping[str, Any]) -> str:
+        """The owner id of the workspace a logged question came from; "" for none.
+
+        A question logged by this version says so itself. For an older one: the asker
+        may be staff, and then their team owner's workspace is the one; an asker who no
+        longer exists is looked up by the question's account, else kept as is.
+        """
+        stored = str(question.get("workspaceId") or "").strip()
+        if stored:
+            return stored
+        asker_id = str(question.get("userId") or "").strip()
+        asker = self.web_auth._find_user(asker_id) if asker_id else None
+        if asker is None:
+            account_id = str(question.get("accountId") or "").strip()
+            asker = self.web_auth.user_for_account(account_id) if account_id else None
+        owner = self.tenant_user(dict(asker)) if asker is not None else None
+        return str((owner or {}).get("id") or asker_id)
 
     def test_schedule_draft(
         self, body: dict[str, Any], user: dict[str, Any] | None
@@ -28423,7 +31768,10 @@ class WebState:
             items = _resolve_job_contents(
                 job, ai_settings=self.ai_settings(owner, reveal=True)
             )
-            message_ids = _send_job_contents(api, own_mid, job, items=items)
+            try:
+                message_ids = _send_job_contents(api, own_mid, job, items=items)
+            except _PartlySent as exc:
+                raise exc.error from None  # a test to the account itself: what failed
         self.append_bot_log(
             "schedule.test",
             account_id=account_id,
@@ -28452,18 +31800,39 @@ class WebState:
             many = len(job.get("targets") or []) > 1
             if many and schedule_id in self.schedule_inflight:
                 raise WebError(HTTPStatus.CONFLICT, "Schedule is already running.")
+            begun: tuple[dict[str, Any], dict[str, Any]] | None = None
             if many:
+                # Begun (saved as running) before the request is answered: a run that
+                # cannot begin is refused now, instead of being queued and lost.
+                begun = self._begin_schedule_run(schedule_id, account_id)
                 self.schedule_inflight.add(schedule_id)
-        if not many:
+        if begun is None:
             return self._execute_schedule(schedule_id, manual=True, account_id=account_id)
         # Several chats are spaced 30-90 s apart; don't hold the request open.
-        future = self.schedule_executor.submit(
-            self._execute_schedule, schedule_id, manual=True, account_id=account_id
-        )
+        try:
+            future = self.schedule_executor.submit(
+                self._execute_schedule,
+                schedule_id,
+                manual=True,
+                account_id=account_id,
+                begun=begun,
+            )
+        except Exception as exc:
+            # Not queued (LinePassport is stopping): the job is as it was.
+            self._unbegin_schedule_run(schedule_id, begun[0])
+            with self.schedule_lock:
+                self.schedule_inflight.discard(schedule_id)
+            if isinstance(exc, RuntimeError):  # the senders were shut down
+                raise WebError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "Not sent: LinePassport is stopping. Try again once it runs again.",
+                    "server_stopping",
+                ) from exc
+            raise
         future.add_done_callback(
             lambda completed: self._schedule_future_done(schedule_id, completed)
         )
-        return {"ok": True, "queued": True, "schedule": dict(job)}
+        return {"ok": True, "queued": True, "schedule": begun[1]}
 
     # -- scheduled-send safety: limits, jitter, pause ---------------------------
     def _schedule_settings_all(self) -> dict[str, Any]:
@@ -28515,8 +31884,11 @@ class WebState:
                 "lastDay": len(times),
             }
 
-    def _schedule_quota_left(self, account_id: str) -> int:
-        settings = self.schedule_settings_for(account_id)
+    def _schedule_quota_left(
+        self, account_id: str, settings: dict[str, Any] | None = None
+    ) -> int:
+        if settings is None:
+            settings = self.schedule_settings_for(account_id)
         usage = self.schedule_usage(account_id)
         return max(
             0,
@@ -28575,12 +31947,22 @@ class WebState:
         if not self.web_auth.can_access_account(user, account_id):
             raise WebError(HTTPStatus.FORBIDDEN, "Permission denied for this account.")
         paused = bool(body.get("paused"))
-        self._save_schedule_settings(
-            account_id, {"paused": paused, "pausedAt": _now_iso() if paused else ""}
-        )
+        # Each job moved: its id, and its next run before and after.
+        moved: list[tuple[str, Any, Any]] = []
+
+        def restore() -> None:
+            # By id, in the list as it is now (an account's removal replaces the list),
+            # each job not changed since. The caller holds schedule_lock.
+            jobs = {str(job.get("id") or ""): job for job in self.schedules}
+            for job_id, next_run, moved_to in moved:
+                job = jobs.get(job_id)
+                if job is not None and job.get("nextRunAt") == moved_to:
+                    job["nextRunAt"] = next_run
+
         if not paused:
-            # Repeating jobs pick up from now instead of bursting out every
-            # occurrence that was skipped while paused.
+            # Repeating jobs pick up from now instead of bursting out every occurrence
+            # that was skipped while paused. Saved before the account is resumed, so a
+            # resume that cannot be saved leaves it paused with its jobs as they were.
             now = time.time()
             with self.schedule_lock:
                 for job in self.schedules:
@@ -28590,8 +31972,30 @@ class WebState:
                         and job.get("mode") == "repeat"
                         and float(job.get("nextRunAt") or 0) < now
                     ):
-                        job["nextRunAt"] = _compute_next_epoch(job)
-                self.save_schedules()
+                        next_run = job.get("nextRunAt")
+                        job["nextRunAt"] = _next_run_from_now(job)
+                        moved.append((str(job.get("id") or ""), next_run, job["nextRunAt"]))
+                if moved:
+                    try:
+                        self.save_schedules()
+                    except Exception:
+                        restore()  # not saved: as they were
+                        raise
+        try:
+            self._save_schedule_settings(
+                account_id, {"paused": paused, "pausedAt": _now_iso() if paused else ""}
+            )
+        except Exception:
+            if moved:
+                # Still paused: its jobs go back to the times they had, saved now or at
+                # the scheduler's next round that can save.
+                with self.schedule_lock:
+                    restore()
+                    try:
+                        self.save_schedules()
+                    except Exception:
+                        pass  # save_schedules said why
+            raise
         self.append_bot_log(
             "schedule.pause_all" if paused else "schedule.resume_all",
             account_id=account_id,
@@ -28609,11 +32013,15 @@ class WebState:
         events: list[dict[str, Any]] = []
         with self.schedule_lock:
             jobs = [dict(job) for job in self.schedules if job.get("accountId") == account_id]
+            waiting = set(self.schedule_inflight)  # runs handed to a sender, not begun yet
         for job in jobs:
             if not job.get("enabled"):
                 continue
             targets = job.get("targets") or [{"mid": job.get("to"), "name": job.get("targetName")}]
-            for at in _simulate_schedule_runs(job, horizon, limit=200):
+            slack: float = SCHEDULE_ON_TIME_SLACK_SECONDS
+            if str(job.get("id")) in waiting:  # as run_due_schedules names it
+                slack = _sender_slack(job)
+            for at in _simulate_schedule_runs(job, horizon, limit=200, slack=slack):
                 events.append(
                     {
                         "at": at,
@@ -28656,72 +32064,151 @@ class WebState:
         due: list[str] = []
         changed = False
         reserved: dict[str, int] = {}
+        settings_of: dict[str, dict[str, Any]] = {}
+        # Due runs that do not go out now (see _due_run_deferred): the job, and why.
+        held: list[tuple[dict[str, Any], str]] = []
+
+        def settings_for(account_id: str) -> dict[str, Any]:
+            # Read once a round for each account.
+            if account_id not in settings_of:
+                settings_of[account_id] = self.schedule_settings_for(account_id)
+            return settings_of[account_id]
+
+        def log_held() -> None:
+            # Written however the round ends: a held run's job keeps its changes in memory
+            # (a later round saves them) and is not due again, to be logged then.
+            for snapshot, why in held:
+                self.append_bot_log(
+                    "schedule.run.missed" if why == "missed" else "schedule.run.already_sent",
+                    account_id=str(snapshot.get("accountId") or ""),
+                    schedule=snapshot,
+                    ok=why != "missed",
+                    detail=_MISSED_RUN if why == "missed" else _ALREADY_SENT_RUN,
+                    listed_only=True,
+                )
+            held.clear()
+
         with self.schedule_lock:
-            for job in self.schedules:
-                if not job.get("enabled") or job.get("running"):
-                    continue
-                job_account_id = str(job.get("accountId") or "")
-                if job_account_id and _account_channel(
-                    self.account_store.get(job_account_id)
-                ) != "line":
-                    if job.get("status") != "unsupported":
-                        job["status"] = "unsupported"
-                        job["enabled"] = False
-                        changed = True
-                    continue
-                if job_account_id and self.account_store.requires_reauth(job_account_id):
-                    if job.get("status") != "login required":
-                        job["status"] = "login required"
-                        job["lastError"] = (
-                            "LINE session expired or was revoked. Connect the account again."
-                        )
-                        changed = True
-                    continue
-                next_run = job.get("nextRunAt")
-                if not next_run:
-                    job["nextRunAt"] = _compute_next_epoch(job)
+            # Read without account_store.lock: see _listed_accounts.
+            accounts = self._listed_accounts()
+            saving = False
+            try:
+                for job in self.schedules:
+                    if not job.get("enabled") or job.get("running"):
+                        continue
+                    job_account_id = str(job.get("accountId") or "")
+                    account = accounts.get(job_account_id)
+                    if job_account_id and _account_channel(account) != "line":
+                        if job.get("status") != "unsupported":
+                            job["status"] = "unsupported"
+                            job["enabled"] = False
+                            changed = True
+                        continue
+                    if (
+                        job_account_id
+                        and account is not None
+                        and AccountStore._session_state(account) == "reauth_required"
+                    ):
+                        if job.get("status") != "login required":
+                            job["status"] = "login required"
+                            if not _SCHEDULE_PARTIAL_RE.match(str(job.get("lastError") or "")):
+                                # A run cut short by the sign-in keeps its report of the
+                                # chats it did not reach.
+                                job["lastError"] = _SCHEDULE_SIGN_IN_ERROR
+                            changed = True
+                        continue
                     next_run = job.get("nextRunAt")
                     if not next_run:
-                        job["enabled"] = False
-                        job["status"] = "completed"
-                    changed = True
-                if next_run and job.get("jitterFor") != next_run:
-                    # A small random delay so jobs never fire on the exact second.
-                    minutes = int(self.schedule_settings_for(job_account_id)["jitterMinutes"])
-                    job["jitter"] = (
-                        0 if job.get("exactTime") else random.randint(0, max(0, minutes) * 60)
-                    )
-                    job["jitterFor"] = next_run
-                    changed = True
-                if next_run and float(next_run) + float(job.get("jitter") or 0) <= now:
-                    schedule_id = str(job["id"])
-                    if schedule_id in self.schedule_inflight:
-                        continue
-                    settings = self.schedule_settings_for(job_account_id)
-                    if settings["paused"]:
-                        continue
-                    needed = max(1, len(job.get("targets") or []))
-                    left = self._schedule_quota_left(job_account_id) - reserved.get(
-                        job_account_id, 0
-                    )
-                    if left < needed:
-                        # Over the account's hourly/daily limit: wait in the queue.
-                        job["nextRunAt"] = now + SCHEDULE_QUEUE_RETRY_SECONDS
-                        job["jitter"] = 0
-                        job["jitterFor"] = job["nextRunAt"]
-                        job["status"] = "queued"
+                        job["nextRunAt"] = _next_run_from_now(job)
+                        next_run = job.get("nextRunAt")
+                        if not next_run:
+                            job["enabled"] = False
+                            job["status"] = "completed"
                         changed = True
-                        continue
-                    reserved[job_account_id] = reserved.get(job_account_id, 0) + needed
-                    self.schedule_inflight.add(schedule_id)
-                    due.append(schedule_id)
-            if changed:
-                self.save_schedules()
+                    if next_run and job.get("jitterFor") != next_run:
+                        # A small random delay so jobs never fire on the exact second.
+                        minutes = int(settings_for(job_account_id)["jitterMinutes"])
+                        job["jitter"] = (
+                            0
+                            if job.get("exactTime")
+                            else random.randint(0, max(0, minutes) * 60)
+                        )
+                        job["jitterFor"] = next_run
+                        changed = True
+                    if next_run and job.get("jitter") != _drawn_delay(job):
+                        # A stored delay that is not one (a damaged store) counts as none
+                        # from here on, as in the on-time rule and the calendar.
+                        job["jitter"] = 0
+                        changed = True
+                    if next_run and float(next_run) + float(job.get("jitter") or 0) <= now:
+                        schedule_id = str(job["id"])
+                        if schedule_id in self.schedule_inflight:
+                            continue
+                        settings = settings_for(job_account_id)
+                        if settings["paused"]:
+                            continue
+                        why, until = _due_run_deferred(job, now)
+                        if why:
+                            # Not sent now: due again at its next start, or done.
+                            job["nextRunAt"] = until
+                            job.pop("retrying", None)
+                            if job.get("lastError") == _SCHEDULE_SIGN_IN_ERROR:
+                                job["lastError"] = None  # connected again since
+                            if until is None:
+                                job["enabled"] = False
+                                job["status"] = "completed"
+                            elif job.get("status") in {"queued", "retrying", "login required"}:
+                                job["status"] = "waiting"
+                            if why == "missed":
+                                _append_history(
+                                    job, {"at": _now_iso(), "ok": False, "error": _MISSED_RUN}
+                                )
+                            held.append((dict(job), why))
+                            changed = True
+                            continue
+                        needed = max(1, len(job.get("targets") or []))
+                        left = self._schedule_quota_left(
+                            job_account_id, settings
+                        ) - reserved.get(job_account_id, 0)
+                        if left < needed:
+                            # Over the account's hourly/daily limit: wait in the queue. The
+                            # run keeps the time it was for (see _run_own_time).
+                            origin = _run_own_time(job, now)
+                            job["nextRunAt"] = now + SCHEDULE_QUEUE_RETRY_SECONDS
+                            job["queuedFrom"] = [origin, job["nextRunAt"]]
+                            job["jitter"] = 0
+                            job["jitterFor"] = job["nextRunAt"]
+                            job["status"] = "queued"
+                            changed = True
+                            continue
+                        reserved[job_account_id] = reserved.get(job_account_id, 0) + needed
+                        # Whether it goes to a sender on time: only then may it wait for one
+                        # (see _sender_slack).
+                        job["onTimeFor"] = (
+                            job.get("nextRunAt") if _run_on_time_safe(job, now) else None
+                        )
+                        self.schedule_inflight.add(schedule_id)
+                        due.append(schedule_id)
+                saving = True
+                if changed or self.schedules_unsaved:
+                    self.save_schedules()
+            except BaseException as exc:
+                # None of this round's due schedules starts, and none stays marked as
+                # running (schedule_inflight), so a later round picks them up. A read
+                # that fails (the schedule settings, the send counts) fails the round. A
+                # save that fails does not: a run is saved as running before it sends
+                # (see _execute_schedule), so none starts while saving fails, and
+                # save_schedules said why.
+                for schedule_id in due:
+                    self.schedule_inflight.discard(schedule_id)
+                log_held()
+                if saving and isinstance(exc, Exception):
+                    return
+                raise
+        log_held()
         for schedule_id in due:
             try:
-                future = self.schedule_executor.submit(
-                    self._execute_schedule, schedule_id, manual=False
-                )
+                future = self.schedule_executor.submit(self._run_due_schedule, schedule_id)
             except Exception:
                 with self.schedule_lock:
                     self.schedule_inflight.discard(schedule_id)
@@ -28738,47 +32225,174 @@ class WebState:
         try:
             future.result()
         except Exception:
-            traceback.print_exc()
+            _print_exc_quietly()
 
     def _find_schedule(self, schedule_id: str) -> dict[str, Any]:
+        job = self._schedule_or_none(schedule_id)
+        if job is None:
+            raise WebError(HTTPStatus.NOT_FOUND, "Schedule not found.")
+        return job
+
+    def _schedule_or_none(self, schedule_id: str) -> dict[str, Any] | None:
         for job in self.schedules:
             if job.get("id") == schedule_id:
                 return job
-        raise WebError(HTTPStatus.NOT_FOUND, "Schedule not found.")
+        return None
 
-    def _execute_schedule(
-        self, schedule_id: str, *, manual: bool, account_id: str | None = None
-    ) -> dict[str, Any]:
+    def _scheduled_run_due(self, schedule_id: str) -> bool:
+        """Whether a scheduled run handed to a sender is due still as the sender starts
+        it (it may have waited for one). The caller holds schedule_lock.
+
+        The random delay is read as stored. When the owner moved the next run while the
+        run waited (switched the schedule on again, changed when it runs, or Resume all),
+        that is still the delay drawn for the earlier next run, until the scheduler's
+        next round draws one for the new next run: the run is started only if that much
+        time has passed since its new next run, and otherwise the next round draws its
+        delay and runs it after that."""
+        job = self._schedule_or_none(schedule_id)
+        if job is None or not job.get("enabled") or job.get("running"):
+            return False
+        try:
+            due_at = float(job.get("nextRunAt") or 0) + float(job.get("jitter") or 0)
+        except (TypeError, ValueError):
+            return False
+        if not job.get("nextRunAt") or due_at > time.time():
+            return False
+        if _due_run_deferred(job, time.time(), slack=_sender_slack(job))[0]:
+            return False  # held: the scheduler's next round moves it to its next start
+        return not self.schedule_settings_for(str(job.get("accountId") or ""))["paused"]
+
+    def _run_due_schedule(self, schedule_id: str) -> dict[str, Any]:
+        """A scheduled run, as a sender starts it. One that waited for a free sender
+        runs only if it is due still (not switched off, paused with its account's other
+        schedules, moved to a later time or deleted meanwhile), as the schedule is now;
+        otherwise the scheduler runs it when it is due again."""
+        with self.schedule_lock:
+            if not self._scheduled_run_due(schedule_id):
+                return {"ok": False, "skipped": True, "messageIds": []}
+            begun = self._begin_schedule_run(schedule_id, None)
+        return self._execute_schedule(schedule_id, manual=False, begun=begun)
+
+    def _begin_schedule_run(
+        self, schedule_id: str, account_id: str | None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Mark a schedule as running and save that before anything is sent; returns
+        its run keys before and a copy of the job. A run that cannot be saved as running
+        is not run (after a restart nobody would know it had begun): the job is left as
+        it was, due again at a round that can save, and the schedules page says they
+        cannot be saved (the log says why)."""
         with self.schedule_lock:
             job = self._find_schedule(schedule_id)
             _ensure_schedule_account(job, account_id)
             if job.get("running"):
                 raise WebError(HTTPStatus.CONFLICT, "Schedule is already running.")
+            before = {key: job[key] for key in _SCHEDULE_RUN_KEYS if key in job}
             job["running"] = True
             job["status"] = "running"
             job["runningSince"] = time.time()
             job["runToken"] = uuid.uuid4().hex
-            self.save_schedules()
-            snapshot = dict(job)
+            try:
+                self.save_schedules()
+            except Exception as exc:
+                for key in _SCHEDULE_RUN_KEYS:
+                    job.pop(key, None)
+                job.update(before)
+                if isinstance(exc, (WebError, StateFileError)):
+                    raise
+                raise WebError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "Not sent: the schedules cannot be saved right now. Try again in a moment.",
+                    "schedules_unsaved",
+                ) from exc
+            return before, dict(job)
+
+    def _unbegin_schedule_run(
+        self, schedule_id: str, before: dict[str, Any], *, note: str = ""
+    ) -> dict[str, Any] | None:
+        """A begun run that sent nothing: the job's run keys go back to ``before`` (saved
+        now, or at the scheduler's next round that can). ``note``: why, for a run nobody
+        waited for (a queued Run now), shown on the job as a failed run."""
+        with self.schedule_lock:
+            try:
+                job: dict[str, Any] | None = self._find_schedule(schedule_id)
+            except WebError:
+                job = None  # deleted meanwhile
+            if job is not None:
+                for key in _SCHEDULE_RUN_KEYS:
+                    job.pop(key, None)
+                job.update(before)
+                if note:
+                    job["status"] = "error"
+                    job["lastError"] = note
+                    _append_history(job, {"at": _now_iso(), "ok": False, "error": note})
+                try:
+                    self.save_schedules()
+                except Exception:
+                    pass  # kept in memory; nothing went out
+            return dict(job) if job is not None else None
+
+    def _execute_schedule(
+        self,
+        schedule_id: str,
+        *,
+        manual: bool,
+        account_id: str | None = None,
+        begun: tuple[dict[str, Any], dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Send a schedule's run. ``begun``: what _begin_schedule_run returned for it
+        already (a Run now of several chats, begun before its request was answered, or
+        a scheduled run, see _run_due_schedule). A begun run that waited for a free
+        sender sends nothing once it is not marked as running any more (the schedule
+        was deleted, cleared as stuck or its account removed meanwhile), and otherwise
+        sends the schedule as it is now (an edit keeps it marked)."""
+        if begun is None:
+            before, snapshot = self._begin_schedule_run(schedule_id, account_id)
+        else:
+            before = begun[0]
+            with self.schedule_lock:
+                current = self._schedule_or_none(schedule_id)
+                if (
+                    current is None
+                    or not current.get("running")
+                    or current.get("runToken") != begun[1].get("runToken")
+                ):
+                    return {
+                        "ok": False,
+                        "skipped": True,
+                        "schedule": dict(current) if current is not None else None,
+                        "messageIds": [],
+                    }
+                snapshot = dict(current)
+
+        account_id = str(snapshot.get("accountId") or "")
+        message_ids: list[Any] = []
+        failures: list[str] = []
+        targets: list[dict[str, Any]] = []
+        reached = 0  # the chats that got it, or part of it
+        stopped = False  # LinePassport stopped before every chat had its turn
+
+        def log_bot(
+            action: str,
+            detail: str = "",
+            ok: bool = True,
+            data: dict[str, Any] | None = None,
+        ) -> None:
+            self.append_bot_log(
+                action,
+                account_id=account_id,
+                schedule=snapshot,
+                ok=ok,
+                detail=detail,
+                data=data,
+            )
+
+        def not_reached(start: int, reason: str) -> list[str]:
+            return [
+                f"{target.get('name') or target.get('mid') or ''}: not sent, {reason}"
+                for target in targets[start:]
+            ]
 
         try:
-            account_id = str(snapshot.get("accountId") or "")
-
-            def log_bot(
-                action: str,
-                detail: str = "",
-                ok: bool = True,
-                data: dict[str, Any] | None = None,
-            ) -> None:
-                self.append_bot_log(
-                    action,
-                    account_id=account_id,
-                    schedule=snapshot,
-                    ok=ok,
-                    detail=detail,
-                    data=data,
-                )
-
             log_bot(
                 "schedule.run.start",
                 "manual" if manual else "scheduled",
@@ -28794,20 +32408,31 @@ class WebState:
                 ai_settings=self.ai_settings(owner, reveal=True),
                 log=log_bot,
             )
-            message_ids: list[Any] = []
-            failures: list[str] = []
             for index, target in enumerate(targets):
-                if index and self.scheduler.stop_event.wait(
-                    random.uniform(*SCHEDULE_TARGET_GAP_SECONDS)
+                if self.scheduler.stop_event.is_set() or (
+                    index
+                    and self.scheduler.stop_event.wait(
+                        random.uniform(*SCHEDULE_TARGET_GAP_SECONDS)
+                    )
                 ):
+                    stopped = True
+                    if reached:
+                        failures.extend(not_reached(index, "LinePassport stopped"))
                     break
-                target_items = [
-                    {**item, "text": str(item.get("text") or "").replace("{name}", target["name"])}
-                    if item.get("kind") == "text"
-                    else item
-                    for item in items
-                ]
+                label = str(target.get("name") or target.get("mid") or "")
+                part_error = ""
                 try:
+                    target_items = [
+                        {
+                            **item,
+                            "text": str(item.get("text") or "").replace(
+                                "{name}", str(target.get("name") or "")
+                            ),
+                        }
+                        if item.get("kind") == "text"
+                        else item
+                        for item in items
+                    ]
                     with self.api_lock_for(account_id):
                         api = self.get_api(account_id)
                         to = _resolve_to(api, target["mid"])
@@ -28815,57 +32440,40 @@ class WebState:
                         message_ids.extend(
                             _send_job_contents(api, to, snapshot, items=target_items, log=log_bot)
                         )
-                    self.record_schedule_sends(account_id, 1)
+                except _PartlySent as exc:
+                    # Its text went out and its picture did not: the chat counts as sent,
+                    # so no retry sends the text again, and the picture is reported.
+                    message_ids.extend(exc.message_ids)
+                    part_error = _safe_log_detail(exc.error, 300)
                 except Exception as exc:
                     if isinstance(exc, LineAuthError) or self.account_store.requires_reauth(
                         account_id
                     ):
-                        raise
-                    failures.append(f"{target['name'] or target['mid']}: {_safe_log_detail(exc, 300)}")
-            if failures and len(failures) == len(targets):
+                        if not reached:
+                            raise
+                        # LINE asked to sign in again partway: the chats that got it do
+                        # not get it again once the account is connected; the rest are
+                        # reported.
+                        failures.extend(not_reached(index, "LINE asked to sign in again"))
+                        break
+                    failures.append(f"{label}: {_safe_log_detail(exc, 300)}")
+                    continue
+                reached += 1
+                if part_error:
+                    failures.append(f"{label}: only part of it went out ({part_error})")
+                try:
+                    self.record_schedule_sends(account_id, 1)
+                except Exception:
+                    # It went out: only the saved hourly and daily count misses it.
+                    _print_exc_quietly()
+            if not reached and not stopped:
                 raise RuntimeError(failures[0].split(": ", 1)[-1])
-            message_id = message_ids[-1] if message_ids else None
-            sent_at = _now_iso()
-            with self.schedule_lock:
-                job = self._find_schedule(schedule_id)
-                job["running"] = False
-                job.pop("runningSince", None)
-                job.pop("runToken", None)
-                job["sentCount"] = int(job.get("sentCount") or 0) + 1
-                job["lastRunAt"] = sent_at
-                job["lastMessageId"] = message_id
-                job.pop("retrying", None)
-                if failures:
-                    # Some chats got it: never resend to those; report the rest.
-                    partial = f"Sent to {len(targets) - len(failures)}/{len(targets)} chats. " + "; ".join(failures)
-                    job["lastError"] = partial
-                    _append_history(
-                        job, {"at": sent_at, "ok": False, "error": partial, "messageIds": message_ids}
-                    )
-                else:
-                    job["lastError"] = None
-                    _append_history(job, {"at": sent_at, "ok": True, "messageIds": message_ids})
-                if not manual:
-                    _advance_after_success(job)
-                else:
-                    job["status"] = "waiting" if job.get("enabled") else "manual"
-                if failures:
-                    job["status"] = "error"
-                self.save_schedules()
-            if failures:
-                self._notify_schedule_failure(account_id, dict(job), str(job.get("lastError") or ""))
-            log_bot(
-                "schedule.run.success",
-                f"{len(message_ids)} message(s)",
-                data={"manual": manual, "messageIds": message_ids},
-            )
-            return {"ok": True, "schedule": dict(job), "messageIds": message_ids}
         except Exception as exc:
             auth_failure = isinstance(exc, LineAuthError) or self.account_store.requires_reauth(
                 str(snapshot.get("accountId") or "")
             )
             error_message = (
-                "LINE session expired or was revoked. Connect the account again."
+                _SCHEDULE_SIGN_IN_ERROR
                 if auth_failure
                 else _safe_log_detail(exc, 2_000)
             )
@@ -28880,7 +32488,7 @@ class WebState:
                     data={"manual": manual},
                 )
             except Exception:
-                traceback.print_exc()
+                _print_exc_quietly()
             retry = False
             with self.schedule_lock:
                 job = self._find_schedule(schedule_id)
@@ -28890,10 +32498,17 @@ class WebState:
                 job["lastError"] = error_message
                 retry = not manual and not auth_failure and not job.get("retrying")
                 if retry:
-                    # Network blips are common: try once more in 5 minutes.
+                    # Network blips are common: try once more in 5 minutes. The retry is
+                    # for the time the run was for, moved on by its pause (see
+                    # _run_own_time), also once a sign-in failure or a Run now ends it.
+                    origin = _run_own_time(job, time.time())
                     job["retrying"] = True
                     job["status"] = "retrying"
                     job["nextRunAt"] = time.time() + SCHEDULE_RETRY_DELAY_SECONDS
+                    job["retryFrom"] = [
+                        None if origin is None else origin + SCHEDULE_RETRY_DELAY_SECONDS,
+                        job["nextRunAt"],
+                    ]
                     _append_history(
                         job, {"at": _now_iso(), "ok": False, "error": error_message, "retry": True}
                     )
@@ -28903,7 +32518,10 @@ class WebState:
                     _append_history(job, {"at": _now_iso(), "ok": False, "error": error_message})
                     if not manual and not auth_failure:
                         _advance_after_error(job)
-                self.save_schedules()
+                try:
+                    self.save_schedules()
+                except Exception:
+                    pass  # kept in memory; the scheduler saves it at a round that can
                 failed_job = dict(job)
             if not retry and not manual:
                 self._notify_schedule_failure(
@@ -28918,6 +32536,86 @@ class WebState:
                     "line_login_required",
                 ) from exc
             raise WebError(HTTPStatus.BAD_GATEWAY, error_message) from exc
+        if not reached:
+            # LinePassport stopped before anything went out: not run, so it is due again
+            # once LinePassport starts again. A queued Run now (nobody waits for its
+            # answer) says so on the job.
+            kept = self._unbegin_schedule_run(
+                schedule_id,
+                before,
+                note=(
+                    "Not sent: LinePassport stopped before this Run now reached any chat. "
+                    "Run it again."
+                    if manual and begun is not None
+                    else ""
+                ),
+            )
+            if manual:
+                raise WebError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "Not sent: LinePassport is stopping. Try again once it runs again.",
+                    "server_stopping",
+                )
+            return {"ok": False, "schedule": kept or snapshot, "messageIds": []}
+        # The messages went out. Nothing from here on may count as a failed send (that
+        # would send them again at the retry): a failed save is kept in memory and saved
+        # at the scheduler's next round that can.
+        message_id = message_ids[-1] if message_ids else None
+        sent_at = _now_iso()
+        with self.schedule_lock:
+            try:
+                found: dict[str, Any] | None = self._find_schedule(schedule_id)
+            except WebError:
+                found = None  # deleted while it ran: nothing to note it in
+            if found is not None:
+                job = found
+                job["running"] = False
+                job.pop("runningSince", None)
+                job.pop("runToken", None)
+                job["sentCount"] = int(job.get("sentCount") or 0) + 1
+                job["lastRunAt"] = sent_at
+                job["lastMessageId"] = message_id
+                job.pop("retrying", None)
+                if failures:
+                    # Some chats got it: never resend to those; report the rest (the
+                    # report's start is _SCHEDULE_PARTIAL_RE).
+                    partial = f"Sent to {reached}/{len(targets)} chats. " + "; ".join(failures)
+                    job["lastError"] = partial
+                    _append_history(
+                        job, {"at": sent_at, "ok": False, "error": partial, "messageIds": message_ids}
+                    )
+                else:
+                    job["lastError"] = None
+                    _append_history(job, {"at": sent_at, "ok": True, "messageIds": message_ids})
+                if not manual:
+                    _advance_after_success(job)
+                else:
+                    job["status"] = "waiting" if job.get("enabled") else "manual"
+                if failures:
+                    job["status"] = "error"
+                try:
+                    self.save_schedules()
+                except Exception:
+                    # Kept in memory and saved at the scheduler's next round that can.
+                    # Until then a restart sends it again: the page and the log say so.
+                    self.schedules_unsaved_sent.add(schedule_id)
+                    _print_quietly(
+                        f"LinePassport: schedule '{snapshot.get('name') or schedule_id}' "
+                        "went out, but the schedules could not be saved: restarting "
+                        "LinePassport before they are saved sends it again."
+                    )
+            done = dict(found if found is not None else snapshot)
+        if failures:
+            try:
+                self._notify_schedule_failure(account_id, done, str(done.get("lastError") or ""))
+            except Exception:
+                _print_exc_quietly()
+        log_bot(
+            "schedule.run.success",
+            f"{len(message_ids)} message(s)",
+            data={"manual": manual, "messageIds": message_ids},
+        )
+        return {"ok": True, "schedule": done, "messageIds": message_ids}
 
 
 class OkLineWebHandler(BaseHTTPRequestHandler):
@@ -29123,11 +32821,19 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
                 {"error": str(exc), "code": "line_login_required"},
                 HTTPStatus.UNAUTHORIZED,
             )
+        except StateFileError as exc:
+            # A save refused to keep a state file safe: the log names the file, and the
+            # page says what to do (restart LinePassport, or make room).
+            _print_quietly(f"LinePassport: {exc}")
+            return self._json(
+                {"error": exc.public, "code": exc.code},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
         except Exception:
             # Log the raw exception to the server console for the operator, but
             # hand the browser a stable, friendly, localisable code instead of a
             # raw stack-trace string.
-            traceback.print_exc()
+            _print_exc_quietly()
             return self._json(
                 {
                     "error": "Unexpected server error.",
@@ -29192,12 +32898,20 @@ class OkLineWebHandler(BaseHTTPRequestHandler):
             return self.state.god_system_settings()
         if method == "POST" and path == "/api/god/settings":
             return self.state.save_god_system_settings(self._read_json())
-        if method == "GET" and path == "/api/god/ai/settings":
-            return self.state.global_ai_settings()
-        if method == "POST" and path == "/api/god/ai/settings":
-            return self.state.save_global_ai_settings(self._read_json())
-        if method == "POST" and path == "/api/god/ai/test":
-            return self.state.test_global_ai(self._read_json())
+        if path in REMOVED_GOD_AI_PATHS:
+            # The shared AI is gone: each workspace uses its own provider and key. A
+            # God page opened before the update still calls these, so the body is read
+            # and the 404 arrives instead of a reset connection.
+            try:
+                self._read_json()
+            except WebError:
+                pass
+            raise WebError(
+                HTTPStatus.NOT_FOUND,
+                "The shared AI was removed: each workspace uses its own AI key. "
+                "Reload this page.",
+            )
+        # The God's shared knowledge and the unanswered queue.
         if method == "GET" and path == "/api/god/ai/knowledge":
             return self.state.global_ai_knowledge()
         if method == "POST" and path == "/api/god/ai/knowledge":
@@ -30478,53 +34192,54 @@ def serve(
 def _bind_server(config: WebConfig) -> OkLineWebServer:
     ports = [config.port] if config.port == 0 else range(config.port, config.port + 20)
     last_error: OSError | None = None
+    server: OkLineWebServer | None = None
     for candidate in ports:
-        server: OkLineWebServer | None = None
         try:
             server = OkLineWebServer((config.host, candidate), OkLineWebHandler)
-            server.state = WebState(
-                WebConfig(
-                    host=config.host,
-                    port=server.server_address[1],
-                    tokens_file=config.tokens_file,
-                    state_dir=config.state_dir,
-                    accounts_file=config.accounts_file,
-                    accounts_dir=config.accounts_dir,
-                    schedules_file=config.schedules_file,
-                    auth_file=config.auth_file,
-                    database_url=config.database_url,
-                    access_token=config.access_token,
-                    refresh_token=config.refresh_token,
-                    show_secrets=config.show_secrets,
-                    setup_token=config.setup_token,
-                    secure_cookies=config.secure_cookies,
-                    trust_proxy=config.trust_proxy,
-                )
-            )
-            if (
-                server.state.setup_token_required()
-                and not server.state.web_auth.configured()
-                and not config.setup_token
-            ):
-                server.state.close()
-                server.server_close()
-                raise WebError(
-                    HTTPStatus.SERVICE_UNAVAILABLE,
-                    "LINEPASSPORT_SETUP_TOKEN is required for first startup on a public bind.",
-                    "setup_token_not_configured",
-                )
-            return server
-        except OSError as exc:
-            if server is not None:
-                server.server_close()
+        except OSError as exc:  # in use: the next port
             last_error = exc
             if config.port == 0:
                 break
-        except Exception:
-            if server is not None:
-                server.server_close()
-            raise
-    raise OSError(f"could not bind {config.host}:{config.port}: {last_error}")
+            continue
+        break
+    if server is None:
+        raise OSError(f"could not bind {config.host}:{config.port}: {last_error}")
+    try:
+        server.state = WebState(
+            WebConfig(
+                host=config.host,
+                port=server.server_address[1],
+                tokens_file=config.tokens_file,
+                state_dir=config.state_dir,
+                accounts_file=config.accounts_file,
+                accounts_dir=config.accounts_dir,
+                schedules_file=config.schedules_file,
+                auth_file=config.auth_file,
+                database_url=config.database_url,
+                access_token=config.access_token,
+                refresh_token=config.refresh_token,
+                show_secrets=config.show_secrets,
+                setup_token=config.setup_token,
+                secure_cookies=config.secure_cookies,
+                trust_proxy=config.trust_proxy,
+            )
+        )
+        if (
+            server.state.setup_token_required()
+            and not server.state.web_auth.configured()
+            and not config.setup_token
+        ):
+            server.state.close()
+            raise WebError(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "LINEPASSPORT_SETUP_TOKEN is required for first startup on a public bind.",
+                "setup_token_not_configured",
+            )
+    except BaseException:
+        # Not a port in use (a state file it may not read, say): said as it is.
+        server.server_close()
+        raise
+    return server
 
 
 def _sniff_content_type(data: bytes) -> str:
@@ -30935,8 +34650,29 @@ def _schedule_from_body(
             "history": job.get("history") or [],
         }
     )
-    job["nextRunAt"] = _compute_next_epoch(job)
+    timing = _schedule_timing(job)
+    if (
+        existing is not None
+        and existing.get("nextRunAt")
+        and timing is not None
+        and _schedule_timing(existing) == timing
+    ):
+        # Only what it sends, or to whom, changed: its next run stays, so an edit never
+        # moves a run that is due (waiting for a free sender, queued for the hourly
+        # limit, or to be tried again) to its next day.
+        job["nextRunAt"] = existing.get("nextRunAt")
+        if bool(job.get("exactTime")) != bool(existing.get("exactTime")):
+            job.pop("jitter", None)  # set again at the scheduler's next round
+            job.pop("jitterFor", None)
+    else:
+        job["nextRunAt"] = _next_run_from_now(job)
     job["status"] = "waiting" if job["enabled"] and job["nextRunAt"] else "paused"
+    if existing is not None and existing.get("running"):
+        # A run of it is sending, or waits for a free sender (a Run now): it stays
+        # marked as running until that run ends (no other run starts beside it), and a
+        # run that has not begun to send sends this version (see _execute_schedule).
+        job["running"] = True
+        job["status"] = str(existing.get("status") or "running")
     return job
 
 
@@ -31033,7 +34769,12 @@ def _compute_next_epoch(job: dict[str, Any], after_epoch: float | None = None) -
     return _next_repeat_epoch(job, after)
 
 
-def _next_repeat_epoch(job: dict[str, Any], after: _dt.datetime) -> float | None:
+def _next_repeat_epoch(
+    job: dict[str, Any], after: _dt.datetime, *, start_after: bool = False
+) -> float | None:
+    """The job's next run at ``after`` or later: ``after`` itself when it falls in one
+    of its windows, otherwise the start of its next window. ``start_after``: the start
+    of its first window that opens after ``after`` (see _next_run_after)."""
     start_date = _parse_date(str(job.get("activeFrom") or ""))
     until_date = _parse_date(str(job.get("activeUntil") or ""))
     window_start = _valid_hhmm(str(job.get("windowStart") or DEFAULT_WINDOW_START))
@@ -31053,7 +34794,8 @@ def _next_repeat_epoch(job: dict[str, Any], after: _dt.datetime) -> float | None
         return not weekdays or value.weekday() in weekdays
 
     day = after.date()
-    if crosses_midnight:
+    strictly_after = after
+    if crosses_midnight and not start_after:
         prev_day = day - _dt.timedelta(days=1)
         if (
             (not start_date or prev_day >= start_date)
@@ -31079,13 +34821,76 @@ def _next_repeat_epoch(job: dict[str, Any], after: _dt.datetime) -> float | None
         end = _dt.datetime.combine(day, _dt.time(end_hour, end_min, 59))
         if crosses_midnight:
             end += _dt.timedelta(days=1)
-        if after <= start:
+        if after <= start and not (start_after and start <= strictly_after):
             return start.timestamp()
-        if start <= after <= end:
+        if start <= after <= end and not start_after:
             return after.timestamp()
         day = day + _dt.timedelta(days=1)
         after = _dt.datetime.combine(day, _dt.time(0, 0))
     return None
+
+
+# What a run sets on its job as it starts (see WebState._execute_schedule).
+_SCHEDULE_RUN_KEYS = ("running", "status", "runningSince", "runToken")
+
+
+def _schedule_timing(job: dict[str, Any]) -> tuple[Any, ...] | None:
+    """When a job runs, read the way the scheduler reads it (see _compute_next_epoch),
+    or None if it cannot be read: an edit that leaves this as it was keeps the job's
+    next run (see _schedule_from_body).
+
+    A job saved before weekdays and month days were kept has neither, which means every
+    day; a job with month days runs on them whatever its weekdays. The end of a
+    once-a-day window does not count: after a run, such a job goes on at the start of
+    its next window (see _next_run_after), and a late run is held or sent by its starts
+    alone (see _due_run_deferred), so its end only lets a run worked out from now,
+    inside its window, start late. The page shows such a job by its start alone and
+    saves its end as its start (the page's first version saved start + 1).
+    """
+    mode = str(job.get("mode") or "once").lower()
+    enabled = bool(job.get("enabled"))
+    if mode == "once":
+        run_at = str(job.get("runAt") or "")
+        try:
+            run_at = _dt.datetime.fromisoformat(run_at).isoformat()
+        except ValueError:
+            pass
+        return (mode, enabled, run_at)
+    try:
+        interval = max(1, min(1440, int(float(job.get("intervalMinutes") or 15))))
+        window_start = _valid_hhmm(str(job.get("windowStart") or DEFAULT_WINDOW_START))
+        window_end = _valid_hhmm(str(job.get("windowEnd") or DEFAULT_WINDOW_END))
+        weekdays = tuple(_schedule_weekdays(job.get("weekdays")))
+        month_days = tuple(_schedule_month_days(job.get("monthDays")))
+    except (TypeError, ValueError, OverflowError, WebError):
+        return None
+    return (
+        mode,
+        enabled,
+        window_start,
+        None if interval >= 1440 else window_end,
+        interval,
+        () if month_days else weekdays,
+        month_days,
+        str(job.get("activeFrom") or ""),
+        str(job.get("activeUntil") or ""),
+    )
+
+
+# The start of the report of a run that some chats got and some did not.
+_SCHEDULE_PARTIAL_RE = re.compile(r"Sent to \d+/\d+ chats\. ")
+# The last error of a schedule whose LINE account has to be connected again.
+_SCHEDULE_SIGN_IN_ERROR = "LINE session expired or was revoked. Connect the account again."
+
+
+class _PartlySent(Exception):
+    """A send of several items (a text, then its picture) that failed after some of
+    them went out: ``message_ids`` went out, and ``error`` stopped the rest."""
+
+    def __init__(self, error: BaseException, message_ids: list[Any]) -> None:
+        super().__init__(str(error))
+        self.error = error
+        self.message_ids = message_ids
 
 
 def _advance_after_success(job: dict[str, Any]) -> None:
@@ -31097,7 +34902,7 @@ def _advance_after_success(job: dict[str, Any]) -> None:
         job["nextRunAt"] = None
         job["status"] = "completed"
         return
-    job["nextRunAt"] = _next_repeat_epoch(job, _repeat_resume_after(job))
+    job["nextRunAt"] = _next_run_after(job, _dt.datetime.now())
     if not job["nextRunAt"]:
         job["enabled"] = False
     job["status"] = "waiting" if job["nextRunAt"] else "completed"
@@ -31106,45 +34911,255 @@ def _advance_after_success(job: dict[str, Any]) -> None:
 
 
 def _advance_after_error(job: dict[str, Any]) -> None:
-    if job.get("mode") == "once":
+    if job.get("mode") != "once":
+        job["nextRunAt"] = _next_run_after(job, _dt.datetime.now())
+    if job.get("mode") == "once" or not job["nextRunAt"]:
+        # Nothing more to run (a repeating job past its last day): switched off, so the
+        # scheduler does not try it again from now while its window is still open.
         job["enabled"] = False
         job["nextRunAt"] = None
-        return
-    job["nextRunAt"] = _next_repeat_epoch(job, _repeat_resume_after(job))
 
 
-def _simulate_schedule_runs(job: dict[str, Any], horizon: float, *, limit: int) -> list[float]:
-    """Upcoming run times (epoch seconds) of an enabled job, up to ``horizon``."""
+def _simulate_schedule_runs(
+    job: dict[str, Any],
+    horizon: float,
+    *,
+    limit: int,
+    slack: float = SCHEDULE_ON_TIME_SLACK_SECONDS,
+) -> list[float]:
+    """Upcoming run times (epoch seconds) of an enabled job, up to ``horizon``. ``slack``:
+    see _due_run_deferred (a run waiting for a sender is decided as the sender will)."""
     runs: list[float] = []
-    next_run = job.get("nextRunAt") or _compute_next_epoch(job)
+    next_run = job.get("nextRunAt") or _next_run_from_now(job)
+    if next_run:
+        # As the scheduler goes on from it when it is due (see run_due_schedules).
+        why, until = _due_run_deferred(job, max(float(next_run), time.time()), slack=slack)
+        if why:
+            next_run = until
+    # A once-a-day run goes out after its random delay, once drawn: one that carries it past
+    # the next start takes that start's place (see _next_run_after). The end of that delay
+    # stands here for the end of the run. Any run that ends later, after its next start,
+    # takes that start's place as well, and this list, read before, may still name that
+    # start. Such a run went out later (a scheduler round later, held for the hourly or
+    # daily limit, tried again after a failure, or after a wait for a free sender or for
+    # its account, busy with another LINE call), or its send took long (several chats,
+    # slow content, a slow answer from LINE), for example.
+    delayed = 0.0
+    if next_run and _is_once_a_day(job) and next_run == job.get("nextRunAt"):
+        delayed = _drawn_delay(job)
     remaining = (
         int(job.get("maxRuns") or 0) - int(job.get("sentCount") or 0)
         if int(job.get("maxRuns") or 0)
         else limit
     )
-    interval = max(1, int(job.get("intervalMinutes") or 1))
     while next_run and float(next_run) <= horizon and len(runs) < min(limit, max(0, remaining)):
         runs.append(float(next_run))
         if job.get("mode") == "once":
             break
-        current = _dt.datetime.fromtimestamp(float(next_run))
-        after = (
-            _dt.datetime.combine(current.date() + _dt.timedelta(days=1), _dt.time(0, 0))
-            if interval >= 1440
-            else current + _dt.timedelta(minutes=interval)
-        )
-        next_run = _next_repeat_epoch(job, after)
+        ended = float(next_run) + delayed
+        delayed = 0.0
+        next_run = _next_run_after(job, _dt.datetime.fromtimestamp(ended))
     return runs
 
 
-def _repeat_resume_after(job: dict[str, Any]) -> _dt.datetime:
+def _next_run_after(job: dict[str, Any], ended: _dt.datetime) -> float | None:
+    """The next run of a repeating job after a run of it that ended at ``ended``."""
     interval = max(1, int(job.get("intervalMinutes") or 1))
-    now = _dt.datetime.now()
     if interval >= 1440:
-        # Once-a-day jobs restart at the next day's window instead of drifting
-        # later by the scheduler's polling delay every day.
-        return _dt.datetime.combine(now.date() + _dt.timedelta(days=1), _dt.time(0, 0))
-    return now + _dt.timedelta(minutes=interval)
+        # A once-a-day job goes on at the start of its next window: it does not drift
+        # later by the scheduler's polling delay, run twice in a window that crosses
+        # midnight, or skip a day after a run that ends after midnight (late by its
+        # random delay, a wait for a free sender, the hourly limit or a retry).
+        return _next_repeat_epoch(job, ended, start_after=True)
+    return _next_repeat_epoch(job, ended + _dt.timedelta(minutes=interval))
+
+
+def _is_once_a_day(job: dict[str, Any]) -> bool:
+    """A repeating job that runs once in each window (see _next_run_after)."""
+    try:
+        return job.get("mode") != "once" and int(job.get("intervalMinutes") or 1) >= 1440
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _last_run_time(job: dict[str, Any]) -> _dt.datetime | None:
+    """When the job's last run that sent something ended (lastRunAt, local time), or None
+    when it has none, or one this system cannot read as a time (a damaged value, or one
+    before 1970 on Windows)."""
+    try:
+        last = _dt.datetime.fromisoformat(str(job.get("lastRunAt") or ""))
+        if last.tzinfo is not None:
+            last = last.astimezone().replace(tzinfo=None)
+        last.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+    return last
+
+
+def _next_run_from_now(job: dict[str, Any]) -> float | None:
+    """The next run of a job worked out from now (it is switched on, an edit changes
+    when it runs, its account's schedules are resumed, or it has none): see
+    _compute_next_epoch. A once-a-day job that went out in its window open now goes on
+    at the start of its next window instead, so switching it off and on, or editing it,
+    never sends it twice in one window."""
+    next_run = _compute_next_epoch(job)
+    if not next_run or not _is_once_a_day(job):
+        return next_run
+    last = _last_run_time(job)
+    if last is None or last > _dt.datetime.now():
+        return next_run
+    try:
+        after_last = _next_run_after(job, last)
+    except (WebError, TypeError, ValueError, OverflowError, OSError):
+        return next_run  # a last run it cannot work from: as if it had none
+    # None: no window of it opens after its last run, which was in the one open now.
+    return max(float(next_run), after_last) if after_last else None
+
+
+# The history and activity-log notes of a due run that did not go out (see
+# _due_run_deferred).
+_MISSED_RUN = (
+    "Not sent: it could not go out at its time (LinePassport was not running, the LINE "
+    "account had to be connected again, or a send limit held it), and its next time is "
+    "nearer. It goes out then."
+)
+_ALREADY_SENT_RUN = "Not sent again: it went out already in this time window."
+
+
+def _due_run_deferred(
+    job: dict[str, Any], now: float, *, slack: float = SCHEDULE_ON_TIME_SLACK_SECONDS
+) -> tuple[str, float | None]:
+    """Whether a run of a once-a-day job that is due at ``now`` does not go out now: why
+    ("" when it goes out now), and its next run (None: it has none left). ``slack``: see
+    _run_on_time.
+
+    "already_sent": it went out since its latest window opened (Run now sent it, or an
+    older version stored a next run inside the window it had run in). It goes on at the
+    start of its next window, so it goes out at most once in each window.
+
+    "missed": it is late (LinePassport was not running, its account had to be connected
+    again, or it waited in the queue for the hourly or daily limit, or long for a free
+    sender: see _run_on_time), and the next start of it after now is nearer than its own
+    time (see _run_own_time; a run with none counts from the start before it), and than
+    any start of it since then, are before now. It goes on at that next start, so a late
+    run does not go out shortly before the next one; a late run nearer its own time, or a
+    start since, goes out now. A run on time goes out, even when its random delay brings
+    it near the next start (the next start's run then goes out in its own window). Only
+    its starts and its own time count, not where its windows end, so two jobs whose
+    timing is equal (see _schedule_timing) hold the same runs from a next run at a start.
+    """
+    if not _is_once_a_day(job):
+        return "", None
+    try:
+        at = _dt.datetime.fromtimestamp(now)
+        last = _last_run_time(job)
+        if last is not None and last <= at:
+            after_last = _next_run_after(job, last)
+            if after_last is None or after_last > now:
+                return "already_sent", after_last
+        if _run_on_time(job, now, slack):
+            return "", None
+        upcoming = _next_repeat_epoch(job, at, start_after=True)
+        if upcoming is None:
+            return "", None  # no start of it is left: it goes out
+        # What lies at or after this is at least as near before now as its next start is
+        # after now.
+        midpoint = 2 * now - upcoming
+        own = _run_own_time(job, now)
+        if own is not None and own >= midpoint:
+            return "", None
+        since = _dt.datetime.fromtimestamp(midpoint) - _dt.timedelta(microseconds=1)
+        newer = _next_repeat_epoch(job, since, start_after=True)
+    except (WebError, TypeError, ValueError, OverflowError, OSError):
+        # A job whose times cannot be read goes out as before (a scheduler round goes on).
+        return "", None
+    if newer is not None and newer <= now:
+        return "", None  # a start of it since its own time is nearer than its next start
+    return "missed", upcoming
+
+
+def _run_own_time(job: dict[str, Any], now: float) -> float | None:
+    """The time a due run of a job is for, or None when it has none of its own:
+    - for a run that waits in the queue for the hourly or daily limit (which moves its next
+      run on every few minutes, see run_due_schedules), the time it was for before it
+      waited (queuedFrom);
+    - for a retry, the time of the run it retries moved on by its pause (retryFrom, set by
+      _execute_schedule; kept when a sign-in failure or a Run now ends the retry and leaves
+      its next run);
+    - for a retry from before those notes, or a next run inside one of its windows (its
+      start, or a time worked out from now inside its window), its next run;
+    - None for a next run outside every window of it that is not a retry (one an older
+      version stored, at 00:00 or at a time that drifted), or one that cannot be read.
+    A note counts only while the next run is the one it was made for."""
+    try:
+        for key in ("queuedFrom", "retryFrom"):
+            note = job.get(key)
+            if isinstance(note, list) and len(note) == 2 and note[1] == job.get("nextRunAt"):
+                return None if note[0] is None else float(note[0])
+        next_run = float(job.get("nextRunAt") or now)
+        if job.get("retrying"):
+            return next_run
+        inside = _next_repeat_epoch(job, _dt.datetime.fromtimestamp(next_run))
+    except (WebError, TypeError, ValueError, OverflowError, OSError):
+        return None
+    return next_run if inside is not None and inside <= next_run + 0.001 else None
+
+
+def _run_on_time(job: dict[str, Any], now: float, slack: float) -> bool:
+    """Whether a due run of a once-a-day job comes due on time: its next run is a time of its
+    own (see _run_own_time), or a retry's (a retry is on time by its pause, whatever the run
+    it retries), and not one the queue for the hourly or daily limit set (a run that waited
+    there is late), and now is no later than that next run, its random delay and ``slack``
+    (a few of the scheduler's rounds, or a wait for a free sender)."""
+
+    def noted(key: str) -> bool:
+        note = job.get(key)
+        return isinstance(note, list) and len(note) == 2 and note[1] == job.get("nextRunAt")
+
+    if noted("queuedFrom"):
+        return False
+    if not noted("retryFrom") and _run_own_time(job, now) is None:
+        return False
+    return now <= float(job.get("nextRunAt") or 0) + _drawn_delay(job) + slack
+
+
+def _drawn_delay(job: dict[str, Any]) -> float:
+    """The random delay drawn for a job's next run (see run_due_schedules), in seconds: 0
+    when none is drawn for that next run, or the stored one is not a delay (a damaged
+    value: not a number, which text is even when it reads as one, below 0 or above a day;
+    the scheduler's round stores none in its place when it next looks at the job). A
+    stored true or false, which the app never writes, counts as the number Python reads it
+    as: 1 or 0."""
+    if job.get("jitterFor") != job.get("nextRunAt"):
+        return 0.0
+    stored = job.get("jitter") or 0
+    if not isinstance(stored, (int, float)):
+        return 0.0
+    try:
+        delay = float(stored)
+    except OverflowError:  # a whole number too large for a float
+        return 0.0
+    return delay if 0 <= delay <= 86_400 else 0.0
+
+
+def _run_on_time_safe(job: dict[str, Any], now: float) -> bool:
+    """_run_on_time for a once-a-day job with the round's margin; False for any other job,
+    or one whose times cannot be read."""
+    if not _is_once_a_day(job):
+        return False
+    try:
+        return _run_on_time(job, now, SCHEDULE_ON_TIME_SLACK_SECONDS)
+    except (WebError, TypeError, ValueError, OverflowError, OSError):
+        return False
+
+
+def _sender_slack(job: dict[str, Any]) -> float:
+    """How late a run a sender starts may come due and still be on time: a wait for a free
+    sender for a run the round handed over on time (onTimeFor, see run_due_schedules), the
+    round's margin for one it let out late."""
+    if job.get("onTimeFor") is not None and job.get("onTimeFor") == job.get("nextRunAt"):
+        return SCHEDULE_SENDER_WAIT_SECONDS
+    return SCHEDULE_ON_TIME_SLACK_SECONDS
 
 
 def _append_history(job: dict[str, Any], entry: dict[str, Any]) -> None:
@@ -31258,6 +35273,8 @@ def _send_job_contents(
                 ok=False,
                 data={"kind": kind, "to": to},
             )
+            if message_ids:
+                raise _PartlySent(exc, message_ids) from exc
             raise
         message_ids.append(result.get("id") if isinstance(result, dict) else result)
         _bot_log(
@@ -31720,16 +35737,27 @@ AI_CHAT_MODEL_SKIP = ("tts", "audio", "live", "embedding", "imagen", "veo", "aqa
 def _ai_model_lists(provider: str, models: list[dict[str, Any]]) -> dict[str, list[str]]:
     """Chat, embedding and image model names for the Settings -> AI lists, sorted.
 
-    Gemini says what each model can do; Ollama does not, so its embedding models are
-    told apart by name or by a BERT family.
+    The provider clients say what each model is for (``kind``: "chat", "embedding",
+    or "other", which is left out). Gemini's list says which methods each model
+    supports instead; its image models get their own list. A list without either
+    is told apart by name.
     """
     chat: set[str] = set()
     embedding: set[str] = set()
     image: set[str] = set()
     for item in models:
+        if not isinstance(item, dict):
+            continue
         name = str(item.get("name") or "").strip()
         lowered = name.lower()
         if not name:
+            continue
+        kind = item.get("kind")
+        if isinstance(kind, str) and kind:
+            if kind == "chat":
+                chat.add(name)
+            elif kind == "embedding":
+                embedding.add(name)
             continue
         if provider == "gemini":
             if item.get("embedding"):
@@ -31740,7 +35768,7 @@ def _ai_model_lists(provider: str, models: list[dict[str, Any]]) -> dict[str, li
                 image.add(name)
             elif not any(word in lowered for word in AI_CHAT_MODEL_SKIP):
                 chat.add(name)
-        elif "embed" in lowered or str(item.get("family") or "").lower() in {"bert", "nomic-bert"}:
+        elif "embed" in lowered:
             embedding.add(name)
         else:
             chat.add(name)
@@ -31938,11 +35966,17 @@ def _same_origin_provider_url(url: str, base_url: str) -> str:
 
 
 def _mask_secret(value: str) -> str:
+    """A saved key as a page shows it: "••••", plus its last 4 characters when long.
+
+    The tail is shown only for keys of MASK_SECRET_TAIL_MIN_LENGTH characters or more;
+    a shorter key (a self-hosted token, say) is a fixed "••••" that does not show its
+    length either.
+    """
     value = value or ""
     if not value:
         return ""
-    if len(value) <= 4:
-        return "•" * len(value)
+    if len(value) < MASK_SECRET_TAIL_MIN_LENGTH:
+        return "••••"
     return "••••" + value[-4:]
 
 
@@ -33200,6 +37234,19 @@ def _message_box_messages(box: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(messages, list):
             return [message for message in messages if isinstance(message, dict)]
     return []
+
+
+def _inbox_line_time_ms(boxes: Any) -> int | None:
+    """The newest message time in an inbox, on LINE's clock: LINE built the inbox
+    after it, so a message the inbox lacks came later (see
+    AI_AUTO_REPLY_LOOK_SLACK_MS). None for an inbox with no message."""
+    every_box = boxes.get("messageBoxes") if isinstance(boxes, dict) else None
+    newest = 0
+    for box in every_box if isinstance(every_box, list) else []:
+        if isinstance(box, dict):
+            for message in _message_box_messages(box):
+                newest = max(newest, _message_time(message))
+    return newest or None
 
 
 def _message_box_unread_count(box: dict[str, Any]) -> int:

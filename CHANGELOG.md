@@ -7,18 +7,66 @@ All notable changes to OkLine are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **More AI providers for auto reply.** Settings → AI → "AI for auto reply"
+  now has one provider list instead of the Gemini / Ollama / Shared AI cards:
+  Gemini, Claude (Anthropic) and ChatGPT (OpenAI) first, then GLM (Z.ai),
+  DeepSeek, Qwen (Alibaba Cloud), Grok (xAI), Mistral AI, Kimi (Moonshot AI)
+  and OpenRouter, and a **Custom API** for any OpenAI-compatible endpoint
+  with its own base URL, model and an optional key. The Custom API address
+  must be a public `https://` address: private, loopback, link-local and
+  reserved addresses are refused, and its key is only sent to that address
+  (the form says so as soon as another server's address is typed). Each call
+  to it has one time limit for looking up the host, connecting, the TLS
+  handshake, the headers and the body together; its answers have a size cap
+  and may not be compressed. Search vectors longer than 8192 numbers are
+  refused, and one workspace keeps at most 1,000,000 vector numbers (all
+  workspaces together 4,000,000, first come first served, so a few large
+  workspaces can use that up); past that its shop info is searched by
+  keyword instead, with the reason shown. An ask waits at most 15 seconds
+  for its question's search vector and 60 for the answer. AI answers are
+  cut to 5,000 characters (LINE's longest message) before they are stored
+  or sent. The question log that every workspace shares keeps at most 500
+  questions of one workspace, and once it is full (5,000) the workspace
+  holding the most questions loses its oldest, so a busy workspace no
+  longer pushes out a quieter one's questions. These limits keep the shared
+  AI record from growing without bound through AI answers, questions and
+  search vectors; moving each workspace's AI data into a record of its own
+  is planned.
+  Each provider keeps its own API key (shown as `••••abcd`, or only `••••`
+  for a key shorter than 16 characters; Show/Hide while typing), so switching
+  providers never sends one provider's key to another, and switching back
+  finds that provider's saved key and models again. **Refresh models** works
+  for every provider, and **Save and test** checks the provider with a short
+  request; while that check fails, step 1 of the auto reply setup stays open
+  with the reason. Claude needs Python 3.10 or newer on the server
+  (`pip install "okline[claude]"`; the Docker image has it); without it
+  Claude is listed as not available. A Claude request keeps its 60-second
+  limit: it is sent again at most once, after a rate limit or a server error
+  whose short wait still fits, and never after a timeout or a lost
+  connection, which may already have been answered and billed. New error
+  codes, each with Thai and English text: `ai_base_url_required`,
+  `ai_base_url_invalid`, `ai_base_url_not_found` (the host does not exist),
+  `ai_base_url_blocked`, `ai_model_required`, `ai_provider_unavailable`, and
+  `ai_unavailable` (HTTP 422) when the provider fails to answer, which
+  replaces `ollama_unavailable`. `ai_key_required` no longer names Gemini and
+  Save returns it too; `ai_settings_invalid` now has page text, and `ollama`
+  and `global` get it like any unknown provider. An auto reply whose owner
+  has no AI set up skips messages quietly and shows "AI not configured".
 - **Refresh models in Settings → AI.** "AI for auto reply" has a **Refresh
-  models** button next to the chat model: it asks Gemini (with the key typed
-  in the form, else the saved one) or the Ollama server (the URL in the form)
-  which models it offers, and turns the chat and search model boxes into lists
-  to pick from; "Type a name…" still takes any model. The chat model now sits
+  models** button next to the chat model: it asks the chosen provider (with
+  the key typed in the form, else that provider's saved key; the Custom API
+  also uses the address in the form) which models it offers, and turns the
+  chat and search model boxes into lists to pick from; "Type a name…" still
+  takes any model. The chat model now sits
   next to the key instead of under Advanced options. In "AI image settings",
   the same button adds the Gemini image models that section's key can use to
   the Google model list, and a model picked from it stays listed after a
   reload (`POST /api/ai/models`, needs the manage-accounts permission; nothing
-  is saved until Save). An API key pasted with invisible characters (from a
-  chat or a document) is cleaned when it is used or saved, and one with
-  characters no key has is refused with a message saying so.
+  is saved until Save). It waits at most 30 seconds for the provider, without
+  retrying, and then says the models could not be loaded. An API key pasted
+  with invisible characters (from a chat or a document) is cleaned when it is
+  used or saved, and one with characters no key has is refused with a message
+  saying so.
 - **Pick a proxy provider and type its key.** The proxy fields (adding a LINE
   account, Edit in Settings → Account Management, adding a LINE OA) have a
   **Proxy source** choice next to the manual host and port: Bright Data,
@@ -192,8 +240,8 @@ All notable changes to OkLine are documented here. The format follows
   defaults (once a day, never every 15 minutes). Repeating jobs support
   `weekdays`, and once-a-day jobs no longer drift.
 - **Auto reply without `/god`.** A 3-step setup (choose the AI brain → shop info
-  → try a conversation): shops can use a **Gemini API key** or their own Ollama
-  (`/api/assistant/settings`, falls back to the global God AI). Shop info is
+  → try a conversation): shops pick an AI provider and use their own API key
+  (`/api/assistant/settings`). Shop info is
   edited as topics, saved automatically, and every test answer shows which topic
   it came from. Unanswered questions can be answered once and saved into a
   "Frequently asked" topic.
@@ -233,6 +281,53 @@ All notable changes to OkLine are documented here. The format follows
   Only known browser push services are accepted as endpoints.
 
 ### Changed
+- **The God's global knowledge helps every workspace.** The text and API
+  sources on the God page's "Knowledge / RAG" tab used to reach only the
+  workspaces on the shared AI. Every workspace's auto reply now searches it by
+  keyword matching (no embeddings), after the shop's own info, and sends the
+  matching parts to that workspace's own AI provider, so it should hold no
+  secrets. Saving, syncing and rebuilding its index need no AI. An English
+  word matches it only as a whole word or a longer or shorter form of one
+  ("red" no longer matches inside "ordered"), so short English questions do
+  not pull in unrelated text, and a long message is matched by at most 300
+  different terms from its start (English words, and 3-letter groups of Thai
+  words), each English word by at most its first 40 letters. In a workspace's
+  answer history and test chat it is cited
+  as "Shared info from the system administrator", not by the God's file and
+  source names.
+- **Thai keyword matching.** Thai vowel and tone marks no longer split words,
+  so a Thai question finds the related Thai shop info and global knowledge
+  more often.
+- **Gemini's default chat model is `gemini-3.8-flash`.** `gemini-2.5-flash` is
+  deprecated and Google reroutes it from 2026-12-01. Workspaces that set up
+  Gemini before this release saved `gemini-2.5-flash` as their chat model
+  (the old form always sent the default) and keep it, so the reroute applies
+  to them. To use the new default, the owner picks `gemini-3.8-flash` (or
+  clears the chat model box) in Settings → AI → "AI for auto reply" and
+  presses Save and test.
+- **Auto replies share the workers fairly.** The four auto-reply workers that
+  every workspace shares run at most two replies of one workspace at a time.
+  Further Telegram and LINE OA messages of that workspace wait in a queue of
+  20, oldest first; when it is full the oldest is dropped with an activity
+  log line ("Waiting AI reply dropped", `ai.auto_reply.dropped`), and what
+  it used of the reply limits (20 a minute per account, 6 per chat) is given
+  back. Further LINE messages wait too: a place that frees up goes to the
+  one that has waited longest of those the latest check found (up to 8 per
+  account, a workspace's accounts in turn) and to the queue in turn, so
+  neither kind of message holds up the other, and the rest wait for the
+  next check. A chat that wrote more at once than the 10 messages LINE
+  shows of it (a photo album, say) goes after the chats that were waiting
+  at the last check that found it with nothing to answer, though not always
+  after one that began to wait a few seconds before it. In an account with
+  more than 500 chats it can still go ahead of chats that waited longer when
+  its customer's last message before got no reply (and, with 1,000 chats or
+  more, when the customer is new to the account or not among its 1,000
+  newest chats). A waiting
+  LINE message uses the reply limits only once its reply starts (a
+  Telegram or LINE OA message uses them when it arrives).
+  A LINE account that has used its 20 auto replies of the last minute now
+  leaves its further chats waiting until that minute is over instead of
+  passing them over; a chat past its own 6 a minute is still passed over.
 - **Deleting an account deletes its customers.** Deleting a LINE, LINE OA or
   Telegram account in Settings → Account Management now also deletes every
   customer who chatted only through that account, with their tags, notes,
@@ -269,7 +364,241 @@ All notable changes to OkLine are documented here. The format follows
   account's own words. The Settings tab for staff alerts is now "Telegram
   alerts".
 
+### Removed
+- **Ollama.** The Ollama choice of "AI for auto reply", its address field and
+  the Ollama client are gone.
+- **The shared AI.** The God page's "Ollama" tab ("Global AI / Ollama") and
+  its routes (`GET`/`POST /api/god/ai/settings` and `POST /api/god/ai/test`,
+  which now answer 404). Every workspace uses its own key; the God page keeps
+  "Knowledge / RAG" and "Unanswered". Its rebuild-index button now sits next
+  to the knowledge.md editor: with unsaved text in the editor it saves and
+  indexes that text first, and saving, syncing or deleting an API source no
+  longer clears unsaved text. The menu count of unanswered questions loads
+  with the page and shows "500+" when more than the 500 it lists are waiting.
+- **Upgrading.** Back up before updating (PostgreSQL: `pg_dump`; file
+  storage: the state folder, at least `global_ai.json`, `ai_auto_reply.json`
+  and `bot_logs.json`). The first start after the update changes the AI
+  records one way: every workspace's AI settings move to a new shape, the
+  shared AI's settings are deleted, and God answers filed under a staff
+  member move to the team owner. The previous version cannot read the new
+  shape (a workspace's own Gemini key looks missing, and the shared AI is
+  gone), so going back to it needs that backup restored too. Workspaces that
+  relied on the shared AI or on Ollama have their auto reply switched off,
+  and their owners see a notice in Settings → AI and on the Auto reply page
+  asking them to pick a provider and add their key; an account switched off
+  this way says so on the Auto reply page until it is switched on again. A
+  workspace that relied on a shared AI set to answer only from shop info
+  keeps that setting; nothing else of the shared AI's settings carries over.
+  Nobody is moved to Gemini with their picture AI key. A state file saved
+  as UTF-16 or UTF-32, or with a byte order mark (as Notepad and Windows
+  PowerShell can save them), is now read normally. A `global_ai.json` that
+  cannot be read at all is not changed by the update, which runs on a later
+  start once the file is repaired. The next save of AI settings, shop info
+  or the God's knowledge does write a new file in its place, so the app
+  first keeps the damaged one as `global_ai.json.unreadable-<date>-<time>`
+  (once, however often it restarts): repair from that copy or from the
+  backup. While no copy can be kept (a full disk), nothing is saved over a
+  damaged state file LinePassport has found; those saves fail until there is
+  room, and the page says to make room. Repair a state file, or put a copy
+  back, with LinePassport stopped: it keeps sign-ins, accounts and schedules
+  in memory and saves them over a file changed while it runs. An install moving
+  to PostgreSQL now stops at the state files it cannot read, before moving
+  anything into the database, and names each one and the copy it kept:
+  repair them (or move them away to go on without them) and start again.
+  Self-hosted installs that used a local Ollama need a cloud provider's key,
+  or a public `https://` OpenAI-compatible endpoint as a Custom API, since
+  local and private addresses are refused.
+
 ### Fixed
+- **A God answer to a staff member's question was lost.** Answering it on the
+  God page's "Unanswered" tab saved the answer under the staff member, where
+  no shop's AI looked. It now joins the shop info of the staff member's team
+  owner, like an answer to the owner's own question. Answers given before
+  this release move to the team owner's shop info on the first start, once;
+  those of removed users, or of staff whose owner is gone, stay where they
+  are.
+- **A LINE message could get two auto replies.** A reply that finished while
+  the next check was reading the chats could be sent again, and a check that
+  failed partway left its chats never answered again.
+- **Every sealed LINE message cost a request to LINE.** Reading a Letter
+  Sealing message asked LINE for the sender's key each time, so the
+  auto-reply check, the inbox and customer records made one LINE request
+  per sealed message they read, again and again for chats waiting for an
+  auto reply. Each key is now asked for once.
+- **A full disk dropped auto replies the AI had already answered.** When
+  the AI question log could not be saved, the answer was not sent (and Try
+  a conversation showed an error). It now goes out, and Try a conversation
+  on the Knowledge page shows the answer with a note that the question could
+  not be saved.
+- **A LINE message could go unanswered when saving or reading failed.** A
+  failed read of LinePassport's own data while an auto reply was being
+  prepared (a refused database connection, say) passed the message over
+  for good, and a reply that failed while its chat's read position could
+  not be saved left the chat unanswered until a restart. Such a message
+  now waits until LinePassport can save again (the AI is not asked again
+  meanwhile), and is answered then.
+- **A scheduled send could go out twice.** When the schedules could not be
+  saved just after a scheduled send went out (a full disk, a database that
+  dropped the connection, a file another program held open), the send
+  counted as failed and could go out to every chat again, at the retry 5
+  minutes later or after a restart; a send whose count toward the hourly
+  and daily limits could not be saved counted as failed too. A send that
+  went out now counts as sent, and the schedules are saved at the
+  scheduler's next round that can (it tries every 10 seconds). While they
+  cannot be saved no scheduled send starts, and the schedules page says so;
+  it also names a send that went out meanwhile, because restarting
+  LinePassport before the schedules are saved sends it again. A Run now to
+  several chats is saved as started before it is answered, so one that
+  cannot start is refused (before, it was queued, dropped without a word and
+  shown as sent), and the page now says it has started, not that it was
+  sent. Before, a
+  round that could not save the schedules, or read their settings, left due
+  schedules unsent until a restart. A change to the schedules that could not
+  be saved is not kept either (a new, edited, paused or deleted schedule,
+  Clear stuck jobs and Resume all), so creating a schedule again after such
+  an error no longer adds it twice.
+- **A scheduled text with a picture could go out twice.** When the picture
+  failed after the text went out (LINE's picture upload failing, say), the
+  chat counted as not sent, and when every chat failed that way the retry 5
+  minutes later sent the text to every chat again. A chat that got the text
+  now counts as sent, and the schedule names the chats whose picture did
+  not go out.
+- **A scheduled send cut short went wrong.** When LINE asked to sign in
+  again partway through a send to several chats, the whole send stayed due,
+  so once the account was connected again the chats that had got it got it
+  again. When LinePassport was stopped (Ctrl-C) partway, the send counted
+  as sent to every chat, and the rest never got it. Now the chats that got
+  it do not get it again, and the schedule names those it did not reach
+  (also once it waits for the account to be connected again); a send
+  stopped before it reached any chat is not counted, and goes out once
+  LinePassport starts again (a Run now says it was not sent: one to a
+  single chat on the page, one to several chats on the schedule). When
+  LinePassport ends without stopping (a crash, or a Docker container that
+  is stopped or redeployed), a send it was in the middle of still goes out
+  again in full when it starts. Either way, a once-a-day send goes out then
+  only while that is nearer its time than its next time (see the
+  once-a-day entry below).
+- **A scheduled send waiting its turn ignored changes made meanwhile.**
+  LinePassport sends at most four schedules at a time (scheduled sends, and
+  Run nows to several chats), across all workspaces; one that comes due
+  meanwhile waits its turn. It then went out even when it had been switched
+  off, paused with Pause all or moved to a later time meanwhile. It now goes
+  out only if it is still due when its turn comes. Editing what a schedule
+  sends, or to whom, keeps its next run, so a send that was due (waiting its
+  turn, queued for the hourly limit or about to be tried again) is no longer
+  put off to its next day. Clear stuck jobs now stops a Run now to several
+  chats that waits its turn (deleting the schedule does too, and an edit
+  made meanwhile is what goes out). Editing a schedule while it is sending
+  no longer shows it as waiting, which let a second run of it start beside
+  the first.
+- **A once-a-day scheduled send could go out twice, or skip a day.** A send
+  that goes out once a day (every 1440 minutes in Custom, say) and whose
+  time window ends after midnight (22:00 to 06:00, say) went out twice on
+  its first night, at its start and again at midnight, and then at midnight
+  each night instead of at its start; one that runs on some days only went
+  out twice on each of its days that follows a day it does not run (every
+  time for a weekly or monthly send, every Monday night for one from Monday
+  to Friday, the days Custom starts with). A once-a-day send whose time
+  window ends by midnight and that went out after midnight skipped the next
+  day: one late by its random delay (as an every-day send at 23:59 often
+  was), a wait for a free sender, the hourly limit or a retry. Switching a
+  once-a-day send off and on, or editing when it runs, after it went out in
+  a time window that is still open sent it again. After each run, a
+  once-a-day send now goes on at the start of its next window, and it goes
+  out at most once in each window (a Run now in its window counts too). A
+  once-a-day send that could not go out at its time (LinePassport was not
+  running, the LINE account had to be connected again, or the hourly or
+  daily limit held it) went out as soon as it could, however late; it now
+  goes out late only while that is nearer the time it was due than its next
+  time (if it then fails, its retry 5 minutes later still goes out), however
+  long its time window, and otherwise waits for its next time, and its
+  history and the activity log say the one it missed was not sent. A
+  repeating send that failed twice on its last day tried again every few
+  minutes until its time window closed, with a failure alert every other
+  try; it now stops there.
+- **An Incoming API request could send its messages twice.** When the
+  link's counters could not be saved, or read back (a database that went
+  down), after its messages went out, the request answered 500, so a caller
+  that tries again sent them again. It now answers with what was sent, and
+  the link's counters miss that request.
+- **A Telegram bot could stop receiving.** When the bot's place in
+  Telegram's list of updates could not be saved (a database that dropped
+  the connection, a full disk), the bot received nothing more until its
+  account was opened or LinePassport restarted, and the messages it had just
+  answered then got their auto reply again. It now keeps receiving, and
+  saves its place with the next messages. A message that cannot be stored
+  (the database is down, full or read-only) stays with Telegram, which
+  hands it over again: the bot tries again after a pause (5 seconds,
+  growing to a minute), and the messages after it wait with it; Telegram
+  keeps them for a day. A message the database refuses for itself is passed
+  over, and the log says so. A message handed over again that is stored
+  already gets no second auto reply. The bot that sends staff alerts
+  stopped the same way, and then relayed a staff reply to the customer
+  again; a staff reply it cannot handle now waits the same way (one that
+  waited more than 15 minutes is not sent, and the bot says so). A button
+  pressed while a message to the bot before it (a staff reply, say) waits
+  for the database is done if the database is back when the bot tries that
+  message again, 5 seconds after it first could not, and the bot gets to
+  the button within 10 seconds of that first try; otherwise, and for any
+  other button pressed while the database is down, the bot says to press
+  it again, and so it may for a button pressed while it still works through
+  a hundred or more messages that came in meanwhile (a button pressed
+  before LinePassport restarts is still done once it runs again).
+- **A full disk could stop scheduled sends, broadcasts and auto replies.**
+  When the server log was a file on the full disk, a round of the scheduler
+  that failed (a database read, say), or of the broadcasts, the auto
+  replies or the LINE session keeper, ended it until LinePassport
+  restarted, and so did a Telegram bot or LINE OA account that met an
+  error; a LINE OA sign-in that failed then kept showing its expired QR,
+  and adding a LINE OA again was refused until the dialog was closed.
+  Every place that logs an error and goes on now goes on when the
+  log cannot be written, and a damaged state file is read as empty then
+  too, instead of failing the read.
+- **LinePassport could freeze when an account was removed.** Removing an
+  account (or a user) just as the scheduler checked the schedules, the
+  schedules page loaded or a schedule was saved could leave the two waiting
+  for each other, and LinePassport then answered no more requests until it
+  was restarted. None of these waits for the account list while it holds
+  the schedules any more.
+- **Removing an account could leave some of it behind.** A chat stored as
+  the account was being removed came back into the CRM, with its customer
+  and messages, and so did a chat claimed or closed just then (in the chat
+  panel or from a Telegram alert), or a record of that claim or close; a
+  question its auto reply was asking the AI just then stayed in the question
+  log all workspaces share (as did one of a workspace being deleted); a
+  reply ending just then kept its status and log lines; auto-reply settings
+  saved just then were kept, switched on, so the same LINE account added
+  again later answered customers with the AI by itself; a schedule created
+  for it just then was kept, switched on; and a LINE session renewal running
+  just then saved the account's sign-in to disk again. None of these is
+  kept now.
+- **Saving auto-reply settings could make a LINE message get a second
+  reply.** A save that overlapped a reply ending wrote back the chats' read
+  positions from before that reply, so the next check answered the message
+  again.
+- **A start that could not read a state file said "could not bind".** It
+  first tried 20 ports as if each were in use. It now stops at once with
+  the real reason, which names the file. A state file nested too deeply now
+  counts as unreadable (a copy is kept) instead of stopping the start
+  without naming the file.
+- **Syncing a Knowledge API source could undo changes saved meanwhile.** The
+  sync wrote back the whole AI record it had read before fetching, so
+  questions logged and AI settings saved during the fetch were lost. Now only
+  that source's text, sync time and error are written, and a source deleted
+  during the fetch stays deleted. This holds for a shop's sources and for the
+  God page's.
+- **Typing a Gemini key for auto reply switched the picture AI to Google.**
+  The key still fills an empty Google key of the AI image tool, but the
+  image tool keeps the provider it is on.
+- **A blocked Gemini question or answer was an error.** A Gemini safety
+  block now counts as a question the AI cannot answer, like Z.ai's content
+  filter (code 1301), so auto reply hands over to staff with the shop's
+  handover text. An answer cut off by the token limit says so.
+- **Rebuilding a shop's search index could drop questions.** The rebuild
+  wrote back the whole AI record it had read before calling the AI, so a
+  question logged (or another shop's info saved) during the call was lost. It
+  now writes into the latest record, and keeps vectors only when they match
+  the shop info and search model in use.
 - **A URL Python cannot parse broke log scrubbing.** An upstream error
   holding such a URL (an unbalanced IPv6 bracket, for example) made the
   scrubber that hides secrets in log details raise an error. Such a URL now
@@ -311,6 +640,30 @@ All notable changes to OkLine are documented here. The format follows
   admin) and active flag. That locked the owner out, or demoted a God
   account. Only the local user can now use it, and only for itself (403
   otherwise).
+- **Rate limits could be dodged with a made-up account.** A route's own
+  limit (on the AI routes, for example) counted each `?accountId=` value
+  apart, so adding any value gave a fresh allowance. Now only the account
+  routes that read that value (chats, messages, contacts, auto reply and the
+  like) count per account, and only for an account the user can open; every
+  other limited route counts per user.
+- **Saved AI keys were partly shown to staff.** The AI settings showed the
+  last four characters of a saved key to every role, which for a short Custom
+  API key is most of it. A key shorter than 16 characters now shows only
+  `••••`, and staff and roles that cannot change the AI see no key preview and
+  no Custom API address (only whether a key is saved).
+- **A compressed answer could take a lot of memory.** On Python 3.10 and newer
+  the package now requires urllib3 2.6 or newer, which limits how much of a
+  compressed AI provider answer is expanded at once; the Custom API refuses
+  compressed answers outright.
+- **Staff could send a Knowledge API source's key to another server.**
+  Saving a source with a new address kept its saved key, so staff (who may
+  edit and sync sources) could point the owner's source at their own server
+  and receive the key on the next sync. A saved key now stays with the
+  address it was saved for: a source moved to another address (scheme, host
+  or port) needs its key typed again, on a shop's sources and on the God
+  page's. A source that redirects to another address no longer passes on the
+  key or cookies either (a move from `http` to `https` on the same host
+  still does).
 
 ## [2.8.0] - 2026-07-08
 

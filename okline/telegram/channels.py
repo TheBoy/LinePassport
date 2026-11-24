@@ -9,10 +9,10 @@ message is handed to the host (which stores it in the CRM) as it arrives.
 from __future__ import annotations
 
 import threading
-import traceback
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from .._util import print_exc_quietly, storage_unavailable
 from .bot_api import TelegramApiError, TelegramBotClient
 
 CHAT_PREFIX = "tgu"
@@ -139,10 +139,30 @@ class BotChannelWorker:
         self.stop_event.set()
         self.client.close()
 
+    def _first_offset(self) -> int | None:
+        """The saved offset, read again every 30 s while that fails (a database that is
+        down), so the poller does not end; None once it is stopped."""
+        logged = False
+        while not self.stop_event.is_set():
+            try:
+                return int(self.channels.host.tg_offset(self.account_id))
+            except Exception:
+                if not logged:
+                    print_exc_quietly()
+                    logged = True
+                self.stop_event.wait(30)
+        return None
+
     def _run(self) -> None:
         host = self.channels.host
-        offset = host.tg_offset(self.account_id)
+        first = self._first_offset()
+        if first is None:
+            return
+        offset = first
         failures = 0
+        held = 0  # pauses taken while a message could not be stored
+        hold_logged = False
+        offset_unsaved = False
         while not self.stop_event.is_set():
             try:
                 updates = self.client.get_updates(offset, timeout=25, allowed=["message"])
@@ -165,23 +185,58 @@ class BotChannelWorker:
                 self.stop_event.wait(delay)
                 continue
             except Exception:
-                traceback.print_exc()
+                print_exc_quietly()
                 self.stop_event.wait(30)
                 continue
+            # Telegram forgets an update once a poll asks for those after it, so the
+            # offset moves only past the updates handled: the others come again.
+            start = offset
+            handled = offset
+            holding = False
             for update in updates:
-                offset = max(offset, int(update.get("update_id") or 0) + 1)
+                if self.stop_event.is_set():
+                    break  # the rest stay with Telegram, for the next start
+                update_id = int(update.get("update_id") or 0)
                 message = update.get("message")
-                if self.stop_event.is_set() or not isinstance(message, dict):
-                    continue
-                normalized = normalize_message(message)
-                if normalized is None:
-                    continue
+                normalized = normalize_message(message) if isinstance(message, dict) else None
+                if normalized is not None:
+                    try:
+                        host.tg_receive(self.account_id, normalized)
+                    except Exception as exc:
+                        unavailable = storage_unavailable(exc)
+                        if not (unavailable and hold_logged):
+                            print_exc_quietly()  # an outage is said once, not per retry
+                        if unavailable:
+                            # Not stored (a database that is down, a full disk): it stays
+                            # with Telegram, and it and the ones after it are tried again
+                            # after a pause. A message refused for itself is passed over,
+                            # so it cannot hold up the others.
+                            hold_logged = True
+                            holding = True
+                            break
+                handled = max(handled, update_id + 1)
+            if handled != offset:
+                offset = handled
                 try:
-                    host.tg_receive(self.account_id, normalized)
+                    host.tg_save_offset(self.account_id, offset)
+                    offset_unsaved = False
                 except Exception:
-                    traceback.print_exc()
-            if updates:
-                host.tg_save_offset(self.account_id, offset)
+                    # Polling goes on from the offset in memory (the next poll tells
+                    # Telegram these updates were handled), and the save is tried again
+                    # after the next updates. A restart before that hands them over
+                    # again, and the host passes over a message it stored already.
+                    if not offset_unsaved:
+                        print_exc_quietly()
+                    offset_unsaved = True
+            if not holding:
+                held = 0
+                hold_logged = False
+            elif offset == start:
+                self.stop_event.wait(POLL_BACKOFF_SECONDS[min(held, len(POLL_BACKOFF_SECONDS) - 1)])
+                held += 1
+            # Otherwise this poll handled updates before the one it holds: the next poll,
+            # at once, tells Telegram so (a restart in a pause would hand them over again),
+            # and the pause comes after it.
 
 
 class TelegramChannels:

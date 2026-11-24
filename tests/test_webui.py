@@ -360,17 +360,845 @@ def test_settings_ai_has_refresh_models_for_both_ai_sections():
     )
 
 
+def _run_node(tmp_path, name: str, source: str):
+    path = tmp_path / name
+    path.write_text(source, encoding="utf-8")
+    result = subprocess.run(
+        ["node", str(path)], capture_output=True, text=True, encoding="utf-8", timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+# The auto-reply AI form against GET /api/assistant/settings as the server sends it:
+# the provider list in server order, each with its own saved key preview and models.
+BRAIN_PRELUDE = FAKE_DOM + r"""
+const state = {assistantBrain: null};
+const posted = [];
+const answers = [];
+function post(url, body) {
+  posted.push([url, JSON.parse(JSON.stringify(body))]);
+  return new Promise((resolve, reject) => answers.push({resolve, reject}));
+}
+const toasts = [];
+function toastError(err) { toasts.push(err.code || err.message); }
+const notes = [];
+function toast(message, isError) { notes.push([message, Boolean(isError)]); }
+let autoReplyLoads = 0;
+function loadAssistantAutoReply() { autoReplyLoads += 1; return Promise.resolve(); }
+let setupRefreshes = 0;
+function refreshAssistantSetup() { setupRefreshes += 1; }
+const entry = (id, label, group, extra) => ({
+  id, label, group, available: true, unavailableReason: "", keyRequired: true, hasApiKey: false,
+  apiKeyPreview: "", keyHint: "", keyPlaceholder: "sk-...", chatModel: "", embeddingModel: "",
+  defaultChatModel: "", defaultEmbeddingModel: "", embeddings: false, needsBaseUrl: false, baseUrl: "",
+  ...extra
+});
+const PROVIDERS = [
+  entry("gemini", "Gemini (Google)", "main", {keyHint: "aistudio.google.com -> Get API key",
+    keyPlaceholder: "AIza...", defaultChatModel: "gemini-3.8-flash",
+    defaultEmbeddingModel: "gemini-embedding-001", embeddings: true}),
+  entry("anthropic", "Claude (Anthropic)", "main", {keyHint: "console.anthropic.com -> API keys",
+    keyPlaceholder: "sk-ant-...", hasApiKey: true, apiKeyPreview: "****abcd",
+    chatModel: "claude-opus-5-5", defaultChatModel: "claude-opus-5-5"}),
+  entry("openai", "ChatGPT (OpenAI)", "main", {keyHint: "platform.openai.com -> API keys",
+    defaultChatModel: "gpt-6-luna", defaultEmbeddingModel: "text-embedding-3-small", embeddings: true}),
+  entry("zai", "GLM (Z.ai)", "more", {defaultChatModel: "glm-4.7"}),
+  entry("xai", "Grok (xAI)", "more", {available: false, unavailableReason: "ai_provider_unavailable"}),
+  entry("custom", "Custom API (OpenAI-compatible)", "custom", {keyRequired: false, hasApiKey: true,
+    apiKeyPreview: "****wxyz", chatModel: "my-model", needsBaseUrl: true,
+    baseUrl: "https://llm.example.com/v1"})
+];
+const brain = (extra) => ({
+  provider: "", source: "none", configured: false, enabled: false, canEdit: true, notice: "",
+  imageKeyAvailable: false, strictKnowledge: false, chatModel: "", embeddingModel: "", baseUrl: "",
+  hasApiKey: false, apiKeyPreview: "", providers: JSON.parse(JSON.stringify(PROVIDERS)), ...extra
+});
+const byId = (root, suffix) => root.find((el) => typeof el.id === "string" && el.id.endsWith(suffix));
+const byText = (root, tag, text) => root.find((el) => el.tag === tag && el.textContent === text);
+const labelOf = (root, text) => root.find((el) => el.tag === "label" && el.children[0] && el.children[0].textContent === text);
+function view(slot) {
+  const form = slot.children[0];
+  const key = byId(form, "Key");
+  const url = byId(form, "Url");
+  const [keyLabel, keyRow, keySaved, keyHint] = key.parent.parent.children;
+  const chat = labelOf(form, "brain.model");
+  const search = labelOf(form, "brain.embedding_model");
+  return {
+    form, key, url, keyLabel, keySaved, keyHint, pick: byId(form, "Provider"),
+    notice: form.children[0], pickNote: form.children[2], urlField: url.parent.parent,
+    reveal: keyRow.children[1], chatInput: chat.children[2], chatList: chat.children[1],
+    search, searchInput: search.children[2],
+    refresh: byText(form, "button", "brain.refresh_models"), save: byText(form, "button", "brain.save_test")
+  };
+}
+function fields(v) {
+  return {
+    provider: v.pick.value, keyLabel: v.keyLabel.children[0].textContent,
+    placeholder: v.key.placeholder, key: v.key.value,
+    saved: v.keySaved.hidden ? null : v.keySaved.textContent,
+    hint: v.keyHint.hidden ? null : v.keyHint.textContent,
+    url: v.urlField.hidden ? null : v.url.value, model: v.chatInput.value,
+    search: v.search.hidden ? null : v.searchInput.value,
+    note: v.pickNote.hidden ? null : v.pickNote.textContent
+  };
+}
+""" + "\n"
+
+
+def _brain_source() -> str:
+    # The summary, the model box helper and the form, run as the page runs them.
+    return _block("    function brainProviderInfo", "    async function loadKpiSettingsForm")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_the_ai_form_follows_the_picked_provider_and_keeps_keys_apart(tmp_path):
+    probe = BRAIN_PRELUDE + _brain_source() + r"""
+const out = {};
+(async () => {
+  // A new workspace that lost the shared AI: the notice, and Gemini picked first.
+  state.assistantBrain = brain({notice: "shared_ai_removed", imageKeyAvailable: true});
+  const slot = new El("div");
+  renderBrainForm(slot);
+  const v = view(slot);
+  out.groups = v.pick.children.map((group) => [group.tag, group.label, group.children.map((option) => option.value)]);
+  const xai = v.pick.find((el) => el.value === "xai");
+  out.unavailable = [xai.disabled, xai.textContent];
+  out.notice = [Boolean(v.notice.hidden), v.notice.textContent];
+  out.gemini = fields(v);
+  v.key.value = "AIza-typed";
+  v.reveal.fire("click");
+  out.revealed = [v.key.type, v.reveal.textContent];
+  v.pick.value = "anthropic"; v.pick.fire("change");
+  out.anthropic = fields(v);
+  out.hiddenAgain = [v.key.type, v.reveal.textContent];
+  let run = v.refresh.listeners.click[0]();
+  answers.shift().resolve({chatModels: ["claude-opus-5-5", "claude-sonnet-5-5"], embeddingModels: []});
+  await run;
+  out.refreshAnthropic = posted.pop();
+  out.listed = [Boolean(v.chatList.hidden), v.chatList.children.map((option) => option.value)];
+  v.pick.value = "custom"; v.pick.fire("change");
+  out.custom = fields(v);
+  out.listCleared = v.chatList.hidden;
+  v.key.value = " sk-custom "; v.url.value = "https://llm2.example.com/v1";
+  run = v.refresh.listeners.click[0]();
+  answers.shift().resolve({chatModels: ["m1"], embeddingModels: ["e1"]});
+  await run;
+  out.refreshCustom = posted.pop();
+  run = v.save.listeners.click[0]();
+  out.saveCustom = posted.pop();
+  const saved = brain({provider: "custom", source: "tenant", configured: true, chatModel: "my-model",
+    baseUrl: "https://llm2.example.com/v1", test: {ok: true, error: ""}});
+  Object.assign(saved.providers.find((item) => item.id === "custom"),
+    {apiKeyPreview: "****tom1", baseUrl: "https://llm2.example.com/v1"});
+  answers.shift().resolve(saved);
+  await run;
+  const result = v.save.parent.children[1];
+  // The setup steps and the auto reply page's AI badge follow the saved AI.
+  out.saved = [result.textContent, result.className, v.key.value, v.keySaved.textContent,
+    Boolean(v.notice.hidden), setupRefreshes, state.assistantBrain === saved, autoReplyLoads,
+    state.assistantBrainTest];
+  // A key typed for Gemini is never sent with another provider.
+  v.pick.value = "gemini"; v.pick.fire("change");
+  v.key.value = "AIza-for-gemini";
+  v.pick.value = "openai"; v.pick.fire("change");
+  out.openai = fields(v);
+  run = v.save.listeners.click[0]();
+  out.saveOpenai = posted.pop();
+  answers.shift().reject(Object.assign(new Error("Enter the API key first."), {code: "ai_key_required"}));
+  await run;
+  out.failed = [v.save.parent.children[1].textContent, toasts.slice(), v.save.disabled];
+  console.log(JSON.stringify(out));
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    out = _run_node(tmp_path, "brain.js", probe)
+    assert out["groups"] == [
+        ["optgroup", "brain.group_main", ["gemini", "anthropic", "openai"]],
+        ["optgroup", "brain.group_more", ["zai", "xai"]],
+        ["optgroup", "brain.group_custom", ["custom"]],
+    ]
+    assert out["unavailable"] == [True, "Grok (xAI) (brain.unavailable)"]
+    assert out["notice"] == [False, "brain.notice"]
+    assert out["gemini"] == {
+        "provider": "gemini", "keyLabel": "brain.api_key", "placeholder": "AIza...", "key": "",
+        "saved": "brain.key_shared_hint",
+        "hint": 'brain.key_where {"hint":"aistudio.google.com -> Get API key"}',
+        "url": None, "model": "gemini-3.8-flash", "search": "gemini-embedding-001", "note": None,
+    }
+    assert out["revealed"] == ["text", "ai.hide"]
+    # Switching clears the typed key and shows that provider's own saved key and models.
+    assert out["anthropic"] == {
+        "provider": "anthropic", "keyLabel": "brain.api_key", "placeholder": "sk-ant-...", "key": "",
+        "saved": 'brain.key_saved {"preview":"****abcd"}',
+        "hint": 'brain.key_where {"hint":"console.anthropic.com -> API keys"}',
+        "url": None, "model": "claude-opus-5-5", "search": None, "note": None,
+    }
+    assert out["hiddenAgain"] == ["password", "ai.reveal"]
+    assert out["refreshAnthropic"] == ["/api/ai/models", {"provider": "anthropic", "apiKey": ""}]
+    assert out["listed"] == [False, ["claude-opus-5-5", "claude-sonnet-5-5", ""]]
+    assert out["custom"] == {
+        "provider": "custom", "keyLabel": "brain.api_key_optional", "placeholder": "sk-...", "key": "",
+        "saved": 'brain.key_saved {"preview":"****wxyz"}', "hint": "brain.key_optional_hint",
+        "url": "https://llm.example.com/v1", "model": "my-model", "search": "", "note": None,
+    }
+    assert out["listCleared"] is True  # a list belongs to the provider it came from
+    assert out["refreshCustom"] == [
+        "/api/ai/models",
+        {"provider": "custom", "apiKey": "sk-custom", "baseUrl": "https://llm2.example.com/v1"},
+    ]
+    assert out["saveCustom"] == [
+        "/api/assistant/settings",
+        {"provider": "custom", "apiKey": "sk-custom", "baseUrl": "https://llm2.example.com/v1",
+         "chatModel": "my-model", "embeddingModel": "", "strictKnowledge": False, "test": True},
+    ]
+    assert out["saved"] == [
+        "brain.test_ok", "badge ok", "", 'brain.key_saved {"preview":"****tom1"}', True, 2, True, 1,
+        {"ok": True, "error": ""},
+    ]
+    assert out["openai"] == {
+        "provider": "openai", "keyLabel": "brain.api_key", "placeholder": "sk-...", "key": "",
+        "saved": None, "hint": 'brain.key_where {"hint":"platform.openai.com -> API keys"}',
+        "url": None, "model": "gpt-6-luna", "search": "text-embedding-3-small", "note": None,
+    }
+    assert out["saveOpenai"] == [
+        "/api/assistant/settings",
+        {"provider": "openai", "chatModel": "gpt-6-luna", "embeddingModel": "text-embedding-3-small",
+         "strictKnowledge": False, "test": True},
+    ]
+    assert out["failed"] == ["", ["ai_key_required"], False]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_the_ai_form_has_unique_ids_in_both_slots_and_says_what_it_uses(tmp_path):
+    probe = BRAIN_PRELUDE + _brain_source() + r"""
+const out = {};
+const ids = (root) => {
+  const found = [];
+  const walk = (el) => { if (el.id) found.push(el.id); el.children.forEach(walk); };
+  walk(root);
+  return found;
+};
+const strays = (root, own) => {
+  const bad = [];
+  const walk = (el) => {
+    if (el.tag === "label" && el.htmlFor && !own.includes(el.htmlFor)) bad.push(el.htmlFor);
+    for (const ref of String(el.attrs["aria-describedby"] || "").split(" ").filter(Boolean)) {
+      if (!own.includes(ref)) bad.push(ref);
+    }
+    el.children.forEach(walk);
+  };
+  walk(root);
+  return bad;
+};
+// Settings -> AI and the setup steps on the auto reply page, at the same time.
+state.assistantBrain = brain({notice: "shared_ai_removed"});
+const settingsSlot = new El("div");
+const setupSlot = new El("div");
+renderBrainForm(settingsSlot);
+renderBrainForm(setupSlot, {notice: false});
+const a = ids(settingsSlot);
+const b = ids(setupSlot);
+out.ids = [a.length, b.length, new Set([...a, ...b]).size, [...strays(settingsSlot, a), ...strays(setupSlot, b)]];
+// The page shows the warning once: the setup steps leave theirs out.
+out.notices = [Boolean(view(settingsSlot).notice.hidden), Boolean(view(setupSlot).notice.hidden)];
+// A saved provider this server cannot run is still shown, with the reason.
+I18N["errors.ai_provider_unavailable"] = {th: "x", en: "x"};
+const providers = JSON.parse(JSON.stringify(PROVIDERS));
+providers[1].available = false;
+providers[1].unavailableReason = "ai_provider_unavailable";
+state.assistantBrain = brain({provider: "anthropic", source: "tenant", configured: true,
+  chatModel: "claude-opus-5-5", notice: "ollama_removed", providers});
+const savedSlot = new El("div");
+renderBrainForm(savedSlot);
+const v = view(savedSlot);
+out.unavailableSaved = [v.pick.value, v.pick.find((el) => el.value === "anthropic").disabled,
+  fields(v).note, Boolean(v.notice.hidden)];
+// Staff see what the shop uses, and the warning, but no form.
+state.assistantBrain = brain({canEdit: false, notice: "ollama_removed"});
+const readOnly = new El("div");
+renderBrainForm(readOnly);
+out.readOnly = readOnly.children[0].children.map((el) => [el.textContent, Boolean(el.hidden)]);
+out.summaries = [
+  brainSummary(null),
+  brainSummary(brain({provider: "openai", configured: true, chatModel: "gpt-6-luna"})),
+  brainSummary(brain({provider: "custom", configured: true, chatModel: "my-model",
+    baseUrl: "https://llm.example.com:8443/v1"})),
+  brainSummary(brain({provider: "openai", configured: false})),
+  brainSummary({provider: "zai", configured: true, chatModel: "", providers: PROVIDERS}),
+  brainSummary({provider: "mystery", configured: true, chatModel: "m"}),
+  // Staff are not sent the Custom API address.
+  brainSummary({provider: "custom", configured: true, chatModel: "my-model", baseUrl: "",
+    providers: PROVIDERS.map((item) => ({...item, baseUrl: ""}))})
+];
+console.log(JSON.stringify(out));
+"""
+    out = _run_node(tmp_path, "brain_slots.js", probe)
+    settings_ids, setup_ids, unique, strays = out["ids"]
+    assert settings_ids >= 8 and setup_ids == settings_ids
+    assert unique == settings_ids + setup_ids
+    assert strays == []  # every label and description points inside its own form
+    assert out["notices"] == [False, True]
+    assert out["unavailableSaved"] == ["anthropic", True, "errors.ai_provider_unavailable", True]
+    # Staff read who has to act, not "add your own key".
+    assert out["readOnly"] == [
+        ["brain.notice_staff", False], ["brain.none", False], ["brain.owner_only", False],
+    ]
+    assert out["summaries"] == [
+        "brain.none",
+        "ChatGPT (OpenAI) (gpt-6-luna)",
+        'brain.summary_custom {"host":"llm.example.com:8443","model":"my-model"}',
+        "brain.none",
+        "GLM (Z.ai) (glm-4.7)",  # a blank model means the provider's default
+        "mystery (m)",
+        'brain.summary_custom_model {"model":"my-model"}',
+    ]
+
+
+def test_the_ai_form_strings_have_thai_and_english_text():
+    def has_both(key: str) -> bool:
+        return bool(re.search(rf'"{re.escape(key)}": {{th: "[^"]+", en: "[^"]+"}}', INDEX_HTML))
+
+    for key in (
+        "brain.provider", "brain.group_main", "brain.group_more", "brain.group_custom",
+        "brain.unavailable", "brain.api_key", "brain.api_key_optional", "brain.key_saved",
+        "brain.key_where", "brain.key_optional_hint", "brain.base_url", "brain.base_url_hint",
+        "brain.model_custom_ph", "brain.summary_custom", "brain.summary_custom_model",
+        "brain.notice", "brain.notice_staff", "brain.key_new_address", "brain.key_note_zai",
+        "assistant.auto_reply_ai_missing", "assistant.auto_reply_ai_removed",
+        "assistant.source_shared", "botlog.action.ai.auto_reply.dropped",
+    ):
+        assert has_both(key), key
+    # Every key the form and its summary name exists in both languages.
+    asked = set(re.findall(r'"((?:brain|errors|ai)\.[a-z_]+)"', _brain_source()))
+    assert {"brain.notice", "brain.notice_staff", "brain.key_note_zai"} <= asked
+    for key in sorted(asked):
+        assert has_both(key), key
+
+
+def test_no_ollama_or_shared_ai_settings_are_left_in_the_pages():
+    for html in (INDEX_HTML, GOD_HTML):
+        assert "Ollama" not in html and "ollama" not in html
+    for gone in ("brain.global", "globalAvailable", "brain.summary_global"):
+        assert gone not in INDEX_HTML, gone
+    assert "choice-card" not in _brain_source()  # one provider picker, no cards
+    # The God page keeps the shared knowledge (keyword search) and the unanswered queue.
+    for gone in ('data-god-page-target="ai-settings"', 'data-god-page="ai-settings"',
+                 '"/api/god/ai/settings"', '"/api/god/ai/test"', "globalAi", "Embedding",
+                 "Vector index"):
+        assert gone not in GOD_HTML, gone
+    assert 'data-god-page-target="knowledge"' in GOD_HTML
+    assert 'id="reindexKnowledgeButton"' in GOD_HTML and '"/api/god/ai/reindex"' in GOD_HTML
+    assert '"members", "knowledge", "unanswered", "system", "guide"' in GOD_HTML
+    # The guide counts 1, 2, 3 without the removed steps.
+    assert re.findall(r'<span class="god-guide-number">(\d+)</span>', GOD_HTML) == ["1", "2", "3"]
+    # The unanswered badge loads its own count when the page opens.
+    begin = GOD_HTML.index('api("/api/god/status").then(')
+    assert "loadUnanswered().catch(() => {});" in GOD_HTML[begin:GOD_HTML.index("}).catch(", begin)]
+
+
+def test_every_element_the_god_script_uses_is_on_the_page():
+    script = re.search(r"<script>([\s\S]*?)</script>", GOD_HTML).group(1)
+    markup = GOD_HTML[: GOD_HTML.index("<script>")]
+    created = set(re.findall(r'\.id = "([^"]+)"', script))
+    used = set(re.findall(r'\$\("([^"]+)"\)', script))
+    assert len(used) > 40
+    missing = sorted(name for name in used if name not in created and f'id="{name}"' not in markup)
+    assert missing == []  # a listener on a missing element would stop the whole God page
+    for name in used - created:
+        assert markup.count(f'id="{name}"') == 1, name
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_god_script_is_valid_javascript(tmp_path):
+    script = re.search(r"<script>([\s\S]*?)</script>", GOD_HTML).group(1)
+    path = tmp_path / "god.js"
+    path.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        ["node", "--check", str(path)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_auto_reply_warns_when_its_ai_is_missing_or_was_removed():
+    label = _block("    function assistantAutoReplyRuntimeLabel", "    function syncAssistantAutoReplySwitch")
+    assert 'ai_missing: "assistant.auto_reply_ai_missing"' in label
+    assert 'return ["error", "login_required", "ai_missing"].includes(runtimeState);' in label
+    for start, end in (
+        ("    function renderAssistantAutoReply", "    async function loadAssistantAutoReply"),
+        ("    function refreshAssistantSetup", "    async function loadAssistantOverview"),
+    ):
+        assert "autoReplyNeedsAttention(runtimeState)" in _block(start, end), start
+    # The auto reply page tops itself with the warning; its setup form leaves its own out.
+    assert INDEX_HTML.index('id="assistantAiNotice"') < INDEX_HTML.index('id="assistantSetup"')
+    assert 'id="assistantAiNotice" style="margin-bottom:12px" data-i18n="brain.notice"' in INDEX_HTML
+    setup = _block("    function refreshAssistantSetup", "    async function loadAssistantOverview")
+    assert 'aiNotice.classList.toggle("hidden", !(brain && brain.notice && !brain.configured));' in setup
+    assert 'brain && brain.canEdit === false ? "brain.notice_staff" : "brain.notice"' in setup
+    assert "renderBrainForm(brainSlot, {notice: false});" in setup
+    # A provider that failed to answer: the translated reason plus what it said.
+    assert "aiAskError(err)" in _block("    async function askAssistant", "    function aiAskError")
+    assert "aiAskError(err);" in _block("    async function askKbChat", "    async function loadKbUnanswered")
+
+
 def test_the_new_error_codes_have_thai_and_english_text():
     for code in (
         "proxy_username_invalid", "proxy_zone_username_invalid", "proxy_zone_ip_invalid",
         "proxy_pool_invalid", "proxy_provider_unknown", "proxy_credentials_required",
         "proxy_auth_failed", "proxy_forbidden", "proxy_unreachable", "proxy_check_failed",
-        "proxy_missing", "ai_key_required", "ai_key_invalid", "ollama_url_invalid",
+        "proxy_missing", "ai_key_required", "ai_key_invalid",
         "proxy_host_invalid", "proxy_port_invalid", "proxy_credentials_invalid",
         "proxy_scheme_invalid", "invalid_proxy_url",
+        # The AI providers: every code the settings, models and ask routes answer with.
+        "ai_settings_invalid", "ai_base_url_invalid", "ai_base_url_blocked",
+        "ai_base_url_required", "ai_base_url_not_found",
+        "ai_model_required", "ai_provider_unavailable", "ai_unavailable",
     ):
         match = re.search(rf'"errors\.{code}": {{th: "[^"]+", en: "[^"]+"}}', INDEX_HTML)
         assert match, code
+
+
+_I18N_ENTRY = re.compile(
+    r'"([A-Za-z0-9_.\-]+)":\s*\{\s*th:\s*"((?:[^"\\]|\\.)*)",\s*en:\s*"((?:[^"\\]|\\.)*)"\s*\}'
+)
+
+
+def _i18n() -> dict:
+    """The page's I18N entries as the page reads them (a later entry wins)."""
+    return {
+        key: {"th": json.loads(f'"{th}"'), "en": json.loads(f'"{en}"')}
+        for key, th, en in _I18N_ENTRY.findall(INDEX_HTML)
+    }
+
+
+def _with_page_text(prelude: str) -> str:
+    """The prelude with the page's own I18N text and t() instead of the key stubs."""
+    stubs = (
+        "const I18N = {};\n"
+        'const t = (key, vars) => vars ? key + " " + JSON.stringify(vars) : key;\n'
+    )
+    assert stubs in prelude
+    page_t = _block("    function t(key, vars) {", "    function textSpan(text, cls) {")
+    return prelude.replace(
+        stubs, "const I18N = " + json.dumps(_i18n(), ensure_ascii=False) + ";\n" + page_t
+    )
+
+
+def _registry_providers() -> list:
+    """The provider list as GET /api/assistant/settings sends it to a new workspace."""
+    from okline.ai_providers import provider_available, provider_registry
+
+    rows = []
+    for provider in provider_registry():
+        available, reason = provider_available(provider.id)
+        rows.append({
+            **provider.public_fields(), "available": available,
+            "unavailableReason": "" if available else reason, "hasApiKey": False,
+            "apiKeyPreview": "", "chatModel": "", "embeddingModel": "", "baseUrl": "",
+        })
+    return rows
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_the_key_hints_read_right_for_every_provider_in_both_languages(tmp_path):
+    from okline.ai_providers import get_provider
+
+    custom = get_provider("custom")
+    assert custom is not None and custom.key_hint == ""  # the page adds the optional-key line
+    providers = _registry_providers()
+    probe = _with_page_text(BRAIN_PRELUDE) + _brain_source() + r"""
+const REGISTRY = """ + json.dumps(providers) + r""";
+const out = {};
+for (const lang of ["th", "en"]) {
+  state.lang = lang;
+  // Even a sentence sent as the Custom API's hint never follows "Get a key at".
+  const providers = JSON.parse(JSON.stringify(REGISTRY)).map((item) =>
+    item.id === "custom" ? {...item, keyHint: "The key your server asks for."} : item);
+  state.assistantBrain = brain({providers});
+  const slot = new El("div");
+  renderBrainForm(slot);
+  const form = slot.children[0];
+  const pick = byId(form, "Provider");
+  const key = byId(form, "Key");
+  const hint = byId(form, "KeyHint");
+  out[lang] = {};
+  for (const item of REGISTRY) {
+    pick.value = item.id; pick.fire("change");
+    out[lang][item.id] = [hint.hidden ? null : hint.textContent, key.placeholder];
+  }
+}
+console.log(JSON.stringify(out));
+"""
+    out = _run_node(tmp_path, "hints.js", probe)
+    text = _i18n()
+    for lang in ("th", "en"):
+        where = text["brain.key_where"][lang]
+        hints = out[lang]
+        assert hints["custom"] == [text["brain.key_optional_hint"][lang], ""]
+        assert hints["zai"][0] == (
+            where.replace("{hint}", "z.ai -> API Keys") + " " + text["brain.key_note_zai"][lang]
+        )
+        for provider in providers:
+            if provider["id"] not in ("custom", "zai"):
+                expected = where.replace("{hint}", provider["keyHint"])
+                assert hints[provider["id"]][0] == expected, provider["id"]
+    assert out["th"]["gemini"][0] == "สร้าง key ได้ที่ aistudio.google.com -> Get API key"
+    assert out["th"]["zai"][0].endswith("ใช้ API key แบบ Standard เท่านั้น key ของ Coding Plan ใช้ที่นี่ไม่ได้")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_a_failed_test_in_the_setup_steps_keeps_the_form_and_says_why(tmp_path):
+    # The real setup steps around the real form: only the stub that counts them goes.
+    prelude = BRAIN_PRELUDE.replace("function refreshAssistantSetup() { setupRefreshes += 1; }", "")
+    probe = prelude + r"""
+const els = {};
+const $ = (id) => (els[id] = els[id] || Object.assign(new El("div"), {id}));
+const localStorage = {getItem: () => null};
+const selectedAccountId = () => "acc1";
+const hasPermission = () => true;
+""" + _block("    function assistantAutoReplyRuntimeLabel", "    function syncAssistantAutoReplySwitch") \
+        + _brain_source() \
+        + _block("    function refreshAssistantSetup", "    async function loadAssistantOverview") + r"""
+const out = {};
+const step1 = () => [$("setupStep1").classList.contains("done"), $("setupStep1").classList.contains("current")];
+(async () => {
+  state.assistantKnowledge = {sections: []};
+  state.assistantAutoReply = {enabled: false, runtime: {state: "off"}};
+  state.assistantBrain = brain();
+  refreshAssistantSetup();
+  const slot = $("setupBrainSlot");
+  const form = slot.children[0];
+  let v = view(slot);
+  out.start = [Boolean(form.brainForm), ...step1()];
+  // A new owner picks ChatGPT and pastes a wrong key: saved, but the test fails.
+  v.pick.value = "openai"; v.pick.fire("change");
+  v.key.value = "sk-wrong-key";
+  let run = v.save.listeners.click[0]();
+  const failed = brain({provider: "openai", source: "tenant", configured: true, enabled: true,
+    chatModel: "gpt-6-luna", test: {ok: false, error: "OpenAI error 401: Incorrect API key provided."}});
+  answers.shift().resolve(failed);
+  await run;
+  let result = v.save.parent.children[1];
+  out.failed = [slot.children[0] === form, v.pick.value, result.textContent, result.className,
+    ...step1(), $("assistantHeroSwitch").disabled, autoReplyLoads];
+  // Something else refreshes the steps (shop info saved): the form is not redrawn.
+  refreshAssistantSetup();
+  out.kept = [slot.children[0] === form, result.textContent === out.failed[2]];
+  // The settings are loaded again (a later visit): a new form still says why.
+  state.assistantBrain = JSON.parse(JSON.stringify(failed));
+  refreshAssistantSetup();
+  v = view(slot);
+  result = v.save.parent.children[1];
+  out.redrawn = [slot.children[0] !== form, v.pick.value, result.textContent, result.className];
+  // A working key closes step 1, and the slot shows what the shop uses.
+  v.key.value = "sk-right-key";
+  run = v.save.listeners.click[0]();
+  answers.shift().resolve(brain({provider: "openai", source: "tenant", configured: true, enabled: true,
+    chatModel: "gpt-6-luna", test: {ok: true, error: ""}}));
+  await run;
+  out.fixed = [...step1(), slot.children.map((el) => el.textContent), autoReplyLoads];
+  console.log(JSON.stringify(out));
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    out = _run_node(tmp_path, "setup_steps.js", probe)
+    failure = 'brain.test_failed {"error":"OpenAI error 401: Incorrect API key provided."}'
+    assert out["start"] == [True, False, True]
+    # The form and its reason stay, step 1 stays open and auto reply cannot be switched on;
+    # the auto reply page's AI badge is loaded again.
+    assert out["failed"] == [True, "openai", failure, "badge bad brain-status", False, True, True, 1]
+    assert out["kept"] == [True, True]
+    assert out["redrawn"] == [True, "openai", failure, "badge bad brain-status"]
+    assert out["fixed"] == [True, False, ["ChatGPT (OpenAI) (gpt-6-luna)"], 2]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_a_save_result_belongs_to_the_provider_it_was_for(tmp_path):
+    probe = BRAIN_PRELUDE + _brain_source() + r"""
+const out = {};
+(async () => {
+  state.assistantBrain = brain();
+  const slot = new El("div");
+  renderBrainForm(slot);
+  const v = view(slot);
+  const result = v.save.parent.children[1];
+  v.key.value = "AIza-typed";
+  let run = v.save.listeners.click[0]();
+  answers.shift().resolve(brain({provider: "gemini", source: "tenant", configured: true,
+    test: {ok: true, error: ""}}));
+  await run;
+  out.saved = [result.textContent, result.className];
+  v.pick.value = "openai"; v.pick.fire("change");
+  out.switched = [result.textContent, result.className];
+  // Switched while the test runs: the answer is for the provider it was saved with.
+  v.pick.value = "gemini"; v.pick.fire("change");
+  run = v.save.listeners.click[0]();
+  out.testing = result.textContent;
+  v.pick.value = "anthropic"; v.pick.fire("change");
+  answers.shift().resolve(brain({provider: "gemini", source: "tenant", configured: true,
+    test: {ok: false, error: "Gemini error 400: API key not valid."}}));
+  await run;
+  out.late = [result.textContent, v.pick.value, notes.slice()];
+  console.log(JSON.stringify(out));
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    out = _run_node(tmp_path, "save_result.js", probe)
+    assert out["saved"] == ["brain.test_ok", "badge ok"]
+    assert out["switched"] == ["", "ux-muted"]
+    assert out["testing"] == "brain.testing"
+    assert out["late"] == [
+        "", "anthropic",
+        [['Gemini (Google): brain.test_failed {"error":"Gemini error 400: API key not valid."}', True]],
+    ]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_the_saved_custom_api_key_line_follows_the_address_typed(tmp_path):
+    probe = BRAIN_PRELUDE + _brain_source() + r"""
+const out = {};
+state.assistantBrain = brain({provider: "custom", source: "tenant", configured: true,
+  chatModel: "my-model", baseUrl: "https://llm.example.com/v1"});
+const slot = new El("div");
+renderBrainForm(slot);
+const v = view(slot);
+const typed = (url) => { v.url.value = url; v.url.fire("input"); return fields(v).saved; };
+out.lines = [
+  fields(v).saved,
+  typed("https://llm-b.example.com/v1"),
+  typed("https://LLM.example.com:443/v2"),
+  typed("https://llm.example.com:8443/v1"),
+  typed("http://llm.example.com/v1"),
+  typed("not an address yet"),
+  typed("")
+];
+typed("https://llm-b.example.com/v1");
+v.pick.value = "gemini"; v.pick.fire("change");
+v.pick.value = "custom"; v.pick.fire("change");
+out.back = [fields(v).url, fields(v).saved];
+console.log(JSON.stringify(out));
+"""
+    out = _run_node(tmp_path, "custom_key.js", probe)
+    saved = 'brain.key_saved {"preview":"****wxyz"}'
+    moved = "brain.key_new_address"  # the server drops the key for another origin
+    assert out["lines"] == [saved, moved, saved, moved, moved, saved, saved]
+    assert out["back"] == ["https://llm.example.com/v1", saved]
+
+
+def test_long_test_and_refresh_results_wrap_inside_the_card():
+    css = INDEX_HTML[: INDEX_HTML.index("<script>")]
+    rule = re.search(r"\n    \.brain-status \{([^}]*)\}", css)
+    assert rule, "the .brain-status rule"
+    for declaration in (
+        "display: inline-block;", "max-width: 100%;", "white-space: normal;",
+        "overflow-wrap: anywhere;",
+    ):
+        assert declaration in rule.group(1), declaration
+    # After .badge, whose one-line inline-flex box it replaces for these results.
+    assert css.index("\n    .badge {") < rule.start()
+    brain = _brain_source()
+    assert 'refreshNote.className = "badge bad brain-status";' in brain
+    assert 'result.className = test.ok ? "badge ok" : "badge bad brain-status";' in brain
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_the_shared_info_is_cited_once_under_its_own_label(tmp_path):
+    probe = FAKE_DOM + r"""
+El.prototype.remove = function () { const all = this.parent.children; all.splice(all.indexOf(this), 1); };
+const els = {};
+const $ = (id) => (els[id] = els[id] || Object.assign(new El("div"), {id, scrollTop: 0, scrollHeight: 0}));
+const localStorage = {setItem() {}};
+let answer = null;
+function post() { return Promise.resolve(answer); }
+function refreshAssistantSetup() {}
+function loadKbUnanswered() { return Promise.resolve(); }
+function aiAskError(err) { throw err; }
+function prefillUnanswered() {}
+""" + _block("    function assistantSourceLabels", "    function renderAssistantUnanswered(items) {") \
+        + _block("    function kbBubble(text, kind, source) {", "    async function loadKbUnanswered() {") + r"""
+const SOURCES = [
+  {name: "knowledge.md", score: 0.83, scope: "global"},
+  {name: "ค่าส่ง", score: 0.09, scope: "shop"},
+  {name: "Supplier price feed", score: 0.7, scope: "global"},
+  {name: "", score: 0.2, scope: "shop"}
+];
+const out = {};
+(async () => {
+  renderAssistantHistory([
+    {question: "ส่งฟรีไหม", answer: "ส่งฟรีเมื่อซื้อครบ 500 บาท", createdAt: "2026-11-22T10:00:00", sources: SOURCES},
+    {question: "เปิดกี่โมง", answer: "9 โมง", createdAt: "2026-11-22T09:00:00",
+      sources: [{name: "เวลาเปิด", score: 0.5}]}
+  ]);
+  out.history = $("assistantHistory").children.map((entry) => {
+    const chips = entry.children.find((el) => el.className === "assistant-sources");
+    return chips ? chips.children.map((el) => el.textContent) : null;
+  });
+  out.chat = [];
+  for (const sources of [SOURCES, [SOURCES[0]], []]) {
+    answer = {question: {answer: "ok", sources}};
+    $("kbChatInput").value = "ส่งฟรีไหม";
+    await askKbChat();
+    const log = $("kbChatLog").children;
+    out.chat.push(log[log.length - 1].children[0].textContent);
+  }
+  console.log(JSON.stringify(out));
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    out = _run_node(tmp_path, "sources.js", probe)
+    # No God file or source names, the shared info once and without a score; the shop's
+    # own sources keep their names and scores (a record from before scopes too).
+    assert out["history"] == [
+        ["เวลาเปิด (50%)"],
+        ["ค่าส่ง (9%)", "kb.title (20%)", "assistant.source_shared"],
+    ]
+    assert out["chat"] == [
+        'kb.answered_from {"names":"ค่าส่ง, assistant.source_shared"}',
+        'kb.answered_from {"names":"assistant.source_shared"}',
+        "kb.answered_general",
+    ]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_an_account_switched_off_with_the_removed_ai_says_so(tmp_path):
+    probe = FAKE_DOM + r"""
+const els = {};
+const $ = (id) => (els[id] = els[id] || Object.assign(new El("div"), {id, checked: false}));
+const state = {accounts: []};
+const selectedAccountId = () => "acc1";
+function accountLabel() { return "Shop"; }
+function channelName() { return "LINE"; }
+function setPill(id, text) { $(id).textContent = text; }
+function assistantAutoReplyDate(value) { return value || "-"; }
+function syncAssistantAutoReplyGroupConfig() {}
+function setAssistantAutoReplyBusy() {}
+function loadAssistantAutoReplyGroups() { return Promise.resolve(); }
+""" + _block("    function assistantAutoReplyRuntimeLabel", "    function renderAssistantAutoReplyGroupSummary") \
+        + _block("    function renderAssistantAutoReply(data) {", "    async function loadAssistantAutoReply() {") + r"""
+const shown = (data) => {
+  renderAssistantAutoReply(data);
+  return !$("assistantAutoReplyAiRemoved").classList.contains("hidden");
+};
+console.log(JSON.stringify([
+  shown({enabled: false, disabledReason: "ai_removed", runtime: {state: "off"}}),
+  shown({enabled: false, disabledReason: "", runtime: {state: "off"}}),
+  shown({enabled: true, disabledReason: "", aiConfigured: true, runtime: {state: "running"}}),
+  shown(null)
+]));
+"""
+    assert _run_node(tmp_path, "ai_removed.js", probe) == [True, False, False, False]
+    warning = re.search(
+        r'<div class="ux-warning hidden" id="assistantAutoReplyAiRemoved"[^>]*'
+        r'data-i18n="([^"]+)">([^<]+)</div>',
+        INDEX_HTML,
+    )
+    assert warning and warning.group(1) == "assistant.auto_reply_ai_removed"
+    assert warning.group(2) == _i18n()["assistant.auto_reply_ai_removed"]["en"]
+
+
+def test_the_removed_ai_notice_reads_true_for_every_workspace_with_one():
+    text = _i18n()
+    markup = re.search(
+        r'<div class="ux-warning hidden" id="assistantAiNotice"[^>]*>([^<]+)</div>', INDEX_HTML
+    )
+    assert markup and markup.group(1) == text["brain.notice"]["en"]
+    # Many workspaces with a notice never had auto reply on: the text does not say it was.
+    assert "If auto reply was on" in text["brain.notice"]["en"]
+    assert "ถ้าเคยเปิดตอบอัตโนมัติไว้" in text["brain.notice"]["th"]
+    assert "so auto reply was switched off" not in text["brain.notice"]["en"]
+    # Staff cannot add a key: their notice says who can.
+    assert "account owner" in text["brain.notice_staff"]["en"]
+    assert "เจ้าของบัญชี" in text["brain.notice_staff"]["th"]
+    assert "your own API key" not in text["brain.notice_staff"]["en"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_the_god_unanswered_badge_says_when_there_are_more_than_it_loaded(tmp_path):
+    script = re.search(r"<script>([\s\S]*?)</script>", GOD_HTML).group(1)
+    limit = re.search(r"\n    const UNANSWERED_LIMIT = \d+;", script).group(0)
+    begin = script.index("    function renderUnanswered() {")
+    functions = script[begin:script.index("    function renderRoleOptions() {", begin)]
+    probe = FAKE_DOM + r"""
+const els = {};
+const $ = (id) => (els[id] = els[id] || Object.assign(new El("div"), {id}));
+function makeButton(text) { const button = new El("button"); button.textContent = text; return button; }
+let asked = "";
+let waiting = [];
+async function api(path) {
+  asked = path;
+  const limit = Number(new URL(path, "https://god.example").searchParams.get("limit"));
+  return {questions: waiting.slice(0, limit)};  // the route's own cap
+}
+function toast() {}
+const state = {unanswered: [], unansweredMore: false};
+""" + limit + "\n" + functions + r"""
+const out = {};
+(async () => {
+  for (const n of [0, 3, 500, 501, 800]) {
+    waiting = Array.from({length: n}, (_, i) => ({id: "q" + i, question: "q" + i, userName: "u", createdAt: ""}));
+    await loadUnanswered();
+    out[n] = [$("godUnansweredCount").textContent, $("godUnansweredList").children.length];
+  }
+  out.asked = asked;
+  console.log(JSON.stringify(out));
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    out = _run_node(tmp_path, "god_unanswered.js", probe)
+    # The page shows 500 at most; "+" only when the server has more than that.
+    assert out == {
+        "0": ["", 1], "3": ["(3)", 3], "500": ["(500)", 500], "501": ["(500+)", 500],
+        "800": ["(500+)", 500], "asked": "/api/god/ai/unanswered?limit=501",
+    }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_god_rebuild_index_saves_typed_text_first_and_source_changes_keep_it(tmp_path):
+    script = re.search(r"<script>([\s\S]*?)</script>", GOD_HTML).group(1)
+
+    def part(start: str, end: str) -> str:
+        begin = script.index(start)
+        return script[begin:script.index(end, begin)]
+
+    probe = r"""
+const els = {};
+const $ = (id) => (els[id] = els[id] || {id, value: "", textContent: "", className: "", disabled: false});
+const state = {knowledge: null};
+function renderKnowledgeSources() {}
+const toasts = [];
+function toast(message) { toasts.push(message); }
+let saved = "# Shop\nOpening hours 9-18";
+const calls = [];
+async function api(path, options = {}) {
+  const body = options.body ? JSON.parse(options.body) : {};
+  calls.push([path, body]);
+  if (path === "/api/god/ai/knowledge" && options.method === "POST") saved = body.knowledgeMarkdown;
+  return {knowledgeMarkdown: saved, apiSources: [], chunkCount: 1, indexError: "", indexedAt: "2026-11-22T10:00:00"};
+}
+""" + part("    // Text typed into knowledge.md and not saved yet.", "    function clearKnowledgeSourceForm() {") \
+        + part("    async function syncKnowledgeSource(id) {", "    async function deleteKnowledgeSource(id) {") + r"""
+const out = {};
+(async () => {
+  await loadKnowledge();
+  const editor = $("knowledgeMarkdown");
+  editor.value = saved + "\nFree delivery over 500 baht";  // typed, not saved yet
+  calls.length = 0;
+  await reindexKnowledge();                                   // the button beside Save
+  out.typed = [calls.slice(), editor.value, saved, toasts.slice(), $("reindexKnowledgeButton").disabled];
+  calls.length = 0;
+  toasts.length = 0;
+  await reindexKnowledge();                                   // nothing typed: the index only
+  out.clean = [calls.slice(), toasts.slice()];
+  editor.value = saved + "\nA draft";
+  calls.length = 0;
+  await syncKnowledgeSource("s1");                           // an API source synced meanwhile
+  out.synced = [calls.map(([path]) => path), editor.value];
+  console.log(JSON.stringify(out));
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    out = _run_node(tmp_path, "god_reindex.js", probe)
+    typed = "# Shop\nOpening hours 9-18\nFree delivery over 500 baht"
+    assert out["typed"] == [
+        [["/api/god/ai/knowledge", {"knowledgeMarkdown": typed}]], typed, typed,
+        ["บันทึก knowledge.md และสร้างดัชนีแล้ว"], False,
+    ]
+    assert out["clean"] == [[["/api/god/ai/reindex", {}]], ["สร้างดัชนี Knowledge แล้ว"]]
+    assert out["synced"] == [["/api/god/ai/sources/sync"], typed + "\nA draft"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")

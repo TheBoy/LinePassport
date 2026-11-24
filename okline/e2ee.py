@@ -26,11 +26,15 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
 from typing import Any
 
 from . import e2ee_crypto as fr
 
 log = logging.getLogger("okline.e2ee")
+
+# Public keys of other users kept by an E2EEManager (see E2EEManager._public_key).
+MAX_PUBLIC_KEYS = 4096
 
 
 class E2EEManager:
@@ -44,6 +48,10 @@ class E2EEManager:
         self._peer_channels: dict[str, tuple[int, int, int]] = {}
         # (group mid, group key id) -> unwrapped group-shared-key handle
         self._group_keys: dict[tuple[str, int], int] = {}
+        # (mid, key id) -> that user's public key (base64). A key id names one key for
+        # good, so it is asked of LINE once, not for every sealed message.
+        self._public_keys: dict[tuple[str, int], str] = {}
+        self._public_keys_lock = threading.Lock()
         self._seq = 0
 
     @property
@@ -129,6 +137,28 @@ class E2EEManager:
         return self.is_ready()
 
     # -- channels ------------------------------------------------------------
+    def _public_key(self, mid: str, key_id: int) -> str | None:
+        """The public key (base64) of ``mid`` for ``key_id``, or None when LINE has none.
+
+        Asked of LINE (getE2EEPublicKey) the first time only. Key id 0 names no key
+        (the user's current one is meant), so it is asked each time.
+        """
+        key_id = int(key_id)
+        with self._public_keys_lock:
+            cached = self._public_keys.get((mid, key_id))
+        if cached is not None:
+            return cached
+        found = self.api.get_e2ee_public_key(mid, 1, key_id)
+        data = found.get("keyData") if isinstance(found, dict) else None
+        if not data:
+            return None
+        if key_id:
+            with self._public_keys_lock:
+                if len(self._public_keys) >= MAX_PUBLIC_KEYS:
+                    self._public_keys.pop(next(iter(self._public_keys)))
+                self._public_keys[(mid, key_id)] = str(data)
+        return str(data)
+
     def _negotiate_peer(self, peer_mid: str) -> tuple[str, int]:
         """Return the peer's (public_key_b64, key_id) via negotiate/getE2EEPublicKey."""
         neg = self.api.negotiate_e2ee_public_key(peer_mid)
@@ -162,8 +192,7 @@ class E2EEManager:
             my_handle = self.my_keys.get(self.latest_key_id or 0)
         if my_handle is None:
             raise RuntimeError("no local E2EE key to decrypt with")
-        sender_pub = self.api.get_e2ee_public_key(sender_mid, 1, sender_key_id)
-        pub_b64 = sender_pub.get("keyData") if isinstance(sender_pub, dict) else None
+        pub_b64 = self._public_key(sender_mid, sender_key_id)
         if not pub_b64:
             raise RuntimeError(f"no public key for sender {sender_mid}")
         return self._bridge.e2ee_create_channel_with_pubkey(my_handle, pub_b64)
@@ -181,8 +210,7 @@ class E2EEManager:
         )
         if my_handle is None:
             raise RuntimeError("no local E2EE key to decrypt our own message")
-        peer_pub = self.api.get_e2ee_public_key(peer_mid, 1, receiver_key_id)
-        pub_b64 = peer_pub.get("keyData") if isinstance(peer_pub, dict) else None
+        pub_b64 = self._public_key(peer_mid, receiver_key_id)
         if not pub_b64:
             raise RuntimeError(f"no public key for recipient {peer_mid}")
         return self._bridge.e2ee_create_channel_with_pubkey(my_handle, pub_b64)
@@ -284,8 +312,7 @@ class E2EEManager:
     # -- group ---------------------------------------------------------------
     def _user_pub(self, mid: str, key_id: int) -> str:
         """The Curve25519 public key (base64) of ``mid`` for ``key_id``."""
-        pk = self.api.get_e2ee_public_key(mid, 1, int(key_id))
-        data = pk.get("keyData") if isinstance(pk, dict) else None
+        data = self._public_key(mid, key_id)
         if not data:
             raise RuntimeError(f"no E2EE public key for {mid} keyId={key_id}")
         return data

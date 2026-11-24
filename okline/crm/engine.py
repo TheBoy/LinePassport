@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import threading
 import time
-import traceback
 from typing import Any, Protocol
 
+from .._util import print_exc_quietly
 from .service import CrmService
 
 NAME_RETRY_SECONDS = 6 * 3600
@@ -54,7 +54,7 @@ class CrmEngine:
             try:
                 step()
             except Exception:
-                traceback.print_exc()
+                print_exc_quietly()
 
     def stop(self) -> None:
         self.stop_event.set()

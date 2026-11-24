@@ -592,9 +592,10 @@ class CrmService:
         if updates:
             self._update_row("crm_customers", customer_id, updates)
 
-    def _update_row(self, table: str, row_id: str, updates: dict[str, Any]) -> None:
+    def _update_row(self, table: str, row_id: str, updates: dict[str, Any]) -> int:
+        """Update one row; returns how many rows matched (0 for one deleted since)."""
         columns = list(updates)
-        self.db.execute(
+        return self.db.execute(
             f"UPDATE {table} SET {', '.join(f'{c} = ?' for c in columns)} WHERE id = ?",
             [*[updates[c] for c in columns], row_id],
         )
@@ -1505,10 +1506,18 @@ class CrmService:
             self._new_conversation(
                 owner_id, customer_id, channel, account["id"], chat_id, [], self.settings_for(owner_id), now
             )
-        return self.db.query_one(
+        # The account may have been removed while these rows were made, and its purge
+        # run before: the host then deletes them again (WebState.crm_account_alive).
+        alive = getattr(self.ctx, "crm_account_alive", None)
+        if callable(alive) and not alive(account["id"]):
+            raise CrmError(403, "Permission denied for this account.", "account_forbidden")
+        row = self.db.query_one(
             "SELECT * FROM crm_conversations WHERE account_id = ? AND chat_id = ?",
             (account["id"], chat_id),
         )
+        if row is None:  # deleted meanwhile, with its removed account
+            raise CrmError(403, "Permission denied for this account.", "account_forbidden")
+        return row
 
     def chat_panel(self, user: dict[str, Any] | None, account_id: str, chat_id: str) -> dict[str, Any]:
         owner_id, scope = self._require(user, "read")
@@ -1581,7 +1590,9 @@ class CrmService:
         if target and conv["status"] == "new":
             updates["status"] = "open"
         with self.db.transaction():
-            self._update_row("crm_conversations", conv["id"], updates)
+            if not self._update_row("crm_conversations", conv["id"], updates):
+                # Deleted since it was read, with its removed account: nothing is kept.
+                raise CrmError(403, "Permission denied for this account.", "account_forbidden")
             self._event(owner_id, "assigned", customer_id=conv["customer_id"],
                         conversation_id=conv["id"], actor_id=me,
                         data={"from": current, "to": target}, at=now)
@@ -1616,12 +1627,16 @@ class CrmService:
         if conv["status"] != status:
             now = now_ms()
             with self.db.transaction():
-                self._update_row(
+                if not self._update_row(
                     "crm_conversations",
                     conv["id"],
                     {"status": status, "closed_at": now if status == "closed" else 0,
                      "updated_at": now},
-                )
+                ):
+                    # Deleted since it was read, with its removed account.
+                    raise CrmError(
+                        403, "Permission denied for this account.", "account_forbidden"
+                    )
                 self._event(owner_id, "status", customer_id=conv["customer_id"],
                             conversation_id=conv["id"], actor_id=_user_id(user),
                             data={"from": conv["status"], "to": status}, at=now)
@@ -1641,7 +1656,8 @@ class CrmService:
         if conv["status"] in ("new", "closed"):
             updates["status"] = "open"
         with self.db.transaction():
-            self._update_row("crm_conversations", conv["id"], updates)
+            if not self._update_row("crm_conversations", conv["id"], updates):
+                return False  # deleted since it was read
             self._event(owner_id, "assigned", customer_id=conv["customer_id"],
                         conversation_id=conv["id"], actor_id=user_id,
                         data={"from": conv["assigned_to"], "to": user_id, "via": "telegram"},
@@ -1659,12 +1675,13 @@ class CrmService:
         if conv["status"] != status:
             now = now_ms()
             with self.db.transaction():
-                self._update_row(
+                if not self._update_row(
                     "crm_conversations",
                     conv["id"],
                     {"status": status, "closed_at": now if status == "closed" else 0,
                      "updated_at": now},
-                )
+                ):
+                    return False  # deleted since it was read
                 self._event(owner_id, "status", customer_id=conv["customer_id"],
                             conversation_id=conv["id"], actor_id=actor_id,
                             data={"from": conv["status"], "to": status, "via": "telegram"}, at=now)

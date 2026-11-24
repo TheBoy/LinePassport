@@ -13,11 +13,11 @@ import hashlib
 import secrets
 import threading
 import time
-import traceback
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
+from .._util import print_exc_quietly, storage_unavailable
 from .bot_api import TelegramApiError, TelegramBotClient, valid_token
 from .errors import TelegramError as NotifyError
 
@@ -28,8 +28,15 @@ LINK_CODE_SECONDS = 600
 MAP_KEEP_SECONDS = 7 * 86_400
 MAX_MAP_ITEMS = 3000
 REPLY_MAX_AGE_SECONDS = 15 * 60
+# A button press that waited longer than this behind an update that could not be handled
+# (the store was down) is not done: its chat may have changed meanwhile.
+PRESS_MAX_WAIT_SECONDS = 10
+PRESS_AGAIN = "ตอนนี้ยังทำไม่ได้ ลองกดอีกครั้งในอีกสักครู่"
 MODES = ("away", "always")
 POLL_BACKOFF_SECONDS = (5, 10, 30, 60)
+# The most updates a getUpdates hands over (Telegram's default limit): a full batch may
+# leave more behind it.
+TELEGRAM_UPDATES_PER_POLL = 100
 PREVIEW_LABELS = {
     "[image]": "[รูปภาพ]",
     "[video]": "[วิดีโอ]",
@@ -88,13 +95,49 @@ class NotifyWorker:
         self.stop_event.set()
         self.client.close()
 
+    def _first_offset(self) -> int | None:
+        """The saved offset, read again every 30 s while that fails (a database that is
+        down), so the poller does not end; None once it is stopped."""
+        logged = False
+        while not self.stop_event.is_set():
+            try:
+                return int(self.notifier.load_offset(self.owner_id))
+            except Exception:
+                if not logged:
+                    print_exc_quietly()
+                    logged = True
+                self.stop_event.wait(30)
+        return None
+
     def _run(self) -> None:
-        offset = self.notifier.load_offset(self.owner_id)
+        first = self._first_offset()
+        if first is None:
+            return
+        offset = first
         failures = 0
+        held = 0  # pauses taken while an update could not be handled
+        hold_logged = False
+        offset_unsaved = False
+        # When each update now held was first handed over (monotonic seconds): a button
+        # pressed behind a held reply is not done when the store is back (see
+        # StaffNotifier.handle_update).
+        first_seen: dict[int, float] = {}
+        # When the update the last poll held was tried, if it held one: no poll waited
+        # at Telegram since (it paused, or polls again at once), so an update the next
+        # poll hands over first waited behind the hold no longer than since then. Kept
+        # while the polls after it come back full: the updates behind a full batch
+        # waited as long (a full poll that holds again keeps the earlier time for them).
+        quiet_since: float | None = None
         while not self.stop_event.is_set():
             try:
                 updates = self.client.get_updates(
-                    offset, timeout=25, allowed=["message", "callback_query"]
+                    offset,
+                    # No waiting at Telegram while what comes next may have waited
+                    # behind a hold: a poll that hands over less than a full batch then
+                    # ends that, and one that waited for new updates would count them
+                    # as having waited too.
+                    timeout=0 if quiet_since is not None else 25,
+                    allowed=["message", "callback_query"],
                 )
                 failures = 0
             except TelegramApiError as exc:
@@ -115,19 +158,85 @@ class NotifyWorker:
                 self.stop_event.wait(delay)
                 continue
             except Exception:
-                traceback.print_exc()
+                print_exc_quietly()
                 self.stop_event.wait(30)
                 continue
+            # Telegram forgets an update once a poll asks for those after it, so the
+            # offset moves only past the updates handled: the others come again.
+            start = offset
+            handled = offset
+            holding = False
+            began = time.monotonic()
+            held_at: float | None = None  # when the update this poll holds was tried
+            if quiet_since is not None:
+                for update in updates:
+                    # A button pressed during the pause, or behind a full batch, may
+                    # have waited since the hold began.
+                    first_seen.setdefault(int(update.get("update_id") or 0), quiet_since)
             for update in updates:
-                offset = max(offset, int(update.get("update_id") or 0) + 1)
                 if self.stop_event.is_set():
-                    break
+                    break  # the rest stay with Telegram, for the next start
+                update_id = int(update.get("update_id") or 0)
+                seen = first_seen.get(update_id)
+                tried = time.monotonic()
                 try:
-                    self.notifier.handle_update(self.owner_id, self.client, update)
+                    self.notifier.handle_update(
+                        self.owner_id,
+                        self.client,
+                        update,
+                        waited=0.0 if seen is None else tried - seen,
+                    )
+                except Exception as exc:
+                    unavailable = storage_unavailable(exc)
+                    if not (unavailable and hold_logged):
+                        print_exc_quietly()  # an outage is said once, not per retry
+                    if unavailable:
+                        # Its chat could not be looked up (the store is down): a staff
+                        # member's reply stays with Telegram and is handled after a
+                        # pause, the updates after it with it (one that waited too long
+                        # is not sent, nor a button pressed meanwhile done: see
+                        # handle_update). Anything else is passed over.
+                        hold_logged = True
+                        holding = True
+                        held_at = tried
+                        break
+                handled = max(handled, update_id + 1)
+            for update in updates:
+                update_id = int(update.get("update_id") or 0)
+                if update_id >= handled:
+                    # It comes again: it waits behind the hold from when that began.
+                    first_seen.setdefault(update_id, began if held_at is None else held_at)
+            for update_id in [key for key in first_seen if key < handled]:
+                del first_seen[update_id]
+            if handled != offset:
+                offset = handled
+                try:
+                    self.notifier.save_offset(self.owner_id, offset)
+                    offset_unsaved = False
                 except Exception:
-                    traceback.print_exc()
-            if updates:
-                self.notifier.save_offset(self.owner_id, offset)
+                    # Polling goes on from the offset in memory (the next poll tells
+                    # Telegram these updates were handled), and the save is tried again
+                    # after the next updates.
+                    if not offset_unsaved:
+                        print_exc_quietly()
+                    offset_unsaved = True
+            full = len(updates) >= TELEGRAM_UPDATES_PER_POLL
+            if held_at is not None:
+                # The updates behind a full batch may have waited since an earlier hold.
+                quiet_since = (
+                    min(quiet_since, held_at) if full and quiet_since is not None else held_at
+                )
+            elif not full:
+                quiet_since = None
+            if not holding:
+                held = 0
+                hold_logged = False
+            elif offset == start:
+                self.stop_event.wait(POLL_BACKOFF_SECONDS[min(held, len(POLL_BACKOFF_SECONDS) - 1)])
+                held += 1
+            # Otherwise this poll handled updates before the one it holds: the next poll,
+            # at once, tells Telegram so (a restart in a pause would hand them over again:
+            # a staff reply would go to the customer twice), and the pause comes after it.
 
 
 class StaffNotifier:
@@ -461,10 +570,19 @@ class StaffNotifier:
             raise NotifyError(502, exc.message, "telegram_send_failed") from None
 
     # -- incoming updates ----------------------------------------------------
-    def handle_update(self, owner_id: str, client: TelegramBotClient, update: dict[str, Any]) -> None:
+    def handle_update(
+        self,
+        owner_id: str,
+        client: TelegramBotClient,
+        update: dict[str, Any],
+        *,
+        waited: float = 0.0,
+    ) -> None:
+        """One update of the shop's bot. ``waited``: seconds since the poller was first
+        handed it (it waited behind an update that could not be handled)."""
         callback = update.get("callback_query")
         if isinstance(callback, dict):
-            self._handle_callback(owner_id, client, callback)
+            self._handle_callback(owner_id, client, callback, waited=waited)
             return
         message = update.get("message")
         if not isinstance(message, dict):
@@ -477,9 +595,10 @@ class StaffNotifier:
         message_id = message.get("message_id")
 
         def say(reply: str) -> None:
+            # Never raises: a reply that went to the customer is not handled again.
             try:
                 client.send_message(tg_chat, reply, reply_to=message_id)
-            except TelegramApiError:
+            except Exception:
                 pass
 
         if text.startswith("/start"):
@@ -550,20 +669,49 @@ class StaffNotifier:
                 "ต่อจากนี้จะได้รับแจ้งเตือนเมื่อลูกค้ารอตอบ เมื่อมีแชทมอบหมายให้ และเมื่อถึงเวลางานติดตาม\n"
                 "พิมพ์ /stop เพื่อเลิกรับแจ้งเตือน")
 
-    def _handle_callback(self, owner_id: str, client: TelegramBotClient, callback: dict[str, Any]) -> None:
+    def _handle_callback(
+        self,
+        owner_id: str,
+        client: TelegramBotClient,
+        callback: dict[str, Any],
+        *,
+        waited: float = 0.0,
+    ) -> None:
         callback_id = str(callback.get("id") or "")
         data = str(callback.get("data") or "")
         action, _, key = data.partition(":")
         sender = (callback.get("from") or {}).get("id")
-        user_id = self._user_for_chat(owner_id, sender)
-        entry = self._find(owner_id, key=key) if key else None
 
         def answer(text: str) -> None:
             try:
                 client.answer_callback(callback_id, text, alert=False)
-            except TelegramApiError:
+            except Exception:
                 pass
 
+        if waited > PRESS_MAX_WAIT_SECONDS:
+            # It waited behind an update the bot could not handle (the store was down).
+            # A button press is not done later, when its chat may have changed: it is
+            # pressed again. Telegram no longer shows an answer this late, so a message
+            # says it.
+            answer(PRESS_AGAIN)
+            if sender:
+                try:
+                    client.send_message(
+                        sender,
+                        "ปุ่มที่กดเมื่อสักครู่ยังไม่ได้ทำ เพราะระบบขัดข้องชั่วคราว กดอีกครั้งได้เลย",
+                    )
+                except Exception:
+                    pass
+            return
+        try:
+            user_id = self._user_for_chat(owner_id, sender)
+            entry = self._find(owner_id, key=key) if key else None
+        except Exception:
+            # Its chat cannot be looked up now (the store is down). A button press is
+            # not done later, when its chat may have changed: it is pressed again.
+            print_exc_quietly()
+            answer(PRESS_AGAIN)
+            return
         if not user_id or not entry:
             answer("ใช้ปุ่มนี้ไม่ได้แล้ว")
             return
@@ -579,4 +727,10 @@ class StaffNotifier:
             else:
                 answer("ใช้ปุ่มนี้ไม่ได้แล้ว")
         except Exception as exc:
+            if storage_unavailable(exc):
+                # The chat records cannot be written now (a database that is down or
+                # locked): said in words, not with the database's own text.
+                print_exc_quietly()
+                answer(PRESS_AGAIN)
+                return
             answer((str(getattr(exc, "message", "") or exc) or "ทำไม่สำเร็จ")[:190])

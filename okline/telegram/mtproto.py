@@ -13,10 +13,10 @@ import io
 import re
 import threading
 import time
-import traceback
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from .._util import print_exc_quietly, print_quietly
 from .channels import chat_id_for
 from .errors import TelegramError
 
@@ -309,7 +309,7 @@ class TelethonUser:
                     # Database work happens off the event loop.
                     await loop.run_in_executor(None, on_message, normalized)
             except Exception:
-                traceback.print_exc()
+                print_exc_quietly()
 
         self._client.add_event_handler(handler, events.NewMessage())
 
@@ -320,7 +320,7 @@ class TelethonUser:
                 if _translate(exc).code == "telegram_reauth":
                     await loop.run_in_executor(None, on_signed_out)
                 else:
-                    traceback.print_exc()
+                    print_exc_quietly()
 
         asyncio.run_coroutine_threadsafe(watch(), loop)
 
@@ -429,7 +429,7 @@ class TelegramUsers:
             try:
                 self.host.tg_backfill(account_id, adapter.recent(100))
             except Exception:
-                traceback.print_exc()
+                print_exc_quietly()
             adapter.listen(
                 lambda message: self.host.tg_receive(account_id, message),
                 lambda: self.host.tg_auth_failed(account_id),
@@ -438,9 +438,12 @@ class TelegramUsers:
             if exc.code == "telegram_reauth":
                 self.host.tg_auth_failed(account_id)
             else:
-                print(f"Telegram account {account_id} could not start: {exc.message}")
+                print_quietly(
+                    f"Telegram account {account_id} could not start: {exc.message}",
+                    stdout=True,
+                )
         except Exception:
-            traceback.print_exc()
+            print_exc_quietly()
 
     def running(self, account_id: str) -> bool:
         with self.lock:

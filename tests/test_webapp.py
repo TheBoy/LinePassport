@@ -3,8 +3,12 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import json
+import os
 import struct
+import sys
 import threading
+import time
+from collections import Counter, deque
 from collections.abc import Iterator
 from html.parser import HTMLParser
 from http import HTTPStatus
@@ -14,6 +18,7 @@ import requests
 
 from okline import OkLine
 from okline import webapp as webapp_module
+from okline.crm.errors import CrmError
 from okline.exceptions import LineAuthError, LineLoginRequired
 from okline.obs import encode_message_talk_meta
 from okline.webapp import (
@@ -854,8 +859,12 @@ def test_authenticated_api_rate_limit_is_scoped_by_user_and_account(
 ):
     clock = [100.0]
     monkeypatch.setattr(webapp_module.time, "monotonic", lambda: clock[0])
-    first_user = {"id": "user-one", "username": "one@example.com"}
-    second_user = {"id": "user-two", "username": "two@example.com"}
+    first_user = {
+        "id": "user-one", "username": "one@example.com", "accountIds": ["line-one", "line-two"]
+    }
+    second_user = {
+        "id": "user-two", "username": "two@example.com", "staffAccountIds": ["line-one"]
+    }
 
     for _ in range(20):
         web_state.enforce_api_rate_limit(
@@ -876,6 +885,67 @@ def test_authenticated_api_rate_limit_is_scoped_by_user_and_account(
 
     clock[0] += 10.1
     web_state.enforce_api_rate_limit(first_user, "GET", "/api/messages", "line-one")
+
+
+@pytest.mark.parametrize(
+    ("path", "limit"),
+    [
+        ("/api/assistant/ask", 20),
+        ("/api/assistant/settings", 6),
+        ("/api/assistant/knowledge/reindex", 4),
+        ("/api/ai/models", 12),
+    ],
+)
+def test_a_made_up_account_id_does_not_reset_an_ai_route_limit(web_state, monkeypatch, path, limit):
+    monkeypatch.setattr(webapp_module.time, "monotonic", lambda: 100.0)
+    # A staff member of one account; these routes never read accountId at all.
+    staff = {"id": "staff-one", "username": "s@example.com", "staffAccountIds": ["line-one"]}
+    for index in range(limit):
+        web_state.enforce_api_rate_limit(staff, "POST", path, f"made-up-{index}")
+    for account_id in ("made-up-again", "line-one", ""):
+        with pytest.raises(WebError) as caught:
+            web_state.enforce_api_rate_limit(staff, "POST", path, account_id)
+        assert caught.value.code == "api_rate_limited"
+
+
+def test_only_accounts_the_user_can_open_get_their_own_bucket(web_state, monkeypatch):
+    monkeypatch.setattr(webapp_module.time, "monotonic", lambda: 100.0)
+    owner = {"id": "owner-one", "username": "o@example.com", "accountIds": ["line-a", "line-b"]}
+    for account_id in ("line-a", "line-b"):
+        for _ in range(20):
+            web_state.enforce_api_rate_limit(owner, "GET", "/api/messages", account_id)
+    # A made-up accountId shares the bucket of requests without one.
+    for index in range(20):
+        web_state.enforce_api_rate_limit(owner, "GET", "/api/messages", f"other-{index}" if index % 2 else "")
+    for account_id in ("line-a", "line-b", "", "other-x"):
+        with pytest.raises(WebError) as caught:
+            web_state.enforce_api_rate_limit(owner, "GET", "/api/messages", account_id)
+        assert caught.value.code == "api_rate_limited"
+    assert ("GET", "/api/messages") in webapp_module.ACCOUNT_SCOPED_RATE_LIMIT_ROUTES
+    # Every account-scoped route is a limited GET route that acts on ?accountId=.
+    assert webapp_module.ACCOUNT_SCOPED_RATE_LIMIT_ROUTES.issubset(
+        webapp_module.AUTHENTICATED_API_RATE_LIMITS
+    )
+    assert all(method == "GET" for method, _path in webapp_module.ACCOUNT_SCOPED_RATE_LIMIT_ROUTES)
+    assert ("GET", "/api/inbox") not in webapp_module.ACCOUNT_SCOPED_RATE_LIMIT_ROUTES
+
+
+def test_ai_ask_route_limit_holds_over_http_with_made_up_account_ids(live_server, monkeypatch):
+    monkeypatch.setitem(
+        webapp_module.AUTHENTICATED_API_RATE_LIMITS, ("POST", "/api/assistant/ask"), (2, 60.0)
+    )
+    session = requests.Session()
+    session.get(f"{live_server}/api/auth/status", timeout=5)  # simple admin session
+    codes = [
+        session.post(
+            f"{live_server}/api/assistant/ask?accountId=made-up-{index}",
+            json={"question": "hello"},
+            timeout=5,
+        ).status_code
+        for index in range(3)
+    ]
+    # No AI is set up: the first two are refused for that (409), the third is limited.
+    assert codes == [HTTPStatus.CONFLICT, HTTPStatus.CONFLICT, HTTPStatus.TOO_MANY_REQUESTS]
 
 
 def test_web_auth_legacy_username_can_still_login(tmp_path):
@@ -1827,6 +1897,7 @@ def test_contacts_and_groups_sort_by_recent_chat():
 
 
 def test_contacts_groups_and_notifications_share_one_inbox_snapshot(web_state):
+    _seed_account(web_state, "account-1")
     handler = OkLineWebHandler.__new__(OkLineWebHandler)
     handler.server = type("Server", (), {"state": web_state})()
     api = _RecentChatFakeApi()
@@ -3088,6 +3159,27 @@ def test_public_bind_fails_fast_without_first_run_setup_token(tmp_path, monkeypa
     assert caught.value.code == "setup_token_not_configured"
 
 
+def test_a_start_that_fails_for_another_reason_than_the_port_says_so(tmp_path, monkeypatch):
+    monkeypatch.delenv("OKLINE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    config = _make_config(tmp_path)
+    config.port = 0
+    starts = []
+
+    def unreadable_state(config):
+        starts.append(config.port)
+        raise PermissionError(13, "Permission denied", "accounts.json")
+
+    monkeypatch.setattr(webapp_module, "WebState", unreadable_state)
+    with pytest.raises(PermissionError):
+        webapp_module._bind_server(config)
+    assert len(starts) == 1  # not tried again on other ports as if they were in use
+    config.port = 18999
+    with pytest.raises(PermissionError):
+        webapp_module._bind_server(config)
+    assert len(starts) == 2
+
+
 def test_schedule_embedded_image_quota_counts_existing_jobs(monkeypatch):
     monkeypatch.setattr(webapp_module, "MAX_SCHEDULE_IMAGE_STORAGE_PER_ACCOUNT", 10)
     existing = [{"id": "one", "accountId": "acct", "imageData": "QUJDREVG"}]
@@ -3326,9 +3418,13 @@ def test_every_primary_menu_and_settings_has_a_detailed_usage_guide():
 
 
 def test_assistant_general_knowledge_mode_is_the_default(web_state):
-    assert 'id="ollamaStrictKnowledge" type="checkbox" checked' not in GOD_HTML
-    assert 'Boolean(config.strictKnowledge)' in GOD_HTML
-    assert web_state.global_ai_settings()["strictKnowledge"] is False
+    # The God page has no AI settings of its own; each shop's form starts unticked.
+    assert "StrictKnowledge" not in GOD_HTML
+    assert "strict.checked = Boolean(data.strictKnowledge);" in INDEX_HTML
+    token = web_state.web_auth.setup("owner@example.com", "owner-pass")
+    owner = web_state.web_auth.current_user(WebAuth.cookie_header(token))
+    assert web_state.assistant_settings(owner)["strictKnowledge"] is False
+    assert not hasattr(web_state, "global_ai_settings")  # no shared AI settings any more
 
 
 class _ImmediateExecutor:
@@ -3407,8 +3503,24 @@ def _auto_reply_owner(web_state):
     web_state.web_auth.grant_account_access(owner["id"], "auto-account")
     owner = web_state.web_auth._find_user(owner["id"])
     assert owner
+    # The workspace's own AI: each workspace uses its own provider and key.
     global_ai = web_state._global_ai_all()
-    global_ai["settings"] = {"enabled": True, "chatModel": "test-model"}
+    global_ai["tenants"][owner["id"]] = {
+        "settings": {
+            "provider": "openai",
+            "enabled": True,
+            "providers": {
+                "openai": {
+                    "apiKey": web_state._encrypt_secret("sk-test-key"),
+                    "chatModel": "test-model",
+                    "embeddingModel": "",
+                }
+            },
+        },
+        "apiSources": [],
+        "manualAnswers": [],
+        "chunks": [],
+    }
     web_state.store.set("global_ai", global_ai)
     return owner
 
@@ -3544,7 +3656,12 @@ def test_ai_auto_reply_separates_contacts_groups_and_skips_own_messages(web_stat
     web_state.invalidate_inbox_snapshot("auto-account")
     web_state.poll_ai_auto_replies()
     assert fake.sent == [("U-contact", "AI: hello")]
-    assert asked[0][1] == {
+    metadata = dict(asked[0][1])
+    # The AI record and settings the reply read (so a failed read is told from a
+    # failed AI).
+    assert isinstance(metadata.pop("data"), dict)
+    assert metadata.pop("settings")["configured"] is True
+    assert metadata == {
         "source": "line_auto_reply",
         "account_id": "auto-account",
         "chat_mid": "U-contact",
@@ -3725,6 +3842,7 @@ def test_ai_auto_reply_selected_group_mode_requires_valid_group(web_state):
 
 
 def test_inbox_snapshot_is_shared_by_auto_reply_and_conversation_summaries(web_state):
+    _seed_account(web_state, "auto-account")
     fake = _AutoReplyFakeApi()
     fake.boxes["U-contact"].append(
         {
@@ -3761,6 +3879,7 @@ def test_inbox_snapshot_coalesces_concurrent_line_reads(web_state):
             assert self.release.wait(timeout=2)
             return {"messageBoxes": []}
 
+    _seed_account(web_state, "auto-account")
     fake = SlowInboxApi()
     results = []
 
@@ -3821,7 +3940,10 @@ def test_ai_auto_reply_worker_runs_without_browser_requests(web_state, monkeypat
 def test_ai_auto_reply_requires_configured_ai(web_state):
     owner = _auto_reply_owner(web_state)
     global_ai = web_state._global_ai_all()
-    global_ai["settings"] = {"enabled": False, "chatModel": ""}
+    # The workspace's provider has no key, and a Shared AI record left in the store
+    # does not stand in for it.
+    global_ai["tenants"][owner["id"]]["settings"]["providers"]["openai"]["apiKey"] = ""
+    global_ai["settings"] = {"enabled": True, "chatModel": "test-model"}
     web_state.store.set("global_ai", global_ai)
 
     with pytest.raises(WebError) as exc:
@@ -3833,6 +3955,1574 @@ def test_ai_auto_reply_requires_configured_ai(web_state):
 
     assert exc.value.status == HTTPStatus.CONFLICT
     assert exc.value.code == "assistant_not_configured"
+
+
+def test_the_shared_ai_routes_are_gone_and_god_knowledge_is_keyword_only(
+    god_live_server, monkeypatch
+):
+    def no_ai(*args, **kwargs):
+        raise AssertionError("the God's knowledge needs no AI provider")
+
+    monkeypatch.setattr(webapp_module, "make_ai_client", no_ai)
+    god = requests.Session()
+    god.post(
+        f"{god_live_server}/api/auth/login",
+        json={"username": "god", "password": "god-password"},
+        timeout=5,
+    ).raise_for_status()
+    # What a God page opened before the update still sends: a clean 404 each time.
+    for method, path, body in (
+        ("GET", "/api/god/ai/settings", None),
+        ("POST", "/api/god/ai/settings",
+         {"enabled": True, "baseUrl": "http://127.0.0.1:11434", "chatModel": "llama3"}),
+        ("POST", "/api/god/ai/test", {"baseUrl": "http://127.0.0.1:11434"}),
+    ):
+        gone = god.request(method, f"{god_live_server}{path}", json=body, timeout=5)
+        assert (gone.status_code, gone.json()["code"]) == (404, "not_found"), path
+        assert "Reload this page" in gone.json()["error"]
+    saved = god.post(
+        f"{god_live_server}/api/god/ai/knowledge",
+        json={"knowledgeMarkdown": "# ส่งของ\n\nส่งฟรีทั่วประเทศเมื่อซื้อครบ 500 บาท"},
+        timeout=5,
+    )
+    assert saved.status_code == 200, saved.text
+    knowledge = saved.json()
+    assert (knowledge["indexMode"], knowledge["chunkCount"], knowledge["indexError"]) == (
+        "keyword", 1, ""
+    )
+    rebuilt = god.post(f"{god_live_server}/api/god/ai/reindex", json={}, timeout=5)
+    assert rebuilt.status_code == 200 and rebuilt.json()["indexMode"] == "keyword"
+    assert god.get(f"{god_live_server}/api/god/ai/knowledge", timeout=5).json()["chunkCount"] == 1
+    unanswered = god.get(f"{god_live_server}/api/god/ai/unanswered?limit=500", timeout=5)
+    assert unanswered.status_code == 200 and unanswered.json() == {"questions": []}
+
+
+def test_a_god_answer_without_an_owner_joins_the_shared_knowledge_by_keyword(
+    web_state, monkeypatch
+):
+    def no_ai(*args, **kwargs):
+        raise AssertionError("no AI provider is needed")
+
+    monkeypatch.setattr(webapp_module, "make_ai_client", no_ai)
+    data = web_state._global_ai_all()
+    data["chunks"] = [{"id": "old", "text": "old", "embedding": [0.1, 0.2]}]
+    data["questions"] = [
+        {"id": "q1", "question": "ส่งต่างประเทศไหม", "status": "unanswered",
+         "createdAt": "2026-11-21T10:00:00"}
+    ]
+    web_state.store.set("global_ai", data)
+    result = web_state.answer_assistant_question(
+        {"id": "q1", "answer": "ยังไม่ส่งต่างประเทศ"}, {"displayName": "God"}
+    )
+    assert result["question"]["status"] == "resolved"
+    assert (result["knowledge"]["indexMode"], result["knowledge"]["chunkCount"]) == ("keyword", 1)
+    stored = web_state._global_ai_all()
+    assert stored["manualAnswers"][0]["answer"] == "ยังไม่ส่งต่างประเทศ"
+    assert all("embedding" not in chunk for chunk in stored["chunks"])
+    assert stored["embeddingModel"] == ""
+
+
+def test_a_god_answer_to_a_staff_question_joins_the_owners_shop_knowledge(
+    web_state, monkeypatch
+):
+    def no_ai(*args, **kwargs):
+        raise AssertionError("no AI provider is needed")
+
+    monkeypatch.setattr(webapp_module, "make_ai_client", no_ai)
+    token = web_state.web_auth.setup("owner@example.com", "owner-pass")
+    owner = web_state.web_auth.current_user(WebAuth.cookie_header(token))
+    _seed_account(web_state, "acct")
+    web_state.web_auth.grant_account_access(owner["id"], "acct")
+    staff = web_state.web_auth.create_staff(owner, "staff@example.com", "staff-pass", "Staff", ["acct"])
+    data = web_state._global_ai_all()
+    data["questions"] = [
+        {"id": "q-staff", "userId": staff["id"], "question": "ส่งต่างประเทศไหม",
+         "status": "unanswered", "createdAt": "2026-11-21T10:00:00"},
+        # Asked through the owner's account by someone removed since.
+        {"id": "q-gone", "userId": "removed-user", "accountId": "acct",
+         "question": "มีหน้าร้านไหม", "status": "unanswered", "createdAt": "2026-11-21T10:01:00"},
+    ]
+    web_state.store.set("global_ai", data)
+    assert [item["id"] for item in web_state.tenant_unanswered(owner)["questions"]] == ["q-staff"]
+
+    result = web_state.answer_assistant_question(
+        {"id": "q-staff", "answer": "ยังไม่ส่งต่างประเทศ"}, {"displayName": "God"}
+    )
+    assert result["question"]["status"] == "resolved"
+    assert (result["knowledge"]["chunkCount"], result["knowledge"]["indexMode"]) == (1, "keyword")
+    stored = web_state._global_ai_all()
+    assert staff["id"] not in stored["tenants"]  # staff have no shop data of their own
+    assert stored["manualAnswers"] == []  # nor is it the God's global knowledge
+    owner_tenant = stored["tenants"][owner["id"]]
+    assert [item["answer"] for item in owner_tenant["manualAnswers"]] == ["ยังไม่ส่งต่างประเทศ"]
+    assert "ยังไม่ส่งต่างประเทศ" in owner_tenant["chunks"][0]["text"]
+    assert web_state.tenant_unanswered(owner)["questions"] == []
+
+    web_state.answer_assistant_question({"id": "q-gone", "answer": "ไม่มีหน้าร้าน"}, {"displayName": "God"})
+    stored = web_state._global_ai_all()
+    assert "removed-user" not in stored["tenants"]
+    assert [item["answer"] for item in stored["tenants"][owner["id"]]["manualAnswers"]] == [
+        "ยังไม่ส่งต่างประเทศ", "ไม่มีหน้าร้าน",
+    ]
+
+
+def test_ai_auto_reply_passes_over_messages_quietly_without_a_workspace_ai(web_state):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    asked = []
+
+    def ask(question, user, **metadata):
+        asked.append(question)
+        return {"ok": True, "question": {"answer": f"AI: {question}", "model": "test-model"}}
+
+    web_state.ask_global_ai = ask
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    # The workspace's AI goes away: its key is removed.
+    web_state.save_assistant_settings({"provider": "openai", "clearApiKey": True, "test": False}, owner)
+    fake.boxes["U-contact"].append(
+        {"id": "while-missing", "from": "U-contact", "text": "anyone there?", "contentType": 0,
+         "createdTime": enabled_at + 1000}
+    )
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.poll_ai_auto_replies()
+    assert asked == [] and fake.sent == []
+    assert web_state.ai_auto_reply_rate_events == {}  # no rate-limit use
+    actions = {log["action"] for log in web_state.list_bot_logs("auto-account", owner)["logs"]}
+    assert not actions & {"ai.auto_reply.received", "ai.auto_reply.error", "ai.auto_reply.rate_limit"}
+    view = web_state.ai_auto_reply_settings("auto-account", owner)
+    assert (view["enabled"], view["aiConfigured"]) == (True, False)
+    assert (view["runtime"]["state"], view["runtime"]["lastError"]) == ("ai_missing", "")
+    # With an AI again, new messages are answered; the one passed over is not.
+    web_state.save_assistant_settings(
+        {"provider": "openai", "apiKey": "sk-test-key-again", "test": False}, owner
+    )
+    assert web_state.ai_auto_reply_settings("auto-account", owner)["runtime"]["state"] == "starting"
+    fake.boxes["U-contact"].append(
+        {"id": "after", "from": "U-contact", "text": "hello", "contentType": 0,
+         "createdTime": enabled_at + 2000}
+    )
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.poll_ai_auto_replies()
+    assert asked == ["hello"] and fake.sent == [("U-contact", "AI: hello")]
+    assert web_state.ai_auto_reply_settings("auto-account", owner)["runtime"]["state"] == "running"
+
+
+class _RecordingExecutor:
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, fn, *args, **kwargs):
+        self.submitted.append(args[0] if args else None)
+        return None
+
+    def shutdown(self, **kwargs):
+        return None
+
+
+def _count_global_ai_reads(web_state, monkeypatch):
+    reads = []
+    original = web_state.store.get
+
+    def counting_get(key, default):
+        if key == "global_ai":
+            reads.append(key)
+        return original(key, default)
+
+    monkeypatch.setattr(web_state.store, "get", counting_get)
+    return reads
+
+
+def test_line_auto_reply_reads_the_ai_settings_only_for_a_message_to_answer(
+    web_state, monkeypatch
+):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    recorder = _RecordingExecutor()
+    web_state.ai_auto_reply_executor = recorder
+    owner = _auto_reply_owner(web_state)
+    # A second LINE account of the same owner.
+    web_state.account_store.data["accounts"].append(
+        {"id": "auto-account-2", "label": "Second LINE", "mid": "U-me-2", "tokenFile": "",
+         "createdAt": "2026-07-11T12:00:00", "updatedAt": "2026-07-11T12:00:00"}
+    )
+    web_state.account_store.save()
+    web_state.web_auth.grant_account_access(owner["id"], "auto-account-2")
+    owner = web_state.web_auth._find_user(owner["id"])
+    fakes = {"auto-account": _AutoReplyFakeApi(), "auto-account-2": _AutoReplyFakeApi()}
+    web_state.get_api = lambda account_id, **kwargs: fakes[account_id]
+    for account_id in fakes:
+        web_state.save_ai_auto_reply_settings(
+            account_id, {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+        )
+    reads = _count_global_ai_reads(web_state, monkeypatch)
+
+    # Nothing new in either inbox: the AI settings are not read at all.
+    web_state.poll_ai_auto_replies()
+    web_state.poll_ai_auto_replies()
+    assert reads == [] and recorder.submitted == []
+
+    def new_message(message_id, text):
+        for account_id, fake in fakes.items():
+            enabled_at = web_state._ai_auto_reply_record(account_id)["enabledAtMs"]
+            fake.boxes["U-contact"].append(
+                {"id": f"{account_id}-{message_id}", "from": "U-contact", "text": text,
+                 "contentType": 0, "createdTime": enabled_at + 1000 * message_id}
+            )
+            web_state.invalidate_inbox_snapshot(account_id)
+
+    # Both accounts of the owner have a message to answer: one read in the cycle.
+    new_message(1, "hello")
+    web_state.poll_ai_auto_replies()
+    assert len(reads) == 1
+    assert sorted(candidate["accountId"] for candidate in recorder.submitted) == [
+        "auto-account", "auto-account-2"
+    ]
+    assert web_state.ai_auto_reply_runtime["auto-account"]["state"] == "running"
+
+    # Without an AI, the next messages are passed over quietly and their cursors move.
+    web_state.save_assistant_settings({"provider": "openai", "clearApiKey": True, "test": False}, owner)
+    with web_state.ai_auto_reply_lock:
+        # The recorder never ran the replies: they still hold their chats and places.
+        assert web_state.ai_auto_reply_owner_jobs == {owner["id"]: 2}
+        web_state.ai_auto_reply_inflight.clear()
+        web_state.ai_auto_reply_owner_jobs.clear()
+    recorder.submitted.clear()
+    reads.clear()
+    rate_used = {key: len(stamps) for key, stamps in web_state.ai_auto_reply_rate_events.items()}
+    new_message(2, "anyone there?")
+    web_state.poll_ai_auto_replies()
+    assert len(reads) == 1 and recorder.submitted == []
+    assert {
+        key: len(stamps) for key, stamps in web_state.ai_auto_reply_rate_events.items()
+    } == rate_used  # no rate-limit use
+    for account_id in fakes:
+        assert web_state.ai_auto_reply_runtime[account_id]["state"] == "ai_missing"
+    # With the AI back, the message passed over is not answered later.
+    web_state.save_assistant_settings(
+        {"provider": "openai", "apiKey": "sk-test-key-again", "test": False}, owner
+    )
+    for account_id in fakes:
+        web_state.invalidate_inbox_snapshot(account_id)
+    web_state.poll_ai_auto_replies()
+    assert recorder.submitted == []
+
+
+class _FailingChatClient:
+    def __init__(self, error):
+        self.error = error
+
+    def embed(self, model, texts, timeout=None):
+        return [[1.0] for _ in texts]
+
+    def chat(self, **kwargs):
+        raise self.error
+
+    def list_models(self, timeout=None):
+        return []
+
+
+def test_auto_reply_failures_are_logged_with_the_ai_key_hidden(web_state, monkeypatch):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)  # its OpenAI key is "sk-test-key"
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    errors = iter([
+        webapp_module.AssistantError("OpenAI error 429: quota exceeded for sk-test-key", 429),
+        # Not a provider error, and still not allowed to show the key.
+        RuntimeError("socket closed while sending sk-test-key"),
+    ])
+    monkeypatch.setattr(
+        webapp_module, "make_ai_client", lambda *args, **kwargs: _FailingChatClient(next(errors))
+    )
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    for index, text in enumerate(("first", "second")):
+        fake.boxes["U-contact"].append(
+            {"id": f"m{index}", "from": "U-contact", "text": text, "contentType": 0,
+             "createdTime": enabled_at + 1000 * (index + 1)}
+        )
+        web_state.invalidate_inbox_snapshot("auto-account")
+        web_state.poll_ai_auto_replies()
+        runtime = web_state.ai_auto_reply_settings("auto-account", owner)["runtime"]
+        assert runtime["state"] == "error"
+        assert "sk-test-key" not in runtime["lastError"] and "[API key]" in runtime["lastError"]
+    failures = [
+        log for log in web_state.list_bot_logs("auto-account", owner)["logs"]
+        if log["action"] == "ai.auto_reply.error"
+    ]
+    assert len(failures) == 2
+    assert all("sk-test-key" not in log["detail"] and "[API key]" in log["detail"] for log in failures)
+    assert fake.sent == []  # nothing is sent when the provider fails
+
+
+def test_auto_replies_of_every_workspace_share_four_workers(web_state):
+    assert webapp_module.AI_AUTO_REPLY_WORKERS == 4
+    assert web_state.ai_auto_reply_executor._max_workers == 4
+    # One workspace gets at most half of them, running or queued.
+    assert webapp_module.AI_AUTO_REPLY_JOBS_PER_OWNER == 2
+
+
+def _wait_for(condition, seconds=10.0):
+    deadline = time.monotonic() + seconds
+    while not condition():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
+def _second_line_owner(web_state, account_id, own_mid, api_key):
+    """A registered member with a LINE account and its own AI key."""
+    token = web_state.web_auth.register("member@example.com", "member-pass", "Member")
+    member = web_state.web_auth.current_user(WebAuth.cookie_header(token))
+    web_state.account_store.data["accounts"].append(
+        {"id": account_id, "label": "Member LINE", "mid": own_mid, "tokenFile": "",
+         "createdAt": "2026-07-11T12:00:00", "updatedAt": "2026-07-11T12:00:00"}
+    )
+    web_state.account_store.save()
+    web_state.web_auth.grant_account_access(member["id"], account_id)
+    global_ai = web_state._global_ai_all()
+    global_ai["tenants"][member["id"]] = {
+        "settings": {"provider": "openai", "enabled": True, "providers": {"openai": {
+            "apiKey": web_state._encrypt_secret(api_key), "chatModel": "test-model",
+            "embeddingModel": ""}}},
+        "apiSources": [], "manualAnswers": [], "chunks": [],
+    }
+    web_state.store.set("global_ai", global_ai)
+    web_state._forget_ai_readiness()
+    return web_state.web_auth._find_user(member["id"])
+
+
+def test_line_auto_replies_wait_for_the_owners_share_of_the_workers(web_state, monkeypatch):
+    web_state.ai_auto_reply_engine.close()  # this test polls by itself
+    owner_a = _auto_reply_owner(web_state)  # its OpenAI key is "sk-test-key"
+    owner_b = _second_line_owner(web_state, "b-account", "U-b-me", "sk-member-key-1")
+    fakes = {"auto-account": _AutoReplyFakeApi(), "b-account": _AutoReplyFakeApi()}
+    web_state.get_api = lambda account_id, **kwargs: fakes[account_id]
+    gate = threading.Event()
+    lock = threading.Lock()
+    running = {"a": 0, "b": 0}
+    most = dict(running)
+    started = []
+
+    class _GateClient:
+        def __init__(self, api_key):
+            self.name = {"sk-test-key": "a", "sk-member-key-1": "b"}[api_key]
+
+        def chat(self, **chat):
+            with lock:
+                running[self.name] += 1
+                most[self.name] = max(most[self.name], running[self.name])
+                started.append((self.name, chat["question"]))
+            try:
+                assert gate.wait(10)
+                return {"answer": f"AI: {chat['question']}", "canAnswer": True,
+                        "confidence": 0.9, "model": "test-model"}
+            finally:
+                with lock:
+                    running[self.name] -= 1
+
+    monkeypatch.setattr(
+        webapp_module, "make_ai_client", lambda provider_id, *, api_key, **kw: _GateClient(api_key)
+    )
+    for account_id, owner in (("auto-account", owner_a), ("b-account", owner_b)):
+        web_state.save_ai_auto_reply_settings(
+            account_id, {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+        )
+    a_chats = [f"U-a{index}" for index in range(6)]
+    for account_id, chats in (("auto-account", a_chats), ("b-account", ["U-b0"])):
+        enabled_at = web_state._ai_auto_reply_record(account_id)["enabledAtMs"]
+        fakes[account_id].boxes = {
+            mid: [{"id": f"{mid}-1", "from": mid, "text": f"hi from {mid}", "contentType": 0,
+                   "createdTime": enabled_at + 1000}]
+            for mid in chats
+        }
+
+    def poll():
+        for account_id in fakes:
+            web_state.invalidate_inbox_snapshot(account_id)
+        web_state.poll_ai_auto_replies()
+
+    try:
+        poll()
+        # B's reply starts at once on a free worker; A has two running and four waiting.
+        assert _wait_for(lambda: ("b", "hi from U-b0") in started, 2.0)
+        time.sleep(0.2)
+        with lock:
+            assert sorted(question for name, question in started if name == "a") == [
+                "hi from U-a0", "hi from U-a1"
+            ]
+        assert web_state.ai_auto_reply_owner_jobs == {owner_a["id"]: 2, owner_b["id"]: 1}
+        assert web_state.ai_auto_reply_backlog == {}  # LINE messages wait outside it
+        ready = web_state.ai_auto_reply_line_ready[owner_a["id"]]["auto-account"]
+        assert [entry["chatMid"] for entry in ready] == ["U-a2", "U-a3", "U-a4", "U-a5"]
+        # Waiting LINE messages keep their chats' cursors and use no rate, poll after poll.
+        for _ in range(3):
+            poll()
+        with lock:
+            assert len(started) == 3 and most["a"] == 2
+        last_seen = web_state._ai_auto_reply_record("auto-account")["lastSeen"]
+        assert not set(last_seen) & set(a_chats)
+        rated = {key[2] for key in web_state.ai_auto_reply_rate_events if key[0] == "chat"}
+        assert rated == {"U-a0", "U-a1", "U-b0"}
+    finally:
+        gate.set()
+    # Places that free up start the ready chats, and later polls the rest: each waiting
+    # message is answered exactly once, two of A's at a time.
+    assert _wait_for(lambda: poll() or len(fakes["auto-account"].sent) == 6, 15.0)
+    for _ in range(3):
+        poll()
+        time.sleep(0.05)
+    assert Counter(mid for mid, _text in fakes["auto-account"].sent) == dict.fromkeys(a_chats, 1)
+    assert fakes["b-account"].sent == [("U-b0", "AI: hi from U-b0")]
+    assert most == {"a": 2, "b": 1}
+    assert _wait_for(lambda: not web_state.ai_auto_reply_owner_jobs)
+    assert web_state.ai_auto_reply_inflight == set()
+    assert web_state.ai_auto_reply_line_ready == {}
+
+
+def _queue_telegram_reply(web_state, owner, index):
+    """A Telegram auto reply of ``owner`` (no cursor), as _telegram_auto_reply queues it."""
+    key = ("tg-account", f"tg-chat-{index}")
+    with web_state.ai_auto_reply_lock:
+        web_state.ai_auto_reply_inflight.add(key)
+    assert web_state._queue_ai_auto_reply(
+        {"accountId": key[0], "chatMid": key[1], "chatType": "contact",
+         "question": f"tg {index}", "cursor": None, "ownerId": owner["id"]}
+    )
+
+
+def _line_auto_reply_with_recorder(web_state, chats=("U-contact",)):
+    """One owner's LINE account with auto reply on and a message in each of ``chats``.
+
+    Jobs are recorded, never run, so places stay taken until a test frees them.
+    """
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    recorder = _RecordingExecutor()
+    web_state.ai_auto_reply_executor = recorder
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    fake.boxes = {
+        mid: [{"id": f"{mid}-1", "from": mid, "text": f"hi from {mid}", "contentType": 0,
+               "createdTime": enabled_at + 1000}]
+        for mid in chats
+    }
+
+    def poll():
+        web_state.invalidate_inbox_snapshot("auto-account")
+        web_state.poll_ai_auto_replies()
+
+    return owner, recorder, poll
+
+
+def _submitted(recorder):
+    return [job["question"] for job in recorder.submitted]
+
+
+def _ready_chats(web_state, owner):
+    accounts = web_state.ai_auto_reply_line_ready.get(owner["id"], {})
+    return [entry["chatMid"] for entry in accounts.get("auto-account", [])]
+
+
+def _passed_over(web_state):
+    logs = web_state.store.get("bot_logs", {"logs": []})["logs"]
+    return [log for log in logs if log["action"] == "ai.auto_reply.rate_limit"]
+
+
+def test_waiting_line_messages_take_turns_with_waiting_telegram_replies(web_state):
+    owner, recorder, poll = _line_auto_reply_with_recorder(
+        web_state, chats=("U-c0", "U-c1")
+    )
+    # The owner's two places are taken and four Telegram replies wait.
+    for index in range(6):
+        _queue_telegram_reply(web_state, owner, index)
+    assert _submitted(recorder) == ["tg 0", "tg 1"]
+    # Both LINE messages wait outside the backlog, ready to start: cursors unchanged,
+    # no rate used.
+    poll()
+    assert _ready_chats(web_state, owner) == ["U-c0", "U-c1"]
+    assert [job["question"] for job in web_state.ai_auto_reply_backlog[owner["id"]]] == [
+        "tg 2", "tg 3", "tg 4", "tg 5"
+    ]
+    assert not [key for key in web_state.ai_auto_reply_rate_events if key[0] == "chat"
+                and key[1] == "auto-account"]
+    assert not set(web_state._ai_auto_reply_record("auto-account")["lastSeen"]) & {
+        "U-c0", "U-c1"
+    }
+    # Places that free up start LINE and Telegram replies in turn, at once (no poll in
+    # between); a LINE reply uses the rate when it starts.
+    for _ in range(4):
+        web_state._free_ai_auto_reply_slot(owner["id"])
+    assert _submitted(recorder) == [
+        "tg 0", "tg 1", "hi from U-c0", "tg 2", "hi from U-c1", "tg 3"
+    ]
+    for chat in ("U-c0", "U-c1"):
+        assert len(web_state.ai_auto_reply_rate_events[("chat", "auto-account", chat)]) == 1
+    assert web_state.ai_auto_reply_line_ready == {}
+    assert web_state.ai_auto_reply_owner_jobs == {owner["id"]: 2}
+    # Nothing is ready on the LINE side any more, so the backlog has every place.
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    assert _submitted(recorder)[-2:] == ["tg 4", "tg 5"]
+    # With nothing waiting at all, a place that frees up is free.
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    assert web_state.ai_auto_reply_owner_jobs == {owner["id"]: 1}
+    assert web_state.ai_auto_reply_backlog == {} and web_state.ai_auto_reply_line_turn == {}
+
+
+def test_replies_that_end_during_a_long_poll_cycle_start_the_next_at_once(
+    web_state, monkeypatch
+):
+    # A poll cycle can take minutes (one LINE account whose requests hang holds up the
+    # cycle for every workspace). Places that free up meanwhile go straight to the
+    # ready LINE chats and the waiting Telegram replies; none waits for the next poll.
+    owner, recorder, poll = _line_auto_reply_with_recorder(
+        web_state, chats=("U-c0", "U-c1")
+    )
+    for index in range(8):
+        _queue_telegram_reply(web_state, owner, index)  # two run, six wait
+    poll()  # both LINE chats wait, ready
+    seen = []
+
+    def slow_refresh():
+        for _ in range(4):  # four replies end while the cycle is held up
+            web_state._free_ai_auto_reply_slot(owner["id"])
+            seen.append((len(recorder.submitted), dict(web_state.ai_auto_reply_owner_jobs)))
+
+    monkeypatch.setattr(web_state, "refresh_inbox_for_all_accounts", slow_refresh)
+    poll()
+    assert seen == [(count, {owner["id"]: 2}) for count in (3, 4, 5, 6)]
+    assert _submitted(recorder)[2:] == ["hi from U-c0", "tg 2", "hi from U-c1", "tg 3"]
+
+
+def test_a_line_burst_waits_without_using_the_reply_rate(web_state):
+    # The default limits: 20 replies a minute per account, 2 places per owner.
+    assert webapp_module.MAX_AI_AUTO_REPLIES_PER_ACCOUNT_PER_MINUTE == 20
+    chats = tuple(f"U-c{index:02d}" for index in range(25))
+    owner, recorder, poll = _line_auto_reply_with_recorder(web_state, chats=chats)
+
+    def rated():
+        return len(web_state.ai_auto_reply_rate_events.get(("account", "auto-account"), []))
+
+    poll()
+    # Two start; the other 23 wait, with no rate used and no cursor moved, and the
+    # first eight of them are ready for the next places.
+    assert len(recorder.submitted) == 2 and rated() == 2
+    assert webapp_module.MAX_AI_AUTO_REPLY_READY_PER_ACCOUNT == 8
+    assert _ready_chats(web_state, owner) == [f"U-c{index:02d}" for index in range(2, 10)]
+    assert _passed_over(web_state) == []
+    assert not set(web_state._ai_auto_reply_record("auto-account")["lastSeen"]) & set(chats)
+    # As replies end, the waiting messages start one by one, each using the rate then.
+    for _ in range(10):
+        web_state._free_ai_auto_reply_slot(owner["id"])
+        poll()
+    assert len(recorder.submitted) == 12 and rated() == 12
+    assert len({job["chatMid"] for job in recorder.submitted}) == 12
+    assert _passed_over(web_state) == []
+    # However fast replies end, the account answers 20 in a minute; the rest then wait
+    # for the next minute instead of being passed over, and leave no place taken.
+    while len(recorder.submitted) < 20:
+        web_state._free_ai_auto_reply_slot(owner["id"])
+        poll()
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    poll()
+    assert len(recorder.submitted) == 20 and rated() == 20
+    assert _passed_over(web_state) == [] and web_state.ai_auto_reply_line_ready == {}
+    assert web_state.ai_auto_reply_owner_jobs == {owner["id"]: 1}
+    assert not set(web_state._ai_auto_reply_record("auto-account")["lastSeen"]) & set(chats)
+    # A minute later they go on.
+    with web_state.ai_auto_reply_lock:
+        for key, stamps in web_state.ai_auto_reply_rate_events.items():
+            web_state.ai_auto_reply_rate_events[key] = [stamp - 61.0 for stamp in stamps]
+    poll()
+    assert _submitted(recorder)[-1] == "hi from U-c20"
+    assert _ready_chats(web_state, owner) == ["U-c21", "U-c22", "U-c23", "U-c24"]
+    while len(recorder.submitted) < 25:
+        web_state._free_ai_auto_reply_slot(owner["id"])
+        poll()
+    assert sorted(job["chatMid"] for job in recorder.submitted) == list(chats)
+    assert _passed_over(web_state) == []
+
+
+def test_ready_line_chats_go_stale_or_go_with_their_account(web_state):
+    owner, recorder, poll = _line_auto_reply_with_recorder(web_state)
+    for index in range(4):
+        _queue_telegram_reply(web_state, owner, index)  # two run, "tg 2" and "tg 3" wait
+    poll()  # the LINE message waits, ready
+    assert _ready_chats(web_state, owner) == ["U-contact"]
+    # Its poll's look at it is too old by the time a place frees up: the place goes to
+    # the backlog, and the next poll looks at the chat again.
+    with web_state.ai_auto_reply_lock:
+        for entry in web_state.ai_auto_reply_line_ready[owner["id"]]["auto-account"]:
+            entry["readyAt"] -= webapp_module.AI_AUTO_REPLY_READY_SECONDS + 1
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    assert _submitted(recorder) == ["tg 0", "tg 1", "tg 2"]
+    assert web_state.ai_auto_reply_line_ready == {}
+    poll()
+    assert _ready_chats(web_state, owner) == ["U-contact"]
+    # Auto reply is switched off before the next place frees up: the next poll cycle
+    # forgets the ready chat, and the place goes to the backlog.
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": False, "contactsEnabled": True, "groupsEnabled": False},
+        owner,
+    )
+    poll()
+    assert web_state.ai_auto_reply_line_ready == {}
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    assert _submitted(recorder) == ["tg 0", "tg 1", "tg 2", "tg 3"]
+    assert web_state.ai_auto_reply_owner_jobs == {owner["id"]: 2}
+
+
+def test_a_ready_line_chat_answered_meanwhile_is_not_started_again(web_state, monkeypatch):
+    owner, recorder, poll = _line_auto_reply_with_recorder(web_state, chats=("U-c0",))
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)
+    poll()  # U-c0 waits, ready
+    [entry] = web_state.ai_auto_reply_line_ready[owner["id"]]["auto-account"]
+    # Its reply ran meanwhile and ended, cursor saved, after this entry's look.
+    web_state._save_ai_auto_reply_cursors(
+        "auto-account", entry["enabledAtMs"], {"U-c0": entry["cursor"]}
+    )
+    with web_state.ai_auto_reply_lock:
+        web_state.ai_auto_reply_settle_count += 1
+        web_state.ai_auto_reply_settled[("auto-account", "U-c0")] = (
+            web_state.ai_auto_reply_settle_count
+        )
+    # A place frees up in the next cycle, after that cycle tidied the marks but before
+    # it polled the account again: the mark must still rule the entry out.
+    original = web_state._poll_ai_auto_reply_account
+
+    def a_reply_ends_first(*args, **kwargs):
+        web_state._free_ai_auto_reply_slot(owner["id"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(web_state, "_poll_ai_auto_reply_account", a_reply_ends_first)
+    poll()
+    assert _submitted(recorder) == ["tg 0", "tg 1"]  # U-c0 is not answered twice
+    assert web_state.ai_auto_reply_owner_jobs == {owner["id"]: 1}
+    assert web_state.ai_auto_reply_line_ready == {}
+
+
+def test_a_reply_that_ends_during_a_poll_is_not_sent_again(web_state):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    web_state.ask_global_ai = lambda question, user, **metadata: {
+        "ok": True, "question": {"answer": f"AI: {question}", "model": "test-model"}
+    }
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    fake.boxes["U-contact"].append(
+        {"id": "m1", "from": "U-contact", "text": "hello", "contentType": 0,
+         "createdTime": enabled_at + 1000}
+    )
+    # A cycle reads the cursors, then the reply for the chat ends and saves its cursor
+    # before the cycle gets to that chat (here: a whole other poll in between).
+    read_mark = web_state.ai_auto_reply_settle_count
+    stale = web_state._ai_auto_reply_record("auto-account")
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.poll_ai_auto_replies()
+    assert fake.sent == [("U-contact", "AI: hello")]
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state._poll_ai_auto_reply_account("auto-account", stale, read_mark=read_mark)
+    assert fake.sent == [("U-contact", "AI: hello")]  # not a second time
+    # The next cycles read the saved cursor; a new message is answered as usual.
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.poll_ai_auto_replies()
+    fake.boxes["U-contact"].append(
+        {"id": "m2", "from": "U-contact", "text": "still there?", "contentType": 0,
+         "createdTime": enabled_at + 2000}
+    )
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.poll_ai_auto_replies()
+    assert fake.sent == [("U-contact", "AI: hello"), ("U-contact", "AI: still there?")]
+
+
+def test_a_failed_line_poll_gives_back_what_its_replies_held(web_state, monkeypatch):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    web_state.ask_global_ai = lambda question, user, **metadata: {
+        "ok": True, "question": {"answer": f"AI: {question}", "model": "test-model"}
+    }
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    fake.boxes["U-contact"].append(
+        {"id": "m1", "from": "U-contact", "text": "hello", "contentType": 0,
+         "createdTime": enabled_at + 1000}
+    )
+    for mid in ("U-x1", "U-x2"):  # three chats: more than the owner's two places
+        fake.boxes[mid] = [{"id": f"{mid}-1", "from": mid, "text": f"hi from {mid}",
+                            "contentType": 0, "createdTime": enabled_at + 1000}]
+    original_save = web_state._save_ai_auto_reply_cursors
+
+    def broken_save(*args, **kwargs):
+        raise OSError("disk full")
+
+    # The poll fails after it chose the chats, before the replies reached the workers.
+    monkeypatch.setattr(web_state, "_save_ai_auto_reply_cursors", broken_save)
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.poll_ai_auto_replies()
+    assert fake.sent == []
+    assert web_state.ai_auto_reply_runtime["auto-account"]["state"] == "error"
+    assert web_state.ai_auto_reply_owner_jobs == {}
+    assert web_state.ai_auto_reply_inflight == set()
+    # It leaves no chat ready either (the next poll is the regular one, 5 s later).
+    assert web_state.ai_auto_reply_line_ready == {}
+    # The rate it used is given back too.
+    assert not web_state.ai_auto_reply_rate_events.get(("chat", "auto-account", "U-contact"))
+    assert not web_state.ai_auto_reply_rate_events.get(("account", "auto-account"))
+    # Nothing was lost: the next polls answer each message, once.
+    monkeypatch.setattr(web_state, "_save_ai_auto_reply_cursors", original_save)
+    for _ in range(3):
+        web_state.invalidate_inbox_snapshot("auto-account")
+        web_state.poll_ai_auto_replies()
+    assert Counter(mid for mid, _text in fake.sent) == {"U-contact": 1, "U-x1": 1, "U-x2": 1}
+
+
+def test_a_reply_whose_cursor_cannot_be_saved_is_not_sent_again(web_state, monkeypatch):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    web_state.ask_global_ai = lambda question, user, **metadata: {
+        "ok": True, "question": {"answer": f"AI: {question}", "model": "test-model"}
+    }
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    fake.boxes["U-contact"].append(
+        {"id": "m1", "from": "U-contact", "text": "hello", "contentType": 0,
+         "createdTime": enabled_at + 1000}
+    )
+    original_set = web_state.store.set
+
+    def no_room(key, value):  # a full disk or a read-only database, for this key
+        if key == "ai_auto_reply":
+            raise OSError(28, "No space left on device")
+        return original_set(key, value)
+
+    def poll():
+        web_state.invalidate_inbox_snapshot("auto-account")
+        web_state.poll_ai_auto_replies()
+
+    # The reply is sent; saving its chat's cursor then fails.
+    monkeypatch.setattr(web_state.store, "set", no_room)
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello")]
+    for _ in range(3):
+        poll()
+    assert fake.sent == [("U-contact", "AI: hello")]  # never sent again
+    # Saving works again: the next poll stores that cursor, and still sends nothing.
+    monkeypatch.setattr(web_state.store, "set", original_set)
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello")]
+    assert "U-contact" in web_state._ai_auto_reply_record("auto-account")["lastSeen"]
+    assert web_state.ai_auto_reply_unsaved_cursors == {}
+    # A new message is answered as usual.
+    fake.boxes["U-contact"].append(
+        {"id": "m2", "from": "U-contact", "text": "still there?", "contentType": 0,
+         "createdTime": enabled_at + 2000}
+    )
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello"), ("U-contact", "AI: still there?")]
+
+
+def _seal_messages(fake):
+    """Make every message of ``fake`` sealed (Letter Sealing); returns the chats read by
+    the polls of this thread."""
+    from types import SimpleNamespace
+
+    reads = []
+    poller = threading.current_thread()  # the CRM reads them too, on its own thread
+
+    def decrypt_message(message):
+        if threading.current_thread() is poller:
+            reads.append(message["from"])
+        return {**message, "text": f"hi from {message['from']}"}
+
+    fake.e2ee = SimpleNamespace(is_ready=lambda: True)
+    fake.decrypt_message = decrypt_message
+    for messages in fake.boxes.values():
+        for message in messages:
+            message["chunks"] = ["sealed"]
+            message.pop("text", None)
+    return reads
+
+
+def test_waiting_sealed_line_chats_are_read_only_when_they_could_start(web_state):
+    # Reading a sealed message can ask LINE for the sender's key, with the account's api
+    # lock held: a poll reads only the waiting chats that could start or be left ready,
+    # and none while the account has used its replies of the minute.
+    chats = tuple(f"U-c{index:02d}" for index in range(30))
+    owner, recorder, poll = _line_auto_reply_with_recorder(web_state, chats=chats)
+    reads = _seal_messages(web_state.get_api("auto-account"))
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)  # both places taken
+    limit = webapp_module.MAX_AI_AUTO_REPLY_READY_PER_ACCOUNT
+    poll()
+    assert reads == list(chats[:limit])
+    assert _ready_chats(web_state, owner) == list(chats[:limit])
+    poll()
+    assert reads == list(chats[:limit]) * 2  # those again, never the other 22
+    # A place frees up: one ready chat starts, and the next poll reads one more chat.
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    assert _submitted(recorder) == ["tg 0", "tg 1", "hi from U-c00"]
+    reads.clear()
+    poll()
+    assert reads == list(chats[1:limit + 1])
+    # The account's minute is used up: nothing is read, and nothing is left ready.
+    with web_state.ai_auto_reply_lock:
+        web_state.ai_auto_reply_rate_events[("account", "auto-account")] = [
+            time.monotonic()
+        ] * webapp_module.MAX_AI_AUTO_REPLIES_PER_ACCOUNT_PER_MINUTE
+    reads.clear()
+    poll()
+    assert reads == [] and web_state.ai_auto_reply_line_ready == {}
+
+
+def test_a_ready_line_chat_waits_while_its_account_is_polled_again(web_state, monkeypatch):
+    owner, recorder, poll = _line_auto_reply_with_recorder(
+        web_state, chats=("U-c0", "U-c1")
+    )
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)  # both places taken
+    poll()
+    assert _ready_chats(web_state, owner) == ["U-c0", "U-c1"]
+    # A reply ends while the next poll reads the chats. The place does not start a
+    # chat that poll is choosing again (it would start twice): the poll takes it.
+    original_boxes = web_state.inbox_message_boxes
+    seen = []
+
+    def a_reply_ends_while_reading(*args, **kwargs):
+        if not seen:
+            web_state._free_ai_auto_reply_slot(owner["id"])
+            seen.append(_submitted(recorder))
+        return original_boxes(*args, **kwargs)
+
+    monkeypatch.setattr(web_state, "inbox_message_boxes", a_reply_ends_while_reading)
+    poll()
+    assert seen == [["tg 0", "tg 1"]]
+    assert _submitted(recorder) == ["tg 0", "tg 1", "hi from U-c0"]
+    assert _ready_chats(web_state, owner) == ["U-c1"]
+    assert web_state.ai_auto_reply_owner_jobs == {owner["id"]: 2}
+    # A reply ends after the poll chose, before it left U-c1 ready again: that free
+    # place starts U-c1 as soon as the poll is done.
+    original_names = web_state._hydrate_ai_auto_reply_candidate_identities
+
+    def a_reply_ends_after_choosing(*args, **kwargs):
+        web_state._free_ai_auto_reply_slot(owner["id"])
+        return original_names(*args, **kwargs)
+
+    monkeypatch.setattr(
+        web_state, "_hydrate_ai_auto_reply_candidate_identities", a_reply_ends_after_choosing
+    )
+    poll()
+    assert _submitted(recorder) == ["tg 0", "tg 1", "hi from U-c0", "hi from U-c1"]
+    assert Counter(job["chatMid"] for job in recorder.submitted[2:]) == {"U-c0": 1, "U-c1": 1}
+    assert web_state.ai_auto_reply_owner_jobs == {owner["id"]: 2}
+    assert web_state.ai_auto_reply_line_ready == {}
+
+
+def test_a_ready_line_chat_keeps_its_turn_through_a_long_poll_cycle(web_state):
+    owner, recorder, poll = _line_auto_reply_with_recorder(web_state)
+    for index in range(3):
+        _queue_telegram_reply(web_state, owner, index)  # two run, "tg 2" waits
+    poll()
+    assert _ready_chats(web_state, owner) == ["U-contact"]
+    # Twenty seconds on (a cycle held up by a LINE account whose requests hang), the
+    # next place still goes to the LINE chat on LINE's turn.
+    with web_state.ai_auto_reply_lock:
+        for entry in web_state.ai_auto_reply_line_ready[owner["id"]]["auto-account"]:
+            entry["readyAt"] -= 20.0
+    assert webapp_module.AI_AUTO_REPLY_READY_SECONDS == 60.0
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    assert _submitted(recorder) == ["tg 0", "tg 1", "hi from U-contact"]
+
+
+def test_ready_line_chats_take_turns_between_an_owner_s_accounts(web_state):
+    owner, recorder, poll = _line_auto_reply_with_recorder(
+        web_state, chats=("U-a0", "U-a1", "U-a2")
+    )
+    first = web_state.get_api("auto-account")
+    second = _AutoReplyFakeApi()
+    web_state.account_store.data["accounts"].append(
+        {"id": "second-line", "label": "Second LINE", "mid": "U-me-2", "tokenFile": "",
+         "createdAt": "2026-07-11T12:00:00", "updatedAt": "2026-07-11T12:00:00"}
+    )
+    web_state.account_store.save()
+    web_state.web_auth.grant_account_access(owner["id"], "second-line")
+    owner = web_state.web_auth._find_user(owner["id"])
+    apis = {"auto-account": first, "second-line": second}
+    web_state.get_api = lambda account_id, **kwargs: apis[account_id]
+    web_state.save_ai_auto_reply_settings(
+        "second-line", {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+    )
+    enabled_at = web_state._ai_auto_reply_record("second-line")["enabledAtMs"]
+    second.boxes = {
+        mid: [{"id": f"{mid}-1", "from": mid, "text": f"hi from {mid}", "contentType": 0,
+               "createdTime": enabled_at + 1000}]
+        for mid in ("U-b0", "U-b1", "U-b2")
+    }
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)  # both places taken
+    web_state.invalidate_inbox_snapshot("second-line")
+    poll()
+    # Places that free up go to the owner's two LINE accounts in turn: the one polled
+    # first does not take them all.
+    for _ in range(4):
+        web_state._free_ai_auto_reply_slot(owner["id"])
+    started = [job["accountId"] for job in recorder.submitted[2:]]
+    assert started in (
+        ["auto-account", "second-line"] * 2,
+        ["second-line", "auto-account"] * 2,
+    )
+
+
+def test_a_saved_line_cursor_never_moves_back(web_state):
+    _line_auto_reply_with_recorder(web_state)
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+
+    def saved():
+        return web_state._ai_auto_reply_record("auto-account")["lastSeen"]["U-contact"]
+
+    newer = {"time": enabled_at + 2000, "ids": ["m2"]}
+    web_state._save_ai_auto_reply_cursors("auto-account", enabled_at, {"U-contact": newer})
+    # A reply chosen from an earlier look at the chat ends after a later look moved on.
+    web_state._save_ai_auto_reply_cursors(
+        "auto-account", enabled_at, {"U-contact": {"time": enabled_at + 1000, "ids": ["m1"]}}
+    )
+    assert saved() == newer
+    # Another message of the same millisecond: the cursor holds both.
+    web_state._save_ai_auto_reply_cursors(
+        "auto-account", enabled_at, {"U-contact": {"time": enabled_at + 2000, "ids": ["m3"]}}
+    )
+    assert saved() == {"time": enabled_at + 2000, "ids": ["m2", "m3"]}
+
+
+def _line_auto_reply_running(web_state):
+    """One owner's LINE account with auto reply on, its replies run at once and the AI
+    answering "AI: <question>"; returns the fake LINE and a poll."""
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    web_state.ask_global_ai = lambda question, user, **metadata: {
+        "ok": True, "question": {"answer": f"AI: {question}", "model": "test-model"}
+    }
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    fake.boxes["U-contact"].append(
+        {"id": "m1", "from": "U-contact", "text": "hello", "contentType": 0,
+         "createdTime": enabled_at + 1000}
+    )
+
+    def poll():
+        web_state.invalidate_inbox_snapshot("auto-account")
+        web_state.poll_ai_auto_replies()
+
+    return fake, poll
+
+
+def test_a_cursor_stored_late_holds_back_a_cycle_that_read_before(web_state, monkeypatch):
+    fake, poll = _line_auto_reply_running(web_state)
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    original_set = web_state.store.set
+
+    def no_room(key, value):
+        if key == "ai_auto_reply":
+            raise OSError(28, "No space left on device")
+        return original_set(key, value)
+
+    monkeypatch.setattr(web_state.store, "set", no_room)
+    poll()  # sent; its cursor is kept until a save stores it
+    assert fake.sent == [("U-contact", "AI: hello")]
+    monkeypatch.setattr(web_state.store, "set", original_set)
+    # A cycle reads the cursors; then another reply's save of the account stores the
+    # kept cursor, before the cycle gets to the chat.
+    read_mark = web_state.ai_auto_reply_settle_count
+    stale = web_state._ai_auto_reply_record("auto-account")
+    assert "U-contact" not in stale["lastSeen"]
+    web_state._save_ai_auto_reply_cursors(
+        "auto-account", enabled_at, {"U-other": {"time": enabled_at + 1500, "ids": ["o1"]}}
+    )
+    assert web_state.ai_auto_reply_unsaved_cursors == {}
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state._poll_ai_auto_reply_account("auto-account", stale, read_mark=read_mark)
+    assert fake.sent == [("U-contact", "AI: hello")]  # not a second time
+
+
+def test_a_reply_that_failed_before_sending_is_answered_once_the_store_is_back(
+    web_state, monkeypatch
+):
+    fake, poll = _line_auto_reply_running(web_state)
+    original_set = web_state.store.set
+    original_enabled = web_state._ai_auto_reply_enabled
+    down = {"now": False}
+
+    def flaky_set(key, value):
+        if down["now"] and key == "ai_auto_reply":
+            raise OSError("could not connect to the database")
+        return original_set(key, value)
+
+    def database_goes_down(*args, **kwargs):
+        down["now"] = True
+        raise OSError("could not connect to the database")
+
+    # The database goes away while the reply runs: nothing is sent, and its cursor
+    # cannot be saved either. No cursor is kept for it, so it is not lost.
+    monkeypatch.setattr(web_state.store, "set", flaky_set)
+    monkeypatch.setattr(web_state, "_ai_auto_reply_enabled", database_goes_down)
+    poll()
+    assert fake.sent == [] and web_state.ai_auto_reply_unsaved_cursors == {}
+    assert web_state.ai_auto_reply_runtime["auto-account"]["state"] == "error"
+    down["now"] = False
+    monkeypatch.setattr(web_state, "_ai_auto_reply_enabled", original_enabled)
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello")]
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello")]
+
+
+def test_an_auto_reply_is_sent_when_its_question_cannot_be_logged(web_state, monkeypatch):
+    web_state.ai_auto_reply_engine.close()
+    web_state.ai_auto_reply_executor.shutdown(wait=True, cancel_futures=True)
+    web_state.ai_auto_reply_executor = _ImmediateExecutor()
+    owner = _auto_reply_owner(web_state)
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+
+    class _AnsweringClient:
+        def embed(self, model, texts, timeout=None):
+            return [[1.0] for _ in texts]
+
+        def chat(self, **chat):
+            return {"answer": f"AI: {chat['question']}", "canAnswer": True,
+                    "confidence": 0.9, "model": "test-model"}
+
+        def list_models(self, timeout=None):
+            return []
+
+    monkeypatch.setattr(webapp_module, "make_ai_client", lambda *args, **kwargs: _AnsweringClient())
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": False}, owner
+    )
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    fake.boxes["U-contact"].append(
+        {"id": "m1", "from": "U-contact", "text": "hello", "contentType": 0,
+         "createdTime": enabled_at + 1000}
+    )
+    original_set = web_state.store.set
+
+    def global_ai_full(key, value):  # the question log cannot be written
+        if key == "global_ai":
+            raise OSError(28, "No space left on device")
+        return original_set(key, value)
+
+    monkeypatch.setattr(web_state.store, "set", global_ai_full)
+    web_state.invalidate_inbox_snapshot("auto-account")
+    web_state.poll_ai_auto_replies()
+    assert fake.sent == [("U-contact", "AI: hello")]
+    assert web_state._global_ai_all()["questions"] == []
+    # Ask AI gets its answer too, and is told the question history could not keep it.
+    result = web_state.ask_global_ai("opening hours?", owner)
+    assert result["question"]["answer"] == "AI: opening hours?"
+    assert result["logged"] is False
+    monkeypatch.setattr(web_state.store, "set", original_set)
+    assert web_state.ask_global_ai("opening hours?", owner)["logged"] is True
+
+
+def test_ask_ai_shows_an_answer_the_question_history_could_not_keep():
+    # Try a conversation (the AI chat on the Knowledge page) shows the answer from the
+    # reply and notes that the question could not be saved; an unanswered one is not
+    # said to be in the list of questions the AI could not answer.
+    assert 'if (data.logged === false) toast(t("assistant.not_logged"), true);' in INDEX_HTML
+    assert 'textSpan(t("kb.no_info_unlogged"), "kb-source")' in INDEX_HTML
+    assert '"assistant.not_logged": {th: "' in INDEX_HTML
+    assert '"kb.no_info_unlogged": {th: "' in INDEX_HTML
+    # The old Ask AI chat view (no longer shown) adds such an answer to its history.
+    assert "await loadAssistant(unlogged);" in INDEX_HTML
+
+
+def test_ask_global_ai_goes_by_the_settings_it_is_given(web_state, monkeypatch):
+    owner = _auto_reply_owner(web_state)
+
+    class _EchoClient:
+        def embed(self, model, texts, timeout=None):
+            return [[1.0] for _ in texts]
+
+        def chat(self, **chat):
+            return {"answer": f"AI: {chat['question']}", "canAnswer": True,
+                    "confidence": 0.9, "model": "test-model"}
+
+    monkeypatch.setattr(webapp_module, "make_ai_client", lambda *args, **kwargs: _EchoClient())
+    data = web_state._global_ai_all()
+    settings = web_state._assistant_settings_for(data, owner)
+
+    def read_again(*args):
+        raise AssertionError("the settings were read again")
+
+    monkeypatch.setattr(web_state, "_assistant_settings_for", read_again)
+    result = web_state.ask_global_ai("hello", owner, data=data, settings=settings)
+    assert result["question"]["answer"] == "AI: hello"
+
+
+def test_saving_auto_reply_settings_keeps_a_cursor_saved_meanwhile(web_state, monkeypatch):
+    owner, _recorder, _poll = _line_auto_reply_with_recorder(web_state)
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    cursor = {"time": enabled_at + 1000, "ids": ["U-contact-1"]}
+    original_global_ai = web_state._global_ai_all
+
+    def a_reply_ends_meanwhile():  # while the save checks the AI settings
+        web_state._save_ai_auto_reply_cursors("auto-account", enabled_at, {"U-contact": cursor})
+        return original_global_ai()
+
+    monkeypatch.setattr(web_state, "_global_ai_all", a_reply_ends_meanwhile)
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": True}, owner
+    )
+    record = web_state._ai_auto_reply_record("auto-account")
+    assert record["lastSeen"]["U-contact"] == cursor
+    assert record["groupsEnabled"] is True and record["enabledAtMs"] == enabled_at
+
+
+def test_kept_line_cursors_go_with_their_run_and_their_account(web_state):
+    owner, _recorder, _poll = _line_auto_reply_with_recorder(web_state)
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    kept = (enabled_at, {"time": enabled_at + 1000, "ids": ["m1"]})
+    web_state.ai_auto_reply_unsaved_cursors[("auto-account", "U-x")] = kept
+    # A settings change that leaves auto reply on keeps it.
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": True}, owner
+    )
+    assert web_state.ai_auto_reply_unsaved_cursors == {("auto-account", "U-x"): kept}
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": False, "contactsEnabled": True, "groupsEnabled": True}, owner
+    )
+    assert web_state.ai_auto_reply_unsaved_cursors == {}
+    web_state.ai_auto_reply_unsaved_cursors[("auto-account", "U-x")] = kept
+    web_state._commit_account_removal("auto-account")
+    assert web_state.ai_auto_reply_unsaved_cursors == {}
+
+
+def test_waiting_line_chats_are_answered_oldest_first(web_state):
+    # LINE lists the newest chat first. A customer who wrote once is not kept waiting
+    # by chats that came in after: the free places, the ready list and the reads all
+    # go by when each chat began to wait.
+    chats = ("U-c3", "U-c2", "U-c1", "U-c0")  # newest first, as LINE lists them
+    owner, recorder, poll = _line_auto_reply_with_recorder(web_state, chats=chats)
+    fake = web_state.get_api("auto-account")
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    for index, mid in enumerate(reversed(chats)):
+        fake.boxes[mid][0]["createdTime"] = enabled_at + 1000 * (index + 1)
+    # U-c3 wrote last, but began to wait first: its earlier message is unanswered too.
+    fake.boxes["U-c3"].insert(
+        0, {"id": "U-c3-0", "from": "U-c3", "text": "hello?", "contentType": 0,
+            "createdTime": enabled_at + 500}
+    )
+    _queue_telegram_reply(web_state, owner, 0)  # one place left
+    poll()
+    assert [job["chatMid"] for job in recorder.submitted[1:]] == ["U-c3"]
+    assert _ready_chats(web_state, owner) == ["U-c0", "U-c1", "U-c2"]
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    assert [job["chatMid"] for job in recorder.submitted[1:]] == ["U-c3", "U-c0", "U-c1"]
+
+
+def test_a_line_account_removed_while_its_poll_runs_leaves_nothing_behind(
+    web_state, monkeypatch
+):
+    owner, recorder, poll = _line_auto_reply_with_recorder(
+        web_state, chats=("U-c0", "U-c1", "U-c2")
+    )
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)  # both places taken
+    # Removed after the poll chose (a removal waits for the account's api lock, which
+    # the choosing holds) and before the poll left its chats ready.
+    original_save = web_state._save_ai_auto_reply_cursors
+
+    def removed_meanwhile(account_id, enabled_at_ms, cursors):
+        web_state._commit_account_removal("auto-account")
+        return original_save(account_id, enabled_at_ms, cursors)
+
+    monkeypatch.setattr(web_state, "_save_ai_auto_reply_cursors", removed_meanwhile)
+    poll()
+    assert web_state.account_store.get("auto-account") is None
+    assert web_state.ai_auto_reply_line_ready == {}
+    assert web_state.ai_auto_reply_line_polling == set()
+    assert "auto-account" not in web_state.ai_auto_reply_runtime
+    # A place that frees up starts nothing of it.
+    web_state._free_ai_auto_reply_slot(owner["id"])
+    assert _submitted(recorder) == ["tg 0", "tg 1"]
+    # A ready chat of a removed account opens no LINE session to name it.
+    opened = []
+    web_state.get_api = lambda account_id, **kwargs: opened.append(account_id)
+    web_state._name_ready_ai_auto_reply({"accountId": "auto-account", "chatMid": "U-c0"})
+    assert opened == []
+
+
+def test_deleting_a_workspace_owner_forgets_its_auto_reply_state(web_state):
+    web_state.ai_auto_reply_engine.close()  # this test sets the state by hand
+    owner = _auto_reply_owner(web_state)
+    god = web_state.web_auth.ensure_god("god", "god-password")
+    member = _second_line_owner(web_state, "b-account", "U-b-me", "sk-member-key-1")
+    keep = ("auto-account", "U-x")  # another workspace's: stays
+    gone = ("b-account", "U-y")
+    now = time.monotonic()
+    with web_state.ai_auto_reply_lock:
+        for key, owner_id in ((keep, owner["id"]), (gone, member["id"])):
+            web_state.ai_auto_reply_unsaved_cursors[key] = (1, {"time": 1, "ids": ["m1"]})
+            web_state.ai_auto_reply_held[key] = 1
+            web_state.ai_auto_reply_inflight.add(key)
+            web_state.ai_auto_reply_rate_events[("account", key[0])] = [now]
+            web_state.ai_auto_reply_rate_events[("chat", *key)] = [now]
+            web_state.ai_auto_reply_runtime[key[0]] = {"state": "running"}
+            web_state.ai_auto_reply_waiting[key] = (1, 1, 1)
+            web_state.ai_auto_reply_idle_seen[key[0]] = {key[1]: (1, 1)}
+            web_state.ai_auto_reply_looked[key[0]] = (1, 1, frozenset())
+            web_state.ai_auto_reply_identity_cache[key] = (now, "Customer")
+            web_state.ai_auto_reply_line_ready[owner_id] = {
+                key[0]: [{"accountId": key[0], "chatMid": key[1], "readyAt": now,
+                          "readMark": 0, "ownerId": owner_id}]
+            }
+        web_state.ai_auto_reply_backlog[member["id"]] = deque(
+            [{"accountId": "b-account", "chatMid": "U-z", "ownerId": member["id"]}]
+        )
+        web_state.ai_auto_reply_line_turn[member["id"]] = False
+        web_state.ai_auto_reply_line_polling.add("b-account")
+    web_state.delete_user({"id": member["id"]}, god)
+    assert web_state.account_store.get("b-account") is None
+    assert set(web_state.ai_auto_reply_unsaved_cursors) == {keep}
+    assert set(web_state.ai_auto_reply_held) == {keep}
+    assert web_state.ai_auto_reply_inflight == {keep}
+    assert {key[1] for key in web_state.ai_auto_reply_rate_events} == {"auto-account"}
+    assert set(web_state.ai_auto_reply_runtime) == {"auto-account"}
+    assert set(web_state.ai_auto_reply_waiting) == {keep}
+    assert set(web_state.ai_auto_reply_idle_seen) == {"auto-account"}
+    assert set(web_state.ai_auto_reply_looked) == {"auto-account"}
+    assert set(web_state.ai_auto_reply_identity_cache) == {keep}
+    assert list(web_state.ai_auto_reply_line_ready) == [owner["id"]]
+    assert web_state.ai_auto_reply_backlog == {} and web_state.ai_auto_reply_line_turn == {}
+    assert web_state.ai_auto_reply_line_polling == set()
+
+
+def test_a_line_reply_that_failed_while_saving_fails_waits_for_the_store(
+    web_state, monkeypatch
+):
+    # Two failures at once: LINE refuses the reply, and its chat's cursor cannot be
+    # saved. The message is neither lost nor tried again (the AI asked again) at
+    # every poll: it waits until saving works, and is answered then.
+    fake, poll = _line_auto_reply_running(web_state)
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    asked = []
+    original_ask = web_state.ask_global_ai
+
+    def ask(question, user, **metadata):
+        asked.append(question)
+        return original_ask(question, user, **metadata)
+
+    web_state.ask_global_ai = ask
+    original_set = web_state.store.set
+    original_send = fake.send_text
+
+    def no_room(key, value):
+        if key == "ai_auto_reply":
+            raise OSError(28, "No space left on device")
+        return original_set(key, value)
+
+    def refused(mid, text):
+        raise RuntimeError("LINE refused the message")
+
+    monkeypatch.setattr(web_state.store, "set", no_room)
+    monkeypatch.setattr(fake, "send_text", refused)
+    poll()
+    assert asked == ["hello"] and fake.sent == []
+    assert web_state.ai_auto_reply_held == {("auto-account", "U-contact"): enabled_at}
+    assert web_state.ai_auto_reply_unsaved_cursors == {}
+    for _ in range(5):
+        poll()
+    assert asked == ["hello"]  # not asked again while saving fails
+    assert web_state.ai_auto_reply_runtime["auto-account"]["state"] == "error"
+    monkeypatch.setattr(web_state.store, "set", original_set)
+    monkeypatch.setattr(fake, "send_text", original_send)
+    poll()
+    assert asked == ["hello", "hello"] and fake.sent == [("U-contact", "AI: hello")]
+    assert web_state.ai_auto_reply_held == {}
+    assert "U-contact" in web_state._ai_auto_reply_record("auto-account")["lastSeen"]
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello")]
+
+
+@pytest.mark.parametrize("failing_read", [1, 2], ids=["before-the-ai", "after-the-ai"])
+def test_a_line_message_is_not_passed_over_for_a_read_that_failed(
+    web_state, monkeypatch, failing_read
+):
+    # One read of LinePassport's own data fails inside the reply (a refused database
+    # connection, say) while saving works: that says nothing about the message, which
+    # waits for the next poll instead of being passed over.
+    fake, poll = _line_auto_reply_running(web_state)
+    original_enabled = web_state._ai_auto_reply_enabled
+    calls = []
+
+    def one_read_fails(*args):
+        calls.append(args)
+        if len(calls) == failing_read:
+            raise OSError("could not connect to the database")
+        return original_enabled(*args)
+
+    monkeypatch.setattr(web_state, "_ai_auto_reply_enabled", one_read_fails)
+    poll()
+    assert fake.sent == []
+    assert "U-contact" not in web_state._ai_auto_reply_record("auto-account")["lastSeen"]
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello")]
+    assert web_state.ai_auto_reply_held == {}
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello")]
+
+
+def test_a_line_chat_that_keeps_writing_keeps_its_place_in_line(web_state):
+    # LINE shows a chat's last 10 messages only. A chat that keeps receiving messages
+    # (an active group, a customer who keeps writing) still goes by when it began to
+    # wait, not by the oldest message LINE still shows.
+    owner, _recorder, poll = _line_auto_reply_with_recorder(web_state, chats=("U-busy",))
+    assert webapp_module.INBOX_SNAPSHOT_MESSAGES_PER_BOX == 10
+    fake = web_state.get_api("auto-account")
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    start = enabled_at + 1000
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)  # both places taken
+
+    def busy(count):
+        return [{"id": f"busy-{n}", "from": "U-busy", "text": f"busy {n}", "contentType": 0,
+                 "createdTime": start + 1000 * n} for n in range(count)]
+
+    def once(index, at):
+        return [{"id": f"once-{index}", "from": f"U-once-{index}", "text": "hi",
+                 "contentType": 0, "createdTime": at}]
+
+    # Seen first with 3 messages: it began to wait at its first one.
+    fake.boxes = {"U-busy": busy(3)}
+    poll()
+    assert web_state.ai_auto_reply_waiting[("auto-account", "U-busy")][2] == start
+    # 9 more messages, and 4 customers who each wrote once after it began: LINE lists
+    # the busy chat first and shows only its last 10 messages. It keeps its place.
+    fake.boxes = {"U-busy": busy(12), **{f"U-once-{i}": once(i, start + 2500) for i in range(4)}}
+    poll()
+    assert _ready_chats(web_state, owner) == ["U-busy"] + [f"U-once-{i}" for i in range(4)]
+    assert web_state.ai_auto_reply_waiting[("auto-account", "U-busy")][2] == start
+    # Never seen before with its start out of sight (after a restart, say): it goes by
+    # the earliest it can have begun, never later than it did.
+    web_state.ai_auto_reply_waiting.clear()
+    web_state.ai_auto_reply_idle_seen.clear()
+    web_state.ai_auto_reply_looked.clear()
+    poll()
+    assert _ready_chats(web_state, owner)[0] == "U-busy"
+    assert web_state.ai_auto_reply_waiting[("auto-account", "U-busy")][2] == enabled_at
+    # Once the busy chat waits no more, what was kept for it goes.
+    fake.boxes = {f"U-once-{i}": once(i, start + 2500) for i in range(4)}
+    poll()
+    assert ("auto-account", "U-busy") not in web_state.ai_auto_reply_waiting
+
+
+def test_a_poll_that_waited_for_a_removed_account_s_lock_does_nothing(web_state):
+    _owner, recorder, _poll = _line_auto_reply_with_recorder(
+        web_state, chats=("U-c0", "U-c1")
+    )
+    fake = web_state.get_api("auto-account")
+    record = web_state._ai_auto_reply_record("auto-account")
+    web_state.invalidate_inbox_snapshot("auto-account")
+    reads_before = fake.message_box_calls
+    errors = []
+
+    def run_poll():
+        try:
+            web_state._poll_ai_auto_reply_account("auto-account", record)
+        except Exception as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    lock = web_state.api_lock_for("auto-account")
+    lock.acquire()  # a removal holds the account's lock while it removes it
+    thread = threading.Thread(target=run_poll)
+    try:
+        thread.start()
+        assert _wait_for(lambda: "auto-account" in web_state.ai_auto_reply_line_polling)
+        time.sleep(0.05)  # the poll now waits for the account's lock
+        web_state._commit_account_removal("auto-account")
+    finally:
+        lock.release()
+    thread.join(timeout=10)
+    assert not thread.is_alive() and errors == []
+    assert fake.message_box_calls == reads_before  # nothing read for it
+    assert recorder.submitted == [] and web_state.ai_auto_reply_line_ready == {}
+    assert "auto-account" not in web_state.ai_auto_reply_runtime
+    assert "auto-account" not in web_state.inbox_snapshots
+    # An error about it afterwards shows nothing either.
+    web_state._ai_auto_reply_poll_error("auto-account", RuntimeError("late"))
+    assert "auto-account" not in web_state.ai_auto_reply_runtime
+
+
+def test_no_line_client_is_kept_for_a_removed_account(web_state):
+    from types import SimpleNamespace
+
+    _seed_account(web_state, "gone-account")
+    made = []
+
+    class _Client:
+        def __init__(self):
+            self.tokens = SimpleNamespace(access_token="token")
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    def new_api(account_id=None):
+        client = _Client()
+        made.append(client)
+        return client
+
+    web_state._new_api = new_api
+    first = web_state.get_api("gone-account")
+    assert web_state.apis["gone-account"] is first
+    # A request opens a client for it while it is being removed: after the removal
+    # closed the first one, before the account is gone.
+    original_close = web_state.close_api
+    closes = []
+
+    def a_request_opens_one_meanwhile(account_id):
+        original_close(account_id)
+        closes.append(account_id)
+        if len(closes) == 1:
+            web_state.get_api(account_id)
+
+    web_state.close_api = a_request_opens_one_meanwhile
+    web_state.delete_account("gone-account")
+    assert len(made) == 2 and all(client.closed for client in made)
+    assert "gone-account" not in web_state.apis
+    # Asked for once it is gone, a client is made but not kept.
+    web_state.get_api("gone-account")
+    assert len(made) == 3 and "gone-account" not in web_state.apis
+
+
+def test_a_failed_read_of_the_ai_settings_does_not_pass_a_line_message_over(
+    web_state, monkeypatch
+):
+    # A workspace on Gemini with the picture AI's Google key reads that key while its
+    # reply is prepared: a failed read there waits for the next poll too.
+    fake, poll = _line_auto_reply_running(web_state)
+    original_settings = web_state._assistant_settings_for
+    original_process = web_state._process_ai_auto_reply
+    state = {"in_job": False, "failed": 0}
+
+    def process(candidate):
+        state["in_job"] = True
+        try:
+            return original_process(candidate)
+        finally:
+            state["in_job"] = False
+
+    def settings_for(data, user):
+        if state["in_job"] and not state["failed"]:
+            state["failed"] += 1
+            raise OSError("could not connect to the database")
+        return original_settings(data, user)
+
+    monkeypatch.setattr(web_state, "_process_ai_auto_reply", process)
+    monkeypatch.setattr(web_state, "_assistant_settings_for", settings_for)
+    poll()
+    assert state["failed"] == 1 and fake.sent == []
+    assert "U-contact" not in web_state._ai_auto_reply_record("auto-account")["lastSeen"]
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello")]
+
+
+def test_a_sign_in_set_up_that_could_not_be_saved_is_set_up_again(tmp_path):
+    for kind in ("simple", "email"):
+        path = str(tmp_path / f"auth-{kind}.json")
+        auth = WebAuth(path)
+        original_save = auth._save
+        failures = {"left": 1}
+
+        def save(original=original_save, failures=failures):
+            if failures["left"]:
+                failures["left"] -= 1
+                raise OSError(28, "No space left on device")
+            return original()
+
+        auth._save = save
+
+        def set_up(auth=auth, kind=kind):
+            if kind == "simple":
+                return auth.ensure_simple_mode()
+            return auth.setup("owner@example.com", "owner-pass")
+
+        with pytest.raises(OSError):
+            set_up()
+        # Not kept in memory either: nobody could sign in as it, and the next page
+        # load sets it up again.
+        assert not auth.configured()
+        assert set_up()
+        assert auth.configured() and WebAuth(path).configured()
+
+
+def test_held_line_chats_go_with_their_run_and_their_account(web_state):
+    owner, _recorder, _poll = _line_auto_reply_with_recorder(web_state)
+    enabled_at = web_state._ai_auto_reply_record("auto-account")["enabledAtMs"]
+    web_state.ai_auto_reply_held[("auto-account", "U-x")] = enabled_at
+    # A settings change that leaves auto reply on keeps it.
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": True, "contactsEnabled": True, "groupsEnabled": True}, owner
+    )
+    assert web_state.ai_auto_reply_held == {("auto-account", "U-x"): enabled_at}
+    web_state.save_ai_auto_reply_settings(
+        "auto-account", {"enabled": False, "contactsEnabled": True, "groupsEnabled": True}, owner
+    )
+    assert web_state.ai_auto_reply_held == {}
+    web_state.ai_auto_reply_held[("auto-account", "U-x")] = enabled_at
+    web_state._commit_account_removal("auto-account")
+    assert web_state.ai_auto_reply_held == {}
+
+
+def test_assistant_routes_that_call_the_ai_provider_are_rate_limited():
+    limits = webapp_module.AUTHENTICATED_API_RATE_LIMITS
+    assert limits[("POST", "/api/assistant/settings")] == (6, 60.0)
+    assert limits[("POST", "/api/assistant/ask")] == (20, 60.0)
+    assert limits[("POST", "/api/assistant/knowledge/reindex")] == (4, 60.0)
+    assert limits[("POST", "/api/ai/models")] == (12, 60.0)
 
 
 def test_assistant_has_account_scoped_line_auto_reply_controls():
@@ -4610,17 +6300,17 @@ def test_ai_settings_save_mask_and_clear(web_state):
     assert web_state.ai_settings()["configured"] is False
 
     saved = web_state.save_ai_settings(
-        {"apiKey": "abcd1234wxyz", "model": "gemini-2.5-flash-image"}
+        {"apiKey": "abcd1234efgh5678wxyz", "model": "gemini-2.5-flash-image"}
     )
     google = saved["providers"]["google"]
     assert saved["configured"] is True and google["hasApiKey"] is True
-    assert google["apiKeyPreview"].endswith("wxyz")
+    assert google["apiKeyPreview"] == "••••wxyz"  # a long key shows its last 4 only
     assert "abcd1234" not in google["apiKeyPreview"]  # raw key is never echoed back
-    assert web_state.ai_settings(reveal=True)["apiKey"] == "abcd1234wxyz"
+    assert web_state.ai_settings(reveal=True)["apiKey"] == "abcd1234efgh5678wxyz"
 
     # A blank key on save keeps the stored one but still updates the model.
     web_state.save_ai_settings({"model": "gemini-2.5-flash-image-preview"})
-    assert web_state.ai_settings(reveal=True)["apiKey"] == "abcd1234wxyz"
+    assert web_state.ai_settings(reveal=True)["apiKey"] == "abcd1234efgh5678wxyz"
     assert (
         web_state.ai_settings()["providers"]["google"]["model"]
         == "gemini-2.5-flash-image-preview"
@@ -4718,7 +6408,7 @@ def test_ai_settings_http_roundtrip_never_leaks_key(live_server):
     assert got.json()["configured"] is False
 
     saved = session.post(
-        f"{live_server}/api/ai/settings", json={"apiKey": "tok-98765432"}, timeout=5
+        f"{live_server}/api/ai/settings", json={"apiKey": "tok-1234567898765432"}, timeout=5
     )
     assert saved.status_code == 200
     assert saved.json()["configured"] is True
@@ -4727,4 +6417,683 @@ def test_ai_settings_http_roundtrip_never_leaks_key(live_server):
     google = again["providers"]["google"]
     assert google["hasApiKey"] is True
     assert google["apiKeyPreview"].endswith("5432")
-    assert "tok-98765432" not in google["apiKeyPreview"]
+    assert "tok-1234567898765432" not in google["apiKeyPreview"]
+
+
+@pytest.mark.parametrize("other_traffic", [False, True])
+def test_a_chat_that_sent_many_messages_at_once_does_not_go_ahead_of_those_waiting_longer(
+    web_state, other_traffic
+):
+    # A new customer's photo album and question, or a returning customer's, can be
+    # more than the 10 messages LINE shows. Such a chat goes after the chats that waited
+    # at the last check that saw it with nothing to answer (or that listed every chat
+    # but it), not by when it was last answered or when auto reply was switched on;
+    # also when nothing newer than the waiting customers' messages was written since.
+    owner, _recorder, poll = _line_auto_reply_with_recorder(web_state, chats=())
+    fake = web_state.get_api("auto-account")
+    now = int(time.time() * 1000)
+    enabled_at = now - 3_600_000  # switched on an hour ago
+    data = web_state._ai_auto_reply_all()
+    data["accounts"]["auto-account"]["enabledAtMs"] = enabled_at
+    web_state.store.set("ai_auto_reply", data)
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)  # both places taken
+    waiting = [f"U-once-{index}" for index in range(8)]
+    boxes = {
+        mid: [{"id": f"{mid}-1", "from": mid, "text": "hi", "contentType": 0,
+               "createdTime": now - 120_000 + index}]
+        for index, mid in enumerate(waiting)
+    }
+    # A returning customer, answered just after the switch on: nothing to answer now.
+    boxes["U-back"] = [{"id": "back-old", "from": "U-back", "text": "thanks", "contentType": 0,
+                        "createdTime": enabled_at + 1000}]
+    web_state._save_ai_auto_reply_cursors(
+        "auto-account", enabled_at, {"U-back": {"time": enabled_at + 1000, "ids": ["back-old"]}}
+    )
+    if other_traffic:
+        # A chat answered a minute ago, the newest message of this check.
+        boxes["U-done"] = [{"id": "done-1", "from": "U-me", "text": "you're welcome",
+                            "contentType": 0, "createdTime": now - 60_000}]
+    fake.boxes = dict(boxes)
+    poll()
+    assert _ready_chats(web_state, owner) == waiting
+
+    def album(mid):
+        return [{"id": f"{mid}-{n}", "from": mid, "text": f"photo {n}", "contentType": 0,
+                 "createdTime": now - 2500 + 200 * n} for n in range(11)]
+
+    fake.boxes = {**boxes, "U-newcomer": album("U-newcomer"),
+                  "U-back": boxes["U-back"] + album("U-back")}
+    poll()
+    assert _ready_chats(web_state, owner) == waiting  # the 8 who waited longer first
+    for mid in ("U-newcomer", "U-back"):
+        since = web_state.ai_auto_reply_waiting[("auto-account", mid)][2]
+        assert enabled_at < since <= now - 2500, mid  # never later than it began
+    # Once those were answered (their chats wait no more), the two come next.
+    fake.boxes = {"U-newcomer": album("U-newcomer"), "U-back": boxes["U-back"] + album("U-back")}
+    poll()
+    assert sorted(_ready_chats(web_state, owner)) == ["U-back", "U-newcomer"]
+
+
+@pytest.mark.parametrize("sent", [True, False])
+def test_a_reply_ending_as_its_account_is_removed_keeps_nothing_of_it(web_state, sent):
+    # The account goes while the reply's cursor is being saved, and that save fails:
+    # nothing is kept for it afterwards (no held chat, cursor, runtime or log line).
+    fake, poll = _line_auto_reply_running(web_state)
+    if not sent:
+
+        def provider_down(question, user, **metadata):
+            raise WebError(HTTPStatus.UNPROCESSABLE_ENTITY, "provider is down", "ai_unavailable")
+
+        web_state.ask_global_ai = provider_down
+    original_save = web_state._save_ai_auto_reply_cursors
+    lines = {}
+
+    def removed_as_it_saves(account_id, enabled_at_ms, cursors):
+        if "U-contact" in cursors and not lines:
+            web_state._commit_account_removal(account_id)
+            lines["at_removal"] = len(web_state.store.get("bot_logs", {"logs": []})["logs"])
+            raise OSError(28, "No space left on device")
+        return original_save(account_id, enabled_at_ms, cursors)
+
+    web_state._save_ai_auto_reply_cursors = removed_as_it_saves
+    poll()
+    assert lines and web_state.account_store.get("auto-account") is None
+    assert fake.sent == ([("U-contact", "AI: hello")] if sent else [])
+    assert web_state.ai_auto_reply_held == {}
+    assert web_state.ai_auto_reply_unsaved_cursors == {}
+    assert "auto-account" not in web_state.ai_auto_reply_runtime
+    logs = web_state.store.get("bot_logs", {"logs": []})["logs"]
+    assert len(logs) == lines["at_removal"]
+
+
+def test_a_reply_sent_as_its_account_is_removed_leaves_nothing_of_it(web_state):
+    # The removal waited for the account's lock, which the send held: it commits as
+    # soon as LINE took the message. The reply notes nothing of it afterwards.
+    fake, poll = _line_auto_reply_running(web_state)
+    original_send = fake.send_text
+
+    def send_then_removed(mid, text):
+        result = original_send(mid, text)
+        web_state._commit_account_removal("auto-account")
+        return result
+
+    fake.send_text = send_then_removed
+    poll()
+    assert fake.sent == [("U-contact", "AI: hello")]
+    assert "auto-account" not in web_state.ai_auto_reply_runtime
+    logs = web_state.store.get("bot_logs", {"logs": []})["logs"]
+    assert "ai.auto_reply.sent" not in [log["action"] for log in logs]
+
+
+def test_a_question_answered_as_its_account_or_workspace_goes_is_not_logged(
+    web_state, monkeypatch
+):
+    owner = _auto_reply_owner(web_state)
+    gone = {}
+
+    class _Client:
+        def chat(self, **chat):
+            gone["now"]()  # removed while the AI answered
+            return {"answer": "AI: noted", "canAnswer": True, "confidence": 0.9,
+                    "model": "test-model"}
+
+    monkeypatch.setattr(
+        webapp_module, "make_ai_client", lambda provider_id, *, api_key, **kw: _Client()
+    )
+    gone["now"] = lambda: web_state._commit_account_removal("auto-account")
+    result = web_state.ask_global_ai(
+        "my order 42 is late", owner, source="line_auto_reply", account_id="auto-account",
+        chat_mid="U-x", chat_type="contact",
+    )
+    assert result["logged"] is False and result["question"]["answer"] == "AI: noted"
+    assert web_state._global_ai_all()["questions"] == []
+
+    def workspace_deleted():
+        with web_state.web_auth.lock:
+            web_state.web_auth.data = {
+                **web_state.web_auth.data,
+                "users": [
+                    user for user in web_state.web_auth.data["users"]
+                    if user.get("id") != owner["id"]
+                ],
+            }
+
+    gone["now"] = workspace_deleted
+    assert web_state.ask_global_ai("opening hours?", owner)["logged"] is False
+    assert web_state._global_ai_all()["questions"] == []
+
+
+def test_a_server_clock_ahead_of_lines_does_not_put_a_chat_behind_later_ones(web_state):
+    # Whether a chat that sent many messages at once began before others goes by LINE's
+    # own clock, not by this server's: here the server is 30 seconds ahead of LINE.
+    owner, _recorder, poll = _line_auto_reply_with_recorder(web_state, chats=())
+    fake = web_state.get_api("auto-account")
+    line_now = int(time.time() * 1000) - 30_000
+    data = web_state._ai_auto_reply_all()
+    data["accounts"]["auto-account"]["enabledAtMs"] = line_now - 3_600_000
+    web_state.store.set("ai_auto_reply", data)
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)  # both places taken
+    quiet = {"U-done": [{"id": "done-1", "from": "U-me", "text": "bye", "contentType": 0,
+                         "createdTime": line_now - 60_000}]}
+    fake.boxes = dict(quiet)
+    poll()
+    # A new customer's album (11 messages), then another customer's one message.
+    album = [{"id": f"album-{n}", "from": "U-album", "text": f"photo {n}", "contentType": 0,
+              "createdTime": line_now - 20_000 + n} for n in range(11)]
+    fake.boxes = {**quiet, "U-album": album,
+                  "U-once": [{"id": "once-1", "from": "U-once", "text": "hi", "contentType": 0,
+                              "createdTime": line_now - 10_000}]}
+    poll()
+    assert _ready_chats(web_state, owner) == ["U-album", "U-once"]
+    assert web_state.ai_auto_reply_waiting[("auto-account", "U-album")][2] <= line_now - 20_000
+
+
+def test_a_chat_stored_as_its_account_is_removed_goes_with_the_account(web_state):
+    _seed_account(web_state, "acct")
+    real_ingest = web_state.crm.ingest
+
+    def removed_first(**values):
+        # The removal, and its purge of the account's chats, land while this waits.
+        web_state._commit_account_removal("acct")
+        return real_ingest(**values)
+
+    web_state.crm.ingest = removed_first
+    message = {"id": "m1", "from": "U-customer", "text": "my address is 12 Main St",
+               "contentType": 0, "createdTime": int(time.time() * 1000)}
+    web_state._crm_ingest_line("acct", "owner", "U-me", [("U-customer", [message], None)])
+    assert web_state.crm.conversation_for_chat("acct", "U-customer") is None
+    # Once it is gone, nothing more is stored for it.
+    web_state.crm.ingest = real_ingest
+    web_state._crm_ingest_line("acct", "owner", "U-me", [("U-customer", [message], None)])
+    assert web_state.crm.conversation_for_chat("acct", "U-customer") is None
+
+
+def test_names_looked_up_for_a_removed_account_are_not_kept(web_state):
+    _seed_account(web_state, "gone-account")
+    fake = _AutoReplyFakeApi()
+    web_state.get_api = lambda account_id, **kwargs: fake
+    lock = web_state.api_lock_for("gone-account")
+    lock.acquire()  # a removal holds the account's lock while it removes it
+    candidate = {"accountId": "gone-account", "chatMid": "U-contact", "senderMid": "U-contact"}
+    thread = threading.Thread(target=web_state._name_ready_ai_auto_reply, args=(candidate,))
+    try:
+        thread.start()
+        time.sleep(0.05)  # it now waits for the account's lock
+        web_state._commit_account_removal("gone-account")
+    finally:
+        lock.release()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+    assert fake.contact_lookup_calls == 0 and web_state.ai_auto_reply_identity_cache == {}
+    # Names a reply looks up for its own log line are not kept for it either.
+    web_state._hydrate_ai_auto_reply_candidate_identities("gone-account", fake, [candidate])
+    assert candidate["chatName"] == "Customer One"
+    assert web_state.ai_auto_reply_identity_cache == {}
+
+
+def test_a_chat_claimed_as_its_account_is_removed_goes_with_the_account(web_state):
+    # Claiming (or closing) a chat makes its customer and chat when there are none yet.
+    # The account is removed between its check and those rows: they go too.
+    owner = _incoming_api_owner(web_state)
+    real_account = web_state.crm._account
+    removed = {}
+
+    def checked_then_removed(owner_id, scope, account_id):
+        account = real_account(owner_id, scope, account_id)
+        if not removed:
+            removed["result"] = web_state.delete_account(account_id, owner)
+        return account
+
+    web_state.crm._account = checked_then_removed
+    with pytest.raises(CrmError):
+        web_state.crm.assign(
+            owner, {"accountId": "incoming-account", "chatId": "U-customer", "assignee": "me"}
+        )
+    assert removed
+    assert web_state.crm.conversation_for_chat("incoming-account", "U-customer") is None
+    assert web_state.crm.db.scalar("SELECT COUNT(*) FROM crm_customers") == 0
+
+
+def test_auto_reply_settings_saved_as_the_account_is_removed_are_not_kept(web_state):
+    owner = _auto_reply_owner(web_state)
+    real_global_ai = web_state._global_ai_all
+
+    def removed_while_read():
+        web_state._commit_account_removal("auto-account")
+        return real_global_ai()
+
+    web_state._global_ai_all = removed_while_read
+    with pytest.raises(WebError) as gone:
+        web_state.save_ai_auto_reply_settings(
+            "auto-account",
+            {"enabled": True, "contactsEnabled": True, "groupsEnabled": False},
+            owner,
+        )
+    web_state._global_ai_all = real_global_ai
+    assert gone.value.status == HTTPStatus.NOT_FOUND
+    assert "auto-account" not in web_state._ai_auto_reply_all()["accounts"]
+    assert "auto-account" not in web_state.ai_auto_reply_runtime
+    logs = web_state.store.get("bot_logs", {"logs": []})["logs"]
+    assert "ai.auto_reply.settings" not in [log["action"] for log in logs]
+
+
+def test_deleting_an_account_counts_the_customers_a_late_store_deleted_first(web_state):
+    # A chat stored by a write that began before the account's removal deletes the
+    # account's customers again, before the removal's own purge does: the removal still
+    # says how many customers went.
+    owner = _incoming_api_owner(web_state)
+    now = int(time.time() * 1000)
+
+    def chat(mid, at):
+        return {
+            "owner_id": owner["id"], "channel": "line", "chat_id": mid,
+            "contact": {"externalId": mid, "name": mid},
+            "messages": [{"externalId": f"{mid}-1", "direction": "in", "senderKind": "customer",
+                          "text": "hi", "contentType": 0, "at": at}],
+        }
+
+    web_state.crm.ingest(account_id="incoming-account", **chat("U-first", now))
+    real_ingest = web_state.crm.ingest
+    real_close = web_state.close_api
+    started, committed, late_purged = threading.Event(), threading.Event(), threading.Event()
+    closes = []
+
+    def slow_ingest(**values):
+        started.set()
+        committed.wait(10)  # the removal commits while this one is on its way
+        return real_ingest(**values)
+
+    def close_api(account_id):
+        real_close(account_id)
+        closes.append(account_id)
+        if len(closes) == 2:  # just after the removal committed
+            committed.set()
+            late_purged.wait(10)  # the late store's purge goes first
+
+    web_state.crm.ingest = slow_ingest
+    web_state.close_api = close_api
+    store = threading.Thread(
+        target=web_state._crm_ingest, args=("incoming-account",), kwargs=chat("U-second", now + 1)
+    )
+    store.start()
+    assert started.wait(10)
+    result = {}
+    removal = threading.Thread(
+        target=lambda: result.update(web_state.delete_account("incoming-account", owner))
+    )
+    removal.start()
+    store.join(10)
+    late_purged.set()
+    removal.join(10)
+    assert not store.is_alive() and not removal.is_alive()
+    assert result["customersDeleted"] == 2
+    assert web_state.crm.db.scalar("SELECT COUNT(*) FROM crm_customers") == 0
+
+
+def test_an_incoming_api_request_that_went_out_does_not_fail_over_its_counters(
+    web_state, monkeypatch
+):
+    # Saving the link's counters fails just after the message went out (a full disk):
+    # the request still answers with what was sent, so its caller does not send it again.
+    owner = _incoming_api_owner(web_state)
+    fake = _IncomingApiFake()
+    created = web_state.create_incoming_api_link(
+        {"accountId": "incoming-account", "name": "Orders",
+         "targets": [{"type": "contact", "mid": fake.contact_mid}]},
+        owner,
+        fake,
+    )["link"]
+    link_id, token = created["endpointPath"].rsplit("/", 2)[-2:]
+    web_state.get_api = lambda account_id: fake
+    original_set = web_state.store.set
+
+    def store_set(key, value):
+        if key == "incoming_api":
+            raise OSError(28, "No space left on device")
+        return original_set(key, value)
+
+    monkeypatch.setattr(web_state.store, "set", store_set)
+    result = web_state.execute_incoming_api(link_id, token, {"text": "Order 42 shipped"})
+    assert result["ok"] is True and result["sent"] == 1
+    assert fake.calls == [("plain", fake.contact_mid, "Order 42 shipped")]
+
+
+def test_a_returning_customer_past_the_newest_500_chats_does_not_go_ahead(web_state):
+    # An announcement to many customers pushes a chat answered earlier below the 500
+    # newest chats, which a poll examines. When that customer later sends more at once
+    # than LINE shows (11 messages), they go after the chats waiting since before.
+    owner, _recorder, poll = _line_auto_reply_with_recorder(web_state, chats=())
+    fake = web_state.get_api("auto-account")
+    now = int(time.time() * 1000)
+    enabled_at = now - 3_600_000
+    data = web_state._ai_auto_reply_all()
+    data["accounts"]["auto-account"]["enabledAtMs"] = enabled_at
+    web_state.store.set("ai_auto_reply", data)
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)  # both places taken
+    answered = [{"id": "back-1", "from": "U-back", "text": "thanks", "contentType": 0,
+                 "createdTime": now - 700_000},
+                {"id": "back-2", "from": "U-me", "text": "you're welcome", "contentType": 0,
+                 "createdTime": now - 600_000}]
+    fake.boxes = {"U-back": answered}
+    poll()  # the chat is examined, with nothing to answer
+    waiting = [f"U-once-{index}" for index in range(8)]
+    boxes = {
+        mid: [{"id": f"{mid}-1", "from": mid, "text": "hi", "contentType": 0,
+               "createdTime": now - 120_000 + index}]
+        for index, mid in enumerate(waiting)
+    }
+    for index in range(527):
+        boxes[f"U-news-{index}"] = [{"id": f"news-{index}", "from": "U-me", "text": "sale!",
+                                     "contentType": 0, "createdTime": now - 300_000 - index}]
+    boxes["U-back"] = answered  # number 536: listed, not examined
+    fake.boxes = dict(boxes)
+    poll()
+    assert _ready_chats(web_state, owner) == waiting
+    album = [{"id": f"album-{n}", "from": "U-back", "text": f"photo {n}", "contentType": 0,
+              "createdTime": now - 2500 + 200 * n} for n in range(11)]
+    fake.boxes = {"U-back": answered + album, **{k: v for k, v in boxes.items() if k != "U-back"}}
+    poll()
+    assert _ready_chats(web_state, owner) == waiting  # the 8 who waited longer first
+
+
+def test_an_incoming_api_request_that_went_out_answers_when_its_counters_cannot_be_read(
+    web_state, monkeypatch
+):
+    # The database goes down as the message goes out, so the link's counters cannot be
+    # read back to be counted: the request still answers with what was sent.
+    owner = _incoming_api_owner(web_state)
+    fake = _IncomingApiFake()
+    created = web_state.create_incoming_api_link(
+        {"accountId": "incoming-account", "name": "Orders",
+         "targets": [{"type": "contact", "mid": fake.contact_mid}]},
+        owner,
+        fake,
+    )["link"]
+    link_id, token = created["endpointPath"].rsplit("/", 2)[-2:]
+    web_state.get_api = lambda account_id: fake
+    original_get = web_state.store.get
+    reads = {"incoming_api": 0}
+
+    def store_get(key, default):
+        if key == "incoming_api":
+            reads[key] += 1
+            if reads[key] > 1:
+                raise OSError("connection to the database was refused")
+        return original_get(key, default)
+
+    monkeypatch.setattr(web_state.store, "get", store_get)
+    result = web_state.execute_incoming_api(link_id, token, {"text": "Order 42 shipped"})
+    assert result["ok"] is True and result["sent"] == 1
+    assert fake.calls == [("plain", fake.contact_mid, "Order 42 shipped")]
+
+
+@pytest.mark.parametrize("action", ["close", "claim"])
+def test_a_chat_closed_as_its_account_is_removed_leaves_nothing_behind(web_state, action):
+    # The chat (or, for a claim, who may reply from it) is read, then its account is
+    # removed, its chats with it, before the close or claim is written: nothing of the
+    # chat is written after that.
+    owner = _incoming_api_owner(web_state)
+    web_state.crm.set_status(
+        owner, {"accountId": "incoming-account", "chatId": "U-customer", "status": "pending"}
+    )
+    conversation = web_state.crm.conversation_for_chat("incoming-account", "U-customer")
+    removed = {}
+
+    def remove_once():
+        if not removed:
+            removed["result"] = web_state.delete_account("incoming-account", owner)
+
+    if action == "close":
+        real_read = web_state.crm._chat_conversation
+
+        def read_then_removed(owner_id, scope, body, *, ensure):
+            row = real_read(owner_id, scope, body, ensure=ensure)
+            remove_once()
+            return row
+
+        web_state.crm._chat_conversation = read_then_removed
+    else:
+        real_members = web_state.crm._member_map
+
+        def members_then_removed(owner_id):
+            members = real_members(owner_id)  # read before: the claimer may reply here
+            remove_once()
+            return members
+
+        web_state.crm._member_map = members_then_removed
+    body = {"accountId": "incoming-account", "chatId": "U-customer"}
+    with pytest.raises(CrmError):
+        if action == "close":
+            web_state.crm.set_status(owner, {**body, "status": "closed"})
+        else:
+            web_state.crm.assign(owner, {**body, "assignee": "me"})
+    assert removed
+    assert web_state.crm.db.scalar(
+        "SELECT COUNT(*) FROM crm_events WHERE conversation_id = ?", (conversation["id"],)
+    ) == 0
+
+
+def test_a_session_renewal_after_its_account_was_removed_saves_nothing(web_state):
+    # The session keeper opened the account's client, then the account was removed
+    # before the renewal took the account's lock: nothing is renewed or saved (saving
+    # would write the removed account's sign-in back to disk), and nothing is logged.
+    _seed_account(web_state, "acct")
+    done = []
+
+    class FakeAuth:
+        def refresh_access_token(self):
+            done.append("renewed")
+
+    class FakeApi:
+        auth = FakeAuth()
+        _token_refresh_lock = threading.RLock()
+
+        def _session_save_hook(self):
+            done.append("saved")
+
+    logs = len(web_state.store.get("bot_logs", {"logs": []})["logs"])
+    web_state._commit_account_removal("acct")
+    assert web_state._refresh_account_session("acct", FakeApi(), revived=False) is False
+    assert done == []
+    assert len(web_state.store.get("bot_logs", {"logs": []})["logs"]) == logs
+
+
+def test_a_chat_seen_waiting_keeps_its_place_when_it_writes_more_than_line_shows(
+    web_state,
+):
+    # A customer began to wait a minute ago, and was seen to; another, answered long
+    # ago, then sends an album. The first stays ahead when it writes 9 more messages,
+    # so that LINE no longer shows its first one: its start was seen, not bounded.
+    owner, _recorder, poll = _line_auto_reply_with_recorder(web_state, chats=())
+    fake = web_state.get_api("auto-account")
+    now = int(time.time() * 1000)
+    enabled_at = now - 3_600_000
+    data = web_state._ai_auto_reply_all()
+    data["accounts"]["auto-account"]["enabledAtMs"] = enabled_at
+    web_state.store.set("ai_auto_reply", data)
+    for index in range(2):
+        _queue_telegram_reply(web_state, owner, index)  # both places taken
+    first = [{"id": "w-1", "from": "U-w", "text": "hi", "contentType": 0,
+              "createdTime": now - 60_000}]
+    answered = [{"id": "x-old", "from": "U-x", "text": "thanks", "contentType": 0,
+                 "createdTime": enabled_at + 1000}]
+    web_state._save_ai_auto_reply_cursors(
+        "auto-account", enabled_at, {"U-x": {"time": enabled_at + 1000, "ids": ["x-old"]}}
+    )
+    fake.boxes = {"U-w": first, "U-x": answered}
+    poll()
+    assert _ready_chats(web_state, owner) == ["U-w"]
+    album = [{"id": f"x-{n}", "from": "U-x", "text": f"photo {n}", "contentType": 0,
+              "createdTime": now - 2500 + 200 * n} for n in range(11)]
+    fake.boxes = {"U-x": answered + album, "U-w": first}
+    poll()
+    assert _ready_chats(web_state, owner) == ["U-w", "U-x"]
+    more = [{"id": f"w-{n}", "from": "U-w", "text": f"again {n}", "contentType": 0,
+             "createdTime": now - 2000 + 150 * n} for n in range(2, 11)]
+    fake.boxes = {"U-w": first + more, "U-x": answered + album}
+    poll()
+    assert _ready_chats(web_state, owner) == ["U-w", "U-x"]
+
+
+def test_a_line_oa_worker_and_the_inbox_go_on_when_the_log_cannot_be_written(
+    web_state, monkeypatch
+):
+    # The server log is a file on the full disk: a LINE OA worker's note about a failed
+    # stream, and the inbox's note about a failed refresh, cannot be written either.
+    from okline.lineoa.channels import OAChannelWorker
+
+    class FullDisk:
+        def write(self, text):
+            raise OSError(28, "No space left on device")
+
+        def flush(self):
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(sys, "stdout", FullDisk())
+    monkeypatch.setattr(sys, "stderr", FullDisk())
+    worker = OAChannelWorker.__new__(OAChannelWorker)
+    worker.logged = {}
+    worker.account_id = "oa1"
+    worker._log("the event stream dropped")  # no raise
+    web_state._note_inbox_refresh_failure("acct", OSError("LINE did not answer"))
+
+
+def test_a_session_line_renews_after_its_account_was_removed_is_not_saved(
+    web_state, tmp_path
+):
+    # LINE renewed the session inside a call that was running as the account was
+    # removed (a check for new messages, say): the renewal that ends then does not
+    # write the removed account's sign-in back to disk.
+    token_file = tmp_path / "acct.tokens"
+    api = OkLine(access_token="old-access", refresh_token="old-refresh", mid="U-me", record=False)
+    try:
+        _seed_account(web_state, "acct")
+        web_state.account_store.data["accounts"][0]["tokenFile"] = str(token_file)
+        web_state.account_store.save()
+        web_state._bind_account_session(api, "acct", str(token_file))
+        web_state._commit_account_removal("acct")
+        api.tokens.access_token = "renewed-access"
+        assert api._session_save_hook is not None
+        api._session_save_hook()
+        assert not token_file.exists()
+    finally:
+        api.close()
+
+
+def test_a_session_line_renews_as_its_account_is_removed_is_not_left_on_disk(
+    web_state, tmp_path, monkeypatch
+):
+    # The renewal found the account listed and began to save; the removal committed
+    # meanwhile and deleted the file before the write: the file goes again.
+    token_file = tmp_path / "acct.tokens"
+    api = OkLine(access_token="old-access", refresh_token="old-refresh", mid="U-me", record=False)
+    try:
+        _seed_account(web_state, "acct")
+        web_state.account_store.data["accounts"][0]["tokenFile"] = str(token_file)
+        web_state.account_store.save()
+        web_state._bind_account_session(api, "acct", str(token_file))
+        real_save = web_state._save_account_tokens
+
+        def removal_lands_first(*args, **kwargs):
+            web_state._commit_account_removal("acct")
+            return real_save(*args, **kwargs)
+
+        monkeypatch.setattr(web_state, "_save_account_tokens", removal_lands_first)
+        api.tokens.access_token = "renewed-access"
+        assert api._session_save_hook is not None
+        api._session_save_hook()
+        assert not token_file.exists()
+    finally:
+        api.close()
+
+
+def _saved_access_token(state, token_file):
+    with open(token_file, "rb") as handle:
+        raw = handle.read()
+    return json.loads(state.secret_cipher.decrypt(raw[len(b"fernet:"):]))["accessToken"]
+
+
+def test_a_session_line_renews_as_its_account_is_added_again_keeps_the_new_sign_in(
+    web_state, monkeypatch
+):
+    # The account went while its old LINE client saved a renewal, and the same LINE
+    # account is added again by the same name (the same id, so the same file) as that
+    # renewal finds it gone: the new sign-in stays on disk.
+    profile = {"mid": "U-me-12345678", "displayName": "Shop"}
+    old = OkLine(access_token="old-access", refresh_token="old-refresh", mid=profile["mid"],
+                 record=False)
+    new = OkLine(access_token="new-access", refresh_token="new-refresh", mid=profile["mid"],
+                 record=False)
+    store = web_state.account_store
+    try:
+        real_save = web_state._save_account_tokens
+        real_listed = web_state._account_listed
+        account = store.add_from_api(old, profile, "Shop", "owner", token_writer=real_save)
+        token_file = str(account["tokenFile"])
+        web_state._bind_account_session(old, account["id"], token_file)
+        added = threading.Thread(
+            target=store.add_from_api,
+            args=(new, profile, "Shop", "owner"),
+            kwargs={"token_writer": real_save},
+        )
+        armed = []
+
+        def removal_lands_during_the_save(*args, **kwargs):
+            real_save(*args, **kwargs)
+            web_state._commit_account_removal(account["id"])
+            armed.append(True)
+
+        def added_again_as_it_looks(account_id):
+            listed = real_listed(account_id)
+            if armed and not listed and added.ident is None:
+                added.start()
+                added.join(timeout=0.5)  # done at once, unless it waits for the list
+            return listed
+
+        monkeypatch.setattr(web_state, "_save_account_tokens", removal_lands_during_the_save)
+        monkeypatch.setattr(web_state, "_account_listed", added_again_as_it_looks)
+        old.tokens.access_token = "renewed-access"
+        assert old._session_save_hook is not None
+        old._session_save_hook()
+        added.join(timeout=5)
+        assert added.ident is not None and not added.is_alive()
+        assert [item["id"] for item in store.data["accounts"]] == [account["id"]]
+        assert os.path.exists(token_file)
+        assert _saved_access_token(web_state, token_file) == "new-access"
+    finally:
+        old.close()
+        new.close()
+
+
+def test_an_account_added_again_as_its_removal_ends_keeps_its_sign_in(
+    web_state, monkeypatch
+):
+    # The same LINE account is added again by the same name (the same id, so the same
+    # file) after its removal took it off the list and before the removal deleted its
+    # sign-in: the new sign-in stays on disk.
+    profile = {"mid": "U-me-12345678", "displayName": "Shop"}
+    old = OkLine(access_token="old-access", refresh_token="old-refresh", mid=profile["mid"],
+                 record=False)
+    new = OkLine(access_token="new-access", refresh_token="new-refresh", mid=profile["mid"],
+                 record=False)
+    store = web_state.account_store
+    try:
+        save = web_state._save_account_tokens
+        account = store.add_from_api(old, profile, "Shop", "owner", token_writer=save)
+        real_close = web_state.close_api
+
+        def added_again_first(account_id):
+            real_close(account_id)
+            store.add_from_api(new, profile, "Shop", "owner", token_writer=save)
+
+        monkeypatch.setattr(web_state, "close_api", added_again_first)
+        web_state._commit_account_removal(account["id"])
+        assert [item["id"] for item in store.data["accounts"]] == [account["id"]]
+        assert os.path.exists(account["tokenFile"])
+        assert _saved_access_token(web_state, account["tokenFile"]) == "new-access"
+    finally:
+        old.close()
+        new.close()
