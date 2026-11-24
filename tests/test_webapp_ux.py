@@ -1130,7 +1130,12 @@ def test_one_ask_holds_a_worker_for_about_75_seconds_at_most(web_state, monkeypa
     web_state.ask_global_ai(
         "When are you open?", owner, source="telegram_auto_reply", account_id="a", chat_mid="c"
     )
-    assert calls == [("embeddings", 15.0), ("completions", 60.0)]
+    assert [name for name, _timeout in calls] == ["embeddings", "completions"]
+    vector_wait, answer_wait = (timeout for _name, timeout in calls)
+    # Each limit is what is left of its time when the request goes out: all of it on a
+    # clock that ticks every 16 ms (Windows), a moment less on a finer one (Linux).
+    assert 14.0 < vector_wait <= 15.0
+    assert 59.0 < answer_wait <= 60.0
     assert sum(timeout for _name, timeout in calls) <= 75
 
 
