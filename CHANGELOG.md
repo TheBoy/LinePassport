@@ -466,7 +466,29 @@ All notable changes to OkLine are documented here. The format follows
   schedule) until LinePassport was restarted. Error texts are now cleaned
   before they are kept on a schedule, in its history and in the activity log.
   The same goes for what is kept with an account: its sign-in error, and the
-  name and picture LINE reports for it.
+  name and picture LINE reports for it, also when the account is added or
+  connected again, and the ids of the messages kept with a schedule.
+- **A name the database refuses could lock everybody out.** A display name
+  typed at sign-up, for a staff member or for an account could hold a NUL
+  character or half of a surrogate pair. It could not be saved, yet it stayed
+  in memory: every later save of the sign-ins then failed, so nobody could
+  sign in until LinePassport was restarted, and where sign-up is open a
+  visitor could cause that. Such characters are now removed from these names,
+  and a user that cannot be saved is taken back. The names and messages a
+  channel hands to the CRM are cleaned the same way (on PostgreSQL a Telegram
+  message holding such a character was lost).
+- **A search could miss shop info it had vectors for.** With an index that
+  waits for some of its vectors, a question whose vector matched no stored
+  vector got only the waiting parts. It now falls back to keyword search over
+  all parts.
+- **A Run now that was cut short did not say that its account has to be
+  connected again.** It showed as "Part sent, goes on" while it waited for the
+  sign-in; it now shows the sign-in notice, as a scheduled send does. A stop
+  also waits until a Run now to one chat has saved its result, so a chat that
+  got the message no longer reads as one that may not have. A Run now whose
+  schedule changed meanwhile is refused with its own text (error code
+  `schedule_changed`), and the Thai texts for a send that goes on no longer
+  use the word for a stuck job.
 - **A LINE message could get two auto replies.** A reply that finished while
   the next check was reading the chats could be sent again, and a check that
   failed partway left its chats never answered again.
@@ -537,7 +559,9 @@ All notable changes to OkLine are documented here. The format follows
   start goes on with the chats that have had no turn. It is one run: one
   history line, written when it ends, with the message ids from before and
   after the stop, and one more on the sent count; until then the schedules
-  page shows it as "Part sent, goes on". A chat that was being sent to when
+  page shows it as "Part sent, goes on" (as paused while its schedule is
+  switched off, and with the sign-in notice while its account has to be
+  connected again). A chat that was being sent to when
   LinePassport was killed gets nothing more, and the schedule's report names
   it as one that may not have got it. If nothing gets through when the send
   goes on (the network is not up yet after a reboot, say), it is tried once
@@ -561,7 +585,9 @@ All notable changes to OkLine are documented here. The format follows
   stops before its next chat when its schedule is deleted, or its account
   removed, while it goes out. `okline web` handles SIGTERM (and Ctrl-Break on
   Windows): `docker stop`, a redeploy or `kill` now make it stop in order and
-  exit with code 0. Before, it was killed: at once, or, as a container's first
+  exit with code 0 once the sends and AI replies in progress have ended (one
+  that outlasts Docker's 10 seconds is still cut by the kill). The handlers
+  are set before the first line is printed. Before, it was killed: at once, or, as a container's first
   process, when Docker's 10-second wait was over. Such a stop waits up to 6
   seconds for a message that is on its way and pauses a send between two
   chats, to go on after the next start; Ctrl-C still ends a send and names

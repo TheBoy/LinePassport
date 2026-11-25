@@ -130,7 +130,9 @@ chat, so a stop in the middle never sends to a chat twice:
 - **A stop by the system, a kill or a crash** (`docker stop`, a redeploy, a
   server restart, `kill`): the send goes on after the next start, with the chats
   that have not had their turn. Until then the schedules page shows it as
-  **Part sent, goes on**. It is still one run: one line in its history, written
+  **Part sent, goes on** (as paused while its schedule is switched off, and with
+  the sign-in notice while its account has to be connected again). It is still
+  one run: one line in its history, written
   when it ends, and one more on its sent count. A stop by the system (SIGTERM;
   Ctrl-Break on Windows) waits up to 6 seconds for the message that is on its
   way and stops before the next chat. After a kill or a crash nobody knows
@@ -162,12 +164,14 @@ named in its history line: a repeating send whose next run has come due by then
 (that run goes out, to every chat), and a once-a-day send that would go on
 nearer its next start than the time it was for (it goes out at that start). A
 send that runs once, or is on the last of its runs, has no next run: it goes
-on however late. Pressing **Run now** on a send that was cut short goes on with
+on however late. Pressing **Send now** (a Run now) on a send that was cut short
+goes on with
 it instead of starting again, and **Clear stuck jobs** leaves it to go on.
 
 **In Docker**, `docker stop` and a redeploy send SIGTERM and kill the container
 10 seconds later. LinePassport handles SIGTERM: it stops in order and exits with
-code 0. The image starts it with `exec`, so it is the container's first process
+code 0, once the sends and AI replies in progress have ended (one that outlasts
+the 10 seconds is cut by the kill, as below). The image starts it with `exec`, so it is the container's first process
 and gets the signal itself; `init: true` (`docker run --init`) is not needed for
 that and does no harm (the init passes the signal on). A command of your own
 that wraps LinePassport in a shell or a script has to `exec` it as the image
@@ -183,7 +187,9 @@ a send twice.
 > one was in the middle of: that send goes out again in full, one last time.
 > Going back to that version does the same to a send that this one was in the
 > middle of or shows as **Part sent, goes on**: the old version knows no turns
-> and sends it to every chat again. Check that no send is going out, and none
+> and sends it to every chat again (and if the old version is stopped partway
+> through that, this one goes on by its own older record when it is back).
+> Check that no send is going out, and none
 > waits to go on, before you update or go back.
 
 ## AI for auto reply

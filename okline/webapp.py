@@ -6989,6 +6989,7 @@ INDEX_HTML = r"""<!doctype html>
       "errors.state_file_repaired": {th: "ไฟล์ข้อมูลของ LinePassport ถูกแก้ไขระหว่างที่ระบบทำงาน จึงไม่บันทึกทับไฟล์นั้น โปรดรีสตาร์ท LinePassport", en: "A LinePassport data file was changed while LinePassport was running, so it is not saved over. Restart LinePassport."},
       "errors.state_file_unreadable": {th: "ไฟล์ข้อมูลของ LinePassport อ่านไม่ได้ และเก็บสำเนาไว้ไม่ได้ (ดิสก์อาจเต็ม) จึงไม่บันทึกทับไฟล์นั้น โปรดเพิ่มพื้นที่ว่างบนดิสก์แล้วลองอีกครั้ง", en: "A LinePassport data file cannot be read and no copy of it could be kept (the disk may be full), so it is not saved over. Make room on the disk and try again."},
       "errors.server_stopping": {th: "ยังไม่ได้ส่ง เพราะ LinePassport กำลังปิดอยู่ ลองส่งอีกครั้งเมื่อเปิดกลับมาแล้ว", en: "Not sent: LinePassport is stopping. Try again once it runs again."},
+      "errors.schedule_changed": {th: "ยังไม่ได้ส่ง: งานนี้ถูกเปลี่ยนหรือถูกลบไประหว่างนั้น โปรดลองอีกครั้ง", en: "Not sent: the schedule changed meanwhile. Try again."},
       "errors.schedule_cut_ended": {th: "ไม่ได้ส่งอะไรเพิ่ม: งานนี้ถูกตัดกลางคันหลังจากทุกแชทถึงคิวไปแล้ว เหลือเพียงบันทึกผลการส่ง ดูผลได้ที่งานนี้ ถ้าต้องการส่งให้ทุกแชทอีกครั้ง ให้กดส่งอีกรอบ", en: "Nothing was sent: this send had been cut short after every chat had its turn, and only its end was left to write down. The schedule shows what it reached. Send it again to send to every chat."},
       "errors.schedules_unsaved": {th: "ยังไม่ได้ส่ง เพราะตอนนี้บันทึกงานส่งตามเวลาไม่ได้ โปรดลองอีกครั้งในอีกสักครู่", en: "Not sent: the schedules cannot be saved right now. Try again in a moment."},
       "errors.line_login_required": {th: "ต้องเข้าสู่ระบบ LINE ใหม่", en: "LINE login is required again."},
@@ -16385,9 +16386,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "jobs.monthly": {th: "ทุกเดือน {days}", en: "Monthly on {days}"},
       "jobs.status_retrying": {th: "กำลังลองใหม่", en: "Retrying"},
       "jobs.status_queued": {th: "รอคิว (เกินขีดจำกัด)", en: "Queued (over the limit)"},
-      "jobs.status_part_sent": {th: "ส่งค้างอยู่ จะส่งต่อ", en: "Part sent, goes on"},
+      "jobs.status_part_sent": {th: "ส่งแล้วบางแชท จะส่งต่อ", en: "Part sent, goes on"},
       "jobs.history_resumed": {th: "ส่งต่อหลังถูกตัดกลางคัน", en: "went on after it was cut short"},
-      "jobs.part_sent_edit": {th: "งานนี้ส่งไปแล้วบางแชทและยังส่งค้างอยู่ การแก้ไขมีผลกับแชทที่ยังไม่ถึงคิวเท่านั้น ถ้าต้องการส่งข้อความใหม่ให้ทุกแชท ให้สร้างงานใหม่", en: "Some chats already got this send and the rest is still to go: an edit changes only what the chats that have not had their turn get. For a new message to every chat, make a new schedule."},
+      "jobs.part_sent_edit": {th: "งานนี้ส่งไปแล้วบางแชทและจะส่งต่อให้แชทที่เหลือ การแก้ไขมีผลกับแชทที่ยังไม่ถึงคิวเท่านั้น ถ้าต้องการส่งข้อความใหม่ให้ทุกแชท ให้สร้างงานใหม่", en: "Some chats already got this send and the rest is still to go: an edit changes only what the chats that have not had their turn get. For a new message to every chat, make a new schedule."},
       "jobs.part_sent_title": {th: "ส่งไปแล้วบางแชท แล้ว LinePassport หยุดทำงานหรือบันทึกงานส่งตามเวลาไม่ได้ งานนี้จะส่งต่อเฉพาะแชทที่ยังไม่ถึงคิว แชทที่ถึงคิวแล้วจะไม่ได้รับซ้ำ", en: "Some chats got it, then LinePassport stopped or could not save the schedules. It goes on with the chats that have not had their turn; no chat gets it twice."},
       "jobs.usage": {th: "ส่งไปแล้ว {hour}/{maxHour} ใน 1 ชม. · {day}/{maxDay} ใน 24 ชม.", en: "Sent {hour}/{maxHour} in 1 h · {day}/{maxDay} in 24 h"},
       "jobs.usage_title": {th: "จำนวนข้อความที่ส่งตามเวลาเทียบกับขีดจำกัดของบัญชีนี้", en: "Scheduled messages sent vs this account's limits"},
@@ -19233,6 +19234,11 @@ def _rank_own_chunks(
         query_embedding=query_embedding,
         top_k=top_k,
     )
+    if not by_vector:
+        # No stored vector says anything for this question (rank_chunks passes over a
+        # score of 0 or less): keyword search over all the chunks, as with no vectors,
+        # so that the chunks with vectors can still be found by their words.
+        return rank_chunks(question, chunks, top_k=top_k)
     places = max(1, min(int(top_k), 12)) - len(picked)
     return [*by_vector[: max(0, places)], *picked]
 
@@ -20442,7 +20448,11 @@ class WebAuth:
             user = self._new_user(username, password, "member", [], display_name or username)
             self.data.setdefault("users", []).append(user)
             token = self.create_session(str(user["id"]))
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self._forget_unsaved_user(user)
+                raise
             return token
 
     def ensure_god(self, username: str, password: str) -> dict[str, Any]:
@@ -20609,8 +20619,14 @@ class WebAuth:
             user["teamOwnerId"] = str(owner.get("id") or "")
             user["staffAccountIds"] = staff_accounts
             self.data.setdefault("users", []).append(user)
-            self.data.pop("simpleMode", None)
-            self._save()
+            simple_mode = self.data.pop("simpleMode", None)
+            try:
+                self._save()
+            except Exception:
+                self._forget_unsaved_user(user)
+                if simple_mode is not None:
+                    self.data["simpleMode"] = simple_mode
+                raise
             return self._public_user_strict(user)
 
     def _owned_staff(self, owner: dict[str, Any], staff_id: str) -> dict[str, Any]:
@@ -20634,7 +20650,9 @@ class WebAuth:
             if display_name is not None:
                 if len(display_name) > 80:
                     raise WebError(HTTPStatus.BAD_REQUEST, "Display name is too long.")
-                staff["displayName"] = display_name.strip() or staff["username"]
+                staff["displayName"] = (
+                    _storable_text(display_name).strip() or staff["username"]
+                )
             if account_ids is not None:
                 staff["staffAccountIds"] = self._validated_staff_accounts(owner, account_ids)
             if active is not None:
@@ -20766,7 +20784,9 @@ class WebAuth:
             if display_name is not None:
                 if len(display_name) > 80:
                     raise WebError(HTTPStatus.BAD_REQUEST, "Display name is too long.")
-                user["displayName"] = (display_name or "").strip() or user["username"]
+                user["displayName"] = (
+                    _storable_text(display_name or "").strip() or user["username"]
+                )
             if role is not None:
                 self._validate_role(role)
                 user["role"] = role
@@ -21027,6 +21047,15 @@ class WebAuth:
             "updatedAt": user.get("updatedAt"),
         }
 
+    def _forget_unsaved_user(self, user: dict[str, Any]) -> None:
+        """Take back a user that was added in memory and could not be saved, with its
+        sessions. Kept, a value in it that the store refuses would fail every later
+        save of the sign-ins: nobody could sign in until a restart."""
+        users = self.data.get("users")
+        if isinstance(users, list):
+            users[:] = [item for item in users if item is not user]
+        self._revoke_user_sessions(str(user.get("id") or ""))
+
     def _new_user(
         self,
         username: str,
@@ -21040,7 +21069,7 @@ class WebAuth:
             "id": uuid.uuid4().hex,
             "username": username,
             "email": self._email_or_empty(username),
-            "displayName": display_name.strip() or username,
+            "displayName": _storable_text(display_name).strip() or username,
             "role": role,
             "salt": salt,
             "passwordHash": self._hash_password(password, salt),
@@ -21386,7 +21415,7 @@ class AccountStore:
                     return
 
     def update_label(self, account_id: str, label: str) -> dict[str, Any]:
-        label = (label or "").strip()
+        label = _storable_text(label or "").strip()
         if not label:
             raise WebError(HTTPStatus.BAD_REQUEST, "Account name is required.")
         if len(label) > MAX_NAME_LENGTH:
@@ -21408,7 +21437,7 @@ class AccountStore:
         proxy_enabled: bool | None = None,
         encrypted_proxy_url: str | None = None,
     ) -> dict[str, Any]:
-        label = (label or "").strip()
+        label = _storable_text(label or "").strip()
         if not label:
             raise WebError(HTTPStatus.BAD_REQUEST, "Account name is required.")
         if len(label) > MAX_NAME_LENGTH:
@@ -21445,7 +21474,13 @@ class AccountStore:
         persist: bool = True,
         token_writer: Callable[[OkLine, str], None] | None = None,
     ) -> dict[str, Any]:
-        label = (requested_label or profile.get("displayName") or "Line Account").strip()
+        # What LINE reports for the account, and the name that was typed, without what
+        # a store refuses: the accounts are saved whole (see update_profile).
+        profile = _storable_value(profile)
+        label = (
+            _storable_text(str(requested_label or profile.get("displayName") or "")).strip()
+            or "Line Account"
+        )
         if len(label) > MAX_NAME_LENGTH:
             label = label[:MAX_NAME_LENGTH]
         mid = str(profile.get("mid") or uuid.uuid4().hex)
@@ -23037,7 +23072,8 @@ class WebState:
             "storage": self.store.label(),
             "nodeAvailable": LtsmBridge.is_available(),
             "e2eeReady": e2ee_ready,
-            "profile": profile,
+            # As LINE reports it now: half of a surrogate pair cannot be sent as JSON.
+            "profile": _storable_value(profile),
             "profileError": profile_error,
             "sessionState": session_state,
             "sessionError": session_error,
@@ -23249,6 +23285,7 @@ class WebState:
         proxy_url: str | None,
     ) -> dict[str, Any]:
         """Replace one revoked session while preserving all account references."""
+        profile = _storable_value(profile)  # as in AccountStore.add_from_api
         with self.lock, self.account_store.lock:
             previous_accounts = copy.deepcopy(self.account_store.data)
             existing = next(
@@ -24669,6 +24706,9 @@ class WebState:
         """
         if self.account_store.get(account_id) is None:
             return {}
+        # Names and texts as a channel gave them, without what the database refuses (a
+        # NUL character, half of a surrogate pair): else the whole message is lost.
+        values = {key: _storable_value(value) for key, value in values.items()}
         result = self.crm.ingest(account_id=account_id, **values)
         if self.account_store.get(account_id) is None:
             try:
@@ -32036,16 +32076,23 @@ class WebState:
         if begun is None or ended:
             # Sent (or, for a send with no chat left, written down) while the request
             # waits.
-            result = self._execute_schedule(
-                schedule_id, manual=True, account_id=account_id, begun=begun
-            )
+            # A stop waits for it as for a message on its way (see close): this
+            # request's thread would else end with the process before the run's result
+            # is saved, and a chat that got the message would read as one that may not
+            # have.
+            with self._sending_scheduled_message():
+                result = self._execute_schedule(
+                    schedule_id, manual=True, account_id=account_id, begun=begun
+                )
             # A run that sent nothing meanwhile is refused, instead of an answer that
             # reads as a send: its schedule was deleted or begun anew meanwhile, or it
             # goes on with a send cut short and was cut again before its chat's turn
             # (it then goes on by itself later).
             if result.get("skipped"):
                 raise WebError(
-                    HTTPStatus.CONFLICT, "Not sent: the schedule changed meanwhile. Try again."
+                    HTTPStatus.CONFLICT,
+                    "Not sent: the schedule changed meanwhile. Try again.",
+                    "schedule_changed",
                 )
             if result.get("cut"):
                 if self.scheduler.stop_event.is_set():
@@ -32404,6 +32451,15 @@ class WebState:
                         ):
                             self.schedule_inflight.add(cut_id)
                             resumed.append(cut_id)
+                        elif (
+                            account is not None
+                            and AccountStore._session_state(account) == "reauth_required"
+                            and job.get("status") != "login required"
+                        ):
+                            # Shown as the account's due sends are: the page then asks
+                            # to connect the account again (the send goes on after).
+                            job["status"] = "login required"
+                            changed = True
                         continue
                     if not job.get("enabled") or job.get("running"):
                         continue
@@ -34837,19 +34893,23 @@ def serve(
     host = str(server.server_address[0])
     bound_port = server.server_address[1]
     url = f"http://{host}:{bound_port}/"
-    print(f"LinePassport running at {url}")
-    if server.state.store.label() == "file":
-        print(
-            "Forgot the LinePassport password? It is separate from your LINE password. "
-            f"Stop the server and remove {auth_file} only when a full local auth reset is intended."
-        )
-    print("Press Ctrl-C to stop.")
-    if open_browser:
-        webbrowser.open(url)
     stop = _StopSignals(server.state)
     try:
         try:
+            # Set before the first line is printed: whoever waits for that line (a
+            # script, a test) may send its stop signal at once, and it must find the
+            # handler. A Ctrl-C from here on shuts down in order as well.
             stop.install()
+            print(f"LinePassport running at {url}")
+            if server.state.store.label() == "file":
+                print(
+                    "Forgot the LinePassport password? It is separate from your LINE "
+                    f"password. Stop the server and remove {auth_file} only when a full "
+                    "local auth reset is intended."
+                )
+            print("Press Ctrl-C to stop.")
+            if open_browser:
+                webbrowser.open(url)
             stop.serve_begins()
             server.serve_forever()
         except KeyboardInterrupt:
@@ -36294,7 +36354,11 @@ def _send_job_contents(
             if message_ids:
                 raise _PartlySent(exc, message_ids) from exc
             raise
-        message_ids.append(result.get("id") if isinstance(result, dict) else result)
+        # Kept with the schedule (its run record, its history): as LINE gave it,
+        # without what a store refuses.
+        message_ids.append(
+            _storable_value(result.get("id") if isinstance(result, dict) else result)
+        )
         _bot_log(
             log,
             "send.item.success",
