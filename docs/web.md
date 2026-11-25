@@ -120,6 +120,72 @@ it; change or remove it later with Edit. Telegram accounts don't use it
   says how many customers will go before you confirm.
 - **Times** show and are picked on a 24-hour clock (14:05), in English too.
 
+## Scheduled sends and restarts
+
+A scheduled send (or a Run now) to several chats goes to one chat at a time, with
+a pause of 30 to 90 seconds between chats, so it can take many minutes.
+LinePassport saves each chat's turn with the schedule before it sends to that
+chat, so a stop in the middle never sends to a chat twice:
+
+- **A stop by the system, a kill or a crash** (`docker stop`, a redeploy, a
+  server restart, `kill`): the send goes on after the next start, with the chats
+  that have not had their turn. Until then the schedules page shows it as
+  **Part sent, goes on**. It is still one run: one line in its history, written
+  when it ends, and one more on its sent count. A stop by the system (SIGTERM;
+  Ctrl-Break on Windows) waits up to 6 seconds for the message that is on its
+  way and stops before the next chat. After a kill or a crash nobody knows
+  whether the message that was on its way arrived: that chat gets nothing more,
+  and the schedule's report names it ("may not have got it").
+- **Ctrl-C at the terminal** ends the send, as before: the chats it did not reach
+  are named on the schedule and get nothing later.
+- A send that had reached no chat yet is not run: a scheduled one goes out after
+  the next start; a Run now does not, and its schedule says that it was not sent
+  (after a kill or a crash: that it was recovered after an unexpected stop).
+
+After the start a scheduled send goes on at the scheduler's first round (about
+10 seconds), under the usual rules: not while the schedule is switched off, its
+account's sends are paused, the account has to be connected again, or it is
+over its hourly or daily limit. A Run now that was cut short goes on by itself
+too (also for a schedule that is switched off). If nothing gets through at that
+first try (the network is not up yet after a reboot, say), a scheduled send is
+tried once more 5 minutes later, as a whole send that reaches nobody is; a Run
+now is not tried again, and what it could not send is reported. What a send
+sends is made again when it goes on (another of its message patterns may be
+drawn, an AI image is generated again), and an edit made meanwhile counts: the
+rest of the send goes out as edited, also at a new time, and the chats that
+have had their turn still get nothing from it. For a new message to every
+chat, make a new schedule instead of changing one that shows **Part sent, goes
+on** (the page says so when you open such a schedule to edit it).
+
+Two cases end a send where it stopped instead, with the chats it did not reach
+named in its history line: a repeating send whose next run has come due by then
+(that run goes out, to every chat), and a once-a-day send that would go on
+nearer its next start than the time it was for (it goes out at that start). A
+send that runs once, or is on the last of its runs, has no next run: it goes
+on however late. Pressing **Run now** on a send that was cut short goes on with
+it instead of starting again, and **Clear stuck jobs** leaves it to go on.
+
+**In Docker**, `docker stop` and a redeploy send SIGTERM and kill the container
+10 seconds later. LinePassport handles SIGTERM: it stops in order and exits with
+code 0. The image starts it with `exec`, so it is the container's first process
+and gets the signal itself; `init: true` (`docker run --init`) is not needed for
+that and does no harm (the init passes the signal on). A command of your own
+that wraps LinePassport in a shell or a script has to `exec` it as the image
+does: otherwise the signal stops at the wrapper, with or without an init, and
+LinePassport is killed without stopping in order (exit code 137 once the 10
+seconds are over, when the wrapper is the first process). A message that takes
+longer than the 10 seconds to go out is cut by the kill as well; raise
+`stop_grace_period` (`docker stop -t`) if you see that. Either way no chat gets
+a send twice.
+
+> **Updating to this version, or going back:** the version before saved no
+> turns, so the first start of this one cannot go on with a send that the old
+> one was in the middle of: that send goes out again in full, one last time.
+> Going back to that version does the same to a send that this one was in the
+> middle of or shows as **Part sent, goes on**: the old version knows no turns
+> and sends it to every chat again. Check that no send is going out, and none
+> waits to go on, before you update or go back.
+
 ## AI for auto reply
 
 Auto reply answers customers with an AI service the shop owner picks in

@@ -459,7 +459,8 @@ All notable changes to OkLine are documented here. The format follows
   scheduler's next round that can (it tries every 10 seconds). While they
   cannot be saved no scheduled send starts, and the schedules page says so;
   it also names a send that went out meanwhile, because restarting
-  LinePassport before the schedules are saved sends it again. A Run now to
+  LinePassport before the schedules are saved loses the record of how it
+  ended (see the entry on restarts below). A Run now to
   several chats is saved as started before it is answered, so one that
   cannot start is refused (before, it was queued, dropped without a word and
   shown as sent), and the page now says it has started, not that it was
@@ -485,11 +486,53 @@ All notable changes to OkLine are documented here. The format follows
   stopped before it reached any chat is not counted, and goes out once
   LinePassport starts again (a Run now says it was not sent: one to a
   single chat on the page, one to several chats on the schedule). When
-  LinePassport ends without stopping (a crash, or a Docker container that
-  is stopped or redeployed), a send it was in the middle of still goes out
-  again in full when it starts. Either way, a once-a-day send goes out then
-  only while that is nearer its time than its next time (see the
-  once-a-day entry below).
+  LinePassport ends without stopping (a crash, a kill), a send it was in the
+  middle of goes on when it starts, with the chats it had not reached (see
+  the next entry). Either way, a once-a-day send goes out then only while
+  that is nearer its time than its next time (see the once-a-day entry
+  below).
+- **A scheduled send that a restart cut short went out again.** When
+  LinePassport was killed or crashed partway through a send to several chats
+  (a Docker container stopped or redeployed, say), the next start sent it to
+  every chat again, also to those that had got it. Each chat's turn is now
+  saved with the schedule before anything goes to that chat, and the next
+  start goes on with the chats that have had no turn. It is one run: one
+  history line, written when it ends, with the message ids from before and
+  after the stop, and one more on the sent count; until then the schedules
+  page shows it as "Part sent, goes on". A chat that was being sent to when
+  LinePassport was killed gets nothing more, and the schedule's report names
+  it as one that may not have got it. If nothing gets through when the send
+  goes on (the network is not up yet after a reboot, say), it is tried once
+  more 5 minutes later. A Run now that was cut short goes on by itself too,
+  once its account's sends are not paused and the account is connected (it
+  gets no second try); pressing Run now on a send that was cut short goes on
+  with it instead of starting again (new error code `schedule_cut_ended`,
+  with Thai and English text, when no chat is left to send to), and Clear
+  stuck jobs leaves it to go on. An edit made meanwhile changes only what the
+  chats that have had no turn get, and when: the page says so when such a
+  schedule is opened. A repeating send whose next run has come due by the
+  time LinePassport starts again is not gone on with: that run goes out, to
+  every chat, and the cut one counts as it stands, with the chats it did not
+  reach named in its history line. A once-a-day send that would go on nearer
+  its next start than its own time is not gone on with either: it counts as
+  it stands, and goes out at that next start. A send that runs once, or is on
+  the last of its runs, goes on however late. A chat whose turn cannot be
+  saved (a full disk) gets nothing until it can be, and a send whose end
+  could not be saved is no longer sent again by a restart: the chat whose
+  result was not saved then shows as one that may not have got it. A send now
+  stops before its next chat when its schedule is deleted, or its account
+  removed, while it goes out. `okline web` handles SIGTERM (and Ctrl-Break on
+  Windows): `docker stop`, a redeploy or `kill` now make it stop in order and
+  exit with code 0. Before, it was killed: at once, or, as a container's first
+  process, when Docker's 10-second wait was over. Such a stop waits up to 6
+  seconds for a message that is on its way and pauses a send between two
+  chats, to go on after the next start; Ctrl-C still ends a send and names
+  the chats it did not reach. The first start of this version cannot go on
+  with a send that the version before was in the middle of (that version
+  saved no turns): that send goes out again in full, one last time. Going
+  back to that version does the same to a send this version was in the middle
+  of. So check that no send is going out, and none waits to go on, before
+  updating or going back.
 - **A scheduled send waiting its turn ignored changes made meanwhile.**
   LinePassport sends at most four schedules at a time (scheduled sends, and
   Run nows to several chats), across all workspaces; one that comes due

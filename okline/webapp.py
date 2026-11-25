@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import bisect
+import contextlib
 import copy
 import datetime as _dt
 import hashlib
@@ -22,6 +23,7 @@ import os
 import random
 import re
 import secrets
+import signal
 import socket
 import threading
 import time
@@ -29,7 +31,7 @@ import unicodedata
 import uuid
 import webbrowser
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -6987,6 +6989,7 @@ INDEX_HTML = r"""<!doctype html>
       "errors.state_file_repaired": {th: "ไฟล์ข้อมูลของ LinePassport ถูกแก้ไขระหว่างที่ระบบทำงาน จึงไม่บันทึกทับไฟล์นั้น โปรดรีสตาร์ท LinePassport", en: "A LinePassport data file was changed while LinePassport was running, so it is not saved over. Restart LinePassport."},
       "errors.state_file_unreadable": {th: "ไฟล์ข้อมูลของ LinePassport อ่านไม่ได้ และเก็บสำเนาไว้ไม่ได้ (ดิสก์อาจเต็ม) จึงไม่บันทึกทับไฟล์นั้น โปรดเพิ่มพื้นที่ว่างบนดิสก์แล้วลองอีกครั้ง", en: "A LinePassport data file cannot be read and no copy of it could be kept (the disk may be full), so it is not saved over. Make room on the disk and try again."},
       "errors.server_stopping": {th: "ยังไม่ได้ส่ง เพราะ LinePassport กำลังปิดอยู่ ลองส่งอีกครั้งเมื่อเปิดกลับมาแล้ว", en: "Not sent: LinePassport is stopping. Try again once it runs again."},
+      "errors.schedule_cut_ended": {th: "ไม่ได้ส่งอะไรเพิ่ม: งานนี้ถูกตัดกลางคันหลังจากทุกแชทถึงคิวไปแล้ว เหลือเพียงบันทึกผลการส่ง ดูผลได้ที่งานนี้ ถ้าต้องการส่งให้ทุกแชทอีกครั้ง ให้กดส่งอีกรอบ", en: "Nothing was sent: this send had been cut short after every chat had its turn, and only its end was left to write down. The schedule shows what it reached. Send it again to send to every chat."},
       "errors.schedules_unsaved": {th: "ยังไม่ได้ส่ง เพราะตอนนี้บันทึกงานส่งตามเวลาไม่ได้ โปรดลองอีกครั้งในอีกสักครู่", en: "Not sent: the schedules cannot be saved right now. Try again in a moment."},
       "errors.line_login_required": {th: "ต้องเข้าสู่ระบบ LINE ใหม่", en: "LINE login is required again."},
       "errors.line_account_mismatch": {th: "บัญชี LINE ที่สแกนไม่ตรงกับบัญชีเดิม กรุณาสแกนบัญชีเดิม หรือกดย้อนกลับแล้วเพิ่มเป็นบัญชีใหม่", en: "The scanned LINE account does not match. Scan the original account, or go back and add this as a new account."},
@@ -7065,6 +7068,7 @@ INDEX_HTML = r"""<!doctype html>
       "botlog.action.schedule.delete": {th: "ลบตารางเวลา", en: "Schedule deleted"},
       "botlog.action.schedule.clear_stuck": {th: "เคลียร์งานค้าง", en: "Stuck job cleared"},
       "botlog.action.schedule.run.start": {th: "เริ่มส่งตามเวลา", en: "Bot run started"},
+      "botlog.action.schedule.run.resume": {th: "ส่งต่อให้แชทที่เหลือ", en: "Send went on with the remaining chats"},
       "botlog.action.schedule.run.success": {th: "ส่งสำเร็จ", en: "Send succeeded"},
       "botlog.action.schedule.run.error": {th: "ส่งผิดพลาด", en: "Send failed"},
       "botlog.action.schedule.run.missed": {th: "ข้ามรอบที่ส่งไม่ทันเวลา", en: "Missed run not sent"},
@@ -14944,12 +14948,21 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       return t("jobs.when_window", {days: dayText, start: job.windowStart, end: `${job.windowEnd}:59`, n: job.intervalMinutes});
     }
 
+    // A send that reached some of its chats and was then cut short (LinePassport
+    // stopped, or the schedules could not be saved): it goes on with the other chats.
+    function sendCutShort(job) {
+      const chats = job && !job.running && job.runProgress && job.runProgress.chats;
+      return Array.isArray(chats) && chats.some((chat) => chat && chat.mid && chat.state !== "failed");
+    }
+
     function jobStatus(job) {
       const raw = String(job.status || "").toLowerCase();
       if (job.running || raw === "running") return ["running", "info"];
       if (raw === "login required") return ["login_required", "bad"];
       if (raw === "retrying") return ["retrying", "warn"];
       if (raw === "queued") return ["queued", "warn"];
+      // (A switched-off schedule's does not go on by itself; a Run now's does.)
+      if (sendCutShort(job) && (job.enabled || job.runProgress.manual)) return ["part_sent", "warn"];
       if (raw === "error" || job.lastError) return ["error", "bad"];
       if (raw === "completed") return ["completed", ""];
       if (!job.enabled) return ["paused", ""];
@@ -15158,7 +15171,9 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         const titleRow = document.createElement("div");
         titleRow.className = "job-card-title";
         const [statusKey, statusKind] = jobStatus(job);
-        titleRow.append(textSpan(job.name || t("scheduler.default_name"), "strong"), textSpan(t("jobs.status_" + statusKey), "badge " + statusKind));
+        const statusBadge = textSpan(t("jobs.status_" + statusKey), "badge " + statusKind);
+        if (statusKey === "part_sent") statusBadge.title = t("jobs.part_sent_title");
+        titleRow.append(textSpan(job.name || t("scheduler.default_name"), "strong"), statusBadge);
         const approx = job.exactTime ? "" : "~";
         const when = jobScheduleLabel(job) + (job.enabled && job.nextRunAt ? " · " + t("jobs.next", {at: approx + fmtEpoch(job.nextRunAt)}) : "");
         const history = document.createElement("div");
@@ -15167,7 +15182,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
         if (recent.length) {
           for (const entry of recent) {
             const mark = textSpan(entry.ok ? "✓" : (entry.retry ? "↻" : "✗"), entry.ok ? "ok" : "bad");
-            mark.title = `${String(entry.at || "").replace("T", " ")}${entry.error ? " · " + entry.error : ""}`;
+            mark.title = `${String(entry.at || "").replace("T", " ")}${entry.resumed ? " · " + t("jobs.history_resumed") : ""}${entry.error ? " · " + entry.error : ""}`;
             history.appendChild(mark);
           }
         } else {
@@ -15383,6 +15398,8 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       setBotPage("wizard");
       fillWizardInputs();
       setWizardStep(state.wizard.targets.length && !job ? 2 : 1);
+      // An edit changes only the rest of a send that was cut short.
+      if (job && sendCutShort(job)) toast(t("jobs.part_sent_edit"));
     }
 
     function fillWizardInputs() {
@@ -16347,7 +16364,7 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "jobs.when_window": {th: "{days} {start}–{end} ทุก {n} นาที", en: "{days} {start}–{end} every {n} min"},
       "jobs.failed_banner": {th: "งาน “{name}” ส่งไม่สำเร็จ: {error}", en: "\"{name}\" failed: {error}"},
       "jobs.unsaved_banner": {th: "ตอนนี้บันทึกงานส่งตามเวลาไม่ได้ จึงยังไม่มีงานใดถูกส่งจนกว่าจะบันทึกได้ ระบบลองใหม่ทุก 10 วินาที (ดูสาเหตุได้ใน log ของเซิร์ฟเวอร์)", en: "The schedules cannot be saved right now, so none is sent until they can be. LinePassport tries again every 10 seconds (the server log says why)."},
-      "jobs.unsaved_sent": {th: "อย่าเพิ่งรีสตาร์ท LinePassport: {names} ส่งออกไปแล้วแต่ยังบันทึกไม่ได้ ถ้ารีสตาร์ทก่อนบันทึกได้ จะถูกส่งซ้ำอีกครั้ง", en: "Do not restart LinePassport yet: {names} went out, but that is not saved, and a restart before it is sends it again."},
+      "jobs.unsaved_sent": {th: "อย่าเพิ่งรีสตาร์ท LinePassport: {names} ส่งออกไปแล้วแต่ยังบันทึกไม่ได้ ถ้ารีสตาร์ทก่อนบันทึกได้ จะไม่ถูกส่งซ้ำ แต่แชทที่ยังไม่ได้บันทึกผลจะขึ้นว่าอาจยังไม่ได้รับ", en: "Do not restart LinePassport yet: {names} went out, but that is not saved. After a restart before it is saved, nothing is sent again, but a chat whose result was not saved shows as one that may not have got it."},
       "jobs.quoted": {th: "“{name}”", en: "\"{name}\""},
       "jobs.reconnect": {th: "เชื่อมต่อใหม่", en: "Reconnect"},
       "jobs.retry": {th: "ลองอีกครั้ง", en: "Try again"},
@@ -16368,6 +16385,10 @@ Response guidance: Say goodbye politely and invite the person to return with mor
       "jobs.monthly": {th: "ทุกเดือน {days}", en: "Monthly on {days}"},
       "jobs.status_retrying": {th: "กำลังลองใหม่", en: "Retrying"},
       "jobs.status_queued": {th: "รอคิว (เกินขีดจำกัด)", en: "Queued (over the limit)"},
+      "jobs.status_part_sent": {th: "ส่งค้างอยู่ จะส่งต่อ", en: "Part sent, goes on"},
+      "jobs.history_resumed": {th: "ส่งต่อหลังถูกตัดกลางคัน", en: "went on after it was cut short"},
+      "jobs.part_sent_edit": {th: "งานนี้ส่งไปแล้วบางแชทและยังส่งค้างอยู่ การแก้ไขมีผลกับแชทที่ยังไม่ถึงคิวเท่านั้น ถ้าต้องการส่งข้อความใหม่ให้ทุกแชท ให้สร้างงานใหม่", en: "Some chats already got this send and the rest is still to go: an edit changes only what the chats that have not had their turn get. For a new message to every chat, make a new schedule."},
+      "jobs.part_sent_title": {th: "ส่งไปแล้วบางแชท แล้ว LinePassport หยุดทำงานหรือบันทึกงานส่งตามเวลาไม่ได้ งานนี้จะส่งต่อเฉพาะแชทที่ยังไม่ถึงคิว แชทที่ถึงคิวแล้วจะไม่ได้รับซ้ำ", en: "Some chats got it, then LinePassport stopped or could not save the schedules. It goes on with the chats that have not had their turn; no chat gets it twice."},
       "jobs.usage": {th: "ส่งไปแล้ว {hour}/{maxHour} ใน 1 ชม. · {day}/{maxDay} ใน 24 ชม.", en: "Sent {hour}/{maxHour} in 1 h · {day}/{maxDay} in 24 h"},
       "jobs.usage_title": {th: "จำนวนข้อความที่ส่งตามเวลาเทียบกับขีดจำกัดของบัญชีนี้", en: "Scheduled messages sent vs this account's limits"},
       "jobs.view_calendar": {th: "ดู 7 วันข้างหน้า", en: "Next 7 days"},
@@ -17952,6 +17973,9 @@ SCHEDULE_RETRY_DELAY_SECONDS = 300
 SCHEDULE_ON_TIME_SLACK_SECONDS = 60
 SCHEDULE_SENDER_WAIT_SECONDS = 900
 SCHEDULE_TARGET_GAP_SECONDS = (30.0, 90.0)
+# How long a stop waits for a scheduled message that is on its way to a chat before
+# the LINE connections are closed under it (see WebState.close).
+SCHEDULE_STOP_WAIT_SECONDS = 6.0
 MAX_SCHEDULE_IMAGE_STORAGE_PER_ACCOUNT = 100 * 1024 * 1024
 MAX_BOT_LOG_STORAGE_BYTES = 25 * 1024 * 1024
 MAX_SESSION_FILE_BYTES = 5 * 1024 * 1024
@@ -21721,9 +21745,20 @@ class WebState:
         self.schedules_unsaved = False
         self.schedules_save_error: str | None = None
         # Schedules that went out while saving failed: until a save works, a restart
-        # sends them again (the schedules page says so).
+        # loses what the run's end wrote (the schedules page says so). It sends them to
+        # no chat again: each chat's turn was saved before it was sent to.
         self.schedules_unsaved_sent: set[str] = set()
         self.schedule_inflight: set[str] = set()
+        # What a stop does to a scheduled send that is partway through its chats (see
+        # _execute_schedule). False: it ends the send, and the schedule names the chats
+        # it did not reach (Ctrl-C at the terminal). True: the send pauses between two
+        # chats and goes on after the next start, as after a crash; serve() sets it
+        # when the system asks LinePassport to stop (SIGTERM: docker stop, a deploy).
+        self.stop_pauses_sends = False
+        # Scheduled messages on their way to a chat now: a stop waits a moment for
+        # them (see close).
+        self.schedule_sends_cond = threading.Condition()
+        self.schedule_sends_now = 0
         self.schedule_executor = ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="linepassport-schedule"
         )
@@ -22430,6 +22465,9 @@ class WebState:
         return str((self.tenant_user(dict(user)) or {}).get("id") or "")
 
     def close(self) -> None:
+        # First of all, so that no scheduled send starts on its next chat while the
+        # rest of this takes its time (see _execute_schedule).
+        self.scheduler.stop_event.set()
         self.broadcast_runner.close()
         self.telegram_users.close()
         self.telegram.close()
@@ -22454,6 +22492,14 @@ class WebState:
             self.ai_auto_reply_backlog.clear()  # nothing more starts
         self.ai_auto_reply_executor.shutdown(wait=False, cancel_futures=True)
         self.schedule_executor.shutdown(wait=False, cancel_futures=True)
+        # A scheduled message on its way to a chat gets a moment to arrive before the
+        # LINE connections are closed under it: its send then ends as it would have,
+        # and the run stops before its next chat. One that takes longer is not waited
+        # for (its chat's turn is saved already, so nothing is sent to it again).
+        with self.schedule_sends_cond:
+            self.schedule_sends_cond.wait_for(
+                lambda: not self.schedule_sends_now, timeout=SCHEDULE_STOP_WAIT_SECONDS
+            )
         with self.lock:
             apis = list(self.apis.values())
             self.apis = {}
@@ -23288,6 +23334,9 @@ class WebState:
                     schedule["status"] = "account deleted"
                     schedule.pop("runningSince", None)
                     schedule.pop("runToken", None)
+                    # A run of it that is going on stops before its next chat, and one
+                    # that was cut short has nothing left to go on with.
+                    schedule.pop("runProgress", None)
             raw_incoming = self.store.get("incoming_api", {"links": []})
             incoming_data = (
                 copy.deepcopy(raw_incoming)
@@ -27589,13 +27638,26 @@ class WebState:
         items = [s for s in schedules if isinstance(s, dict)]
         recovered = False
         for job in items:
-            if job.get("running"):
+            if "runProgress" in job and (_run_record_stale(job) or not _run_turns(job)):
+                # Of no run that goes on (see _run_turns and _run_record_stale).
+                job.pop("runProgress", None)
+                recovered = True
+            if not job.get("running"):
+                continue
+            # The process that ran it ended without ending the run: it was killed or
+            # crashed, or the system stopped it between two chats (see serve).
+            if _run_turns(job):
+                # Some chats have had their turn: the job's next start goes on with the
+                # others (see _execute_schedule), and those get nothing again.
+                _mark_run_cut(job, "stopped")
+            else:
+                # It had reached no chat: due again in full, if it ran at its time.
                 job["running"] = False
                 job["status"] = "error"
                 job["lastError"] = "Recovered after the previous process stopped unexpectedly."
                 job.pop("runningSince", None)
                 job.pop("runToken", None)
-                recovered = True
+            recovered = True
         if recovered:
             self.store.set("schedules", {"schedules": items})
         return items
@@ -27647,7 +27709,9 @@ class WebState:
     def _schedules_unsaved_payload(self, schedules: list[dict[str, Any]]) -> dict[str, Any]:
         """Whether the schedules cannot be saved now (none is sent until they can), and
         which of ``schedules`` went out meanwhile (a restart before a save works sends
-        those again). The caller holds schedule_lock."""
+        those to no chat again, but loses what their end wrote: a chat whose turn's end
+        is not saved then shows as one that may not have got it). The caller holds
+        schedule_lock."""
         return {
             "schedulesUnsaved": self.schedules_unsaved,
             "unsavedSent": [
@@ -31797,17 +31861,61 @@ class WebState:
         with self.schedule_lock:
             job = self._find_schedule(schedule_id)
             _ensure_schedule_account(job, account_id)
+            # A send that was cut short goes on with this Run now (see
+            # _execute_schedule). One that was cut after every chat had its turn has
+            # nothing left to send, only its end to write, which says what it reached.
+            ended = _cut_run(job) is not None and not _chats_left(job)
+            sent_before = len(_run_tally(_run_turns(job))[2])
             many = len(job.get("targets") or []) > 1
-            if many and schedule_id in self.schedule_inflight:
+            if (many or ended) and schedule_id in self.schedule_inflight:
                 raise WebError(HTTPStatus.CONFLICT, "Schedule is already running.")
             begun: tuple[dict[str, Any], dict[str, Any]] | None = None
-            if many:
+            if many or ended:
                 # Begun (saved as running) before the request is answered: a run that
-                # cannot begin is refused now, instead of being queued and lost.
+                # cannot begin is refused now, instead of being queued and lost. And
+                # begun under this lock: no scheduler round comes between this look at
+                # the job and its run.
                 begun = self._begin_schedule_run(schedule_id, account_id)
-                self.schedule_inflight.add(schedule_id)
-        if begun is None:
-            return self._execute_schedule(schedule_id, manual=True, account_id=account_id)
+                if not ended:
+                    self.schedule_inflight.add(schedule_id)
+        if begun is None or ended:
+            # Sent (or, for a send with no chat left, written down) while the request
+            # waits.
+            result = self._execute_schedule(
+                schedule_id, manual=True, account_id=account_id, begun=begun
+            )
+            # A run that sent nothing meanwhile is refused, instead of an answer that
+            # reads as a send: its schedule was deleted or begun anew meanwhile, or it
+            # goes on with a send cut short and was cut again before its chat's turn
+            # (it then goes on by itself later).
+            if result.get("skipped"):
+                raise WebError(
+                    HTTPStatus.CONFLICT, "Not sent: the schedule changed meanwhile. Try again."
+                )
+            if result.get("cut"):
+                if self.scheduler.stop_event.is_set():
+                    raise WebError(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        "Not sent: LinePassport is stopping. Try again once it runs again.",
+                        "server_stopping",
+                    )
+                raise WebError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "Not sent: the schedules cannot be saved right now. Try again in a moment.",
+                    "schedules_unsaved",
+                )
+            if not ended or len(result.get("messageIds") or []) > sent_before:
+                # (For a send with no chat left: an edit gave it a chat meanwhile, and
+                # that chat got it.)
+                return result
+            # Said so, instead of an answer that reads as a send.
+            raise WebError(
+                HTTPStatus.CONFLICT,
+                "Nothing was sent: this send had been cut short after every chat had its "
+                "turn, and only its end was left to write down. The schedule shows what "
+                "it reached. Send it again to send to every chat.",
+                "schedule_cut_ended",
+            )
         # Several chats are spaced 30-90 s apart; don't hold the request open.
         try:
             future = self.schedule_executor.submit(
@@ -32062,11 +32170,15 @@ class WebState:
     def run_due_schedules(self) -> None:
         now = time.time()
         due: list[str] = []
+        # Run nows that were cut short and go on now (see _cut_run).
+        resumed: list[str] = []
         changed = False
         reserved: dict[str, int] = {}
         settings_of: dict[str, dict[str, Any]] = {}
         # Due runs that do not go out now (see _due_run_deferred): the job, and why.
         held: list[tuple[dict[str, Any], str]] = []
+        # Jobs whose run that was cut short does not go on (see _close_cut_run).
+        ended: list[dict[str, Any]] = []
 
         def settings_for(account_id: str) -> dict[str, Any]:
             # Read once a round for each account.
@@ -32074,9 +32186,31 @@ class WebState:
                 settings_of[account_id] = self.schedule_settings_for(account_id)
             return settings_of[account_id]
 
+        def end_cut_run(job: dict[str, Any], note: dict[str, Any]) -> None:
+            try:
+                _close_cut_run(job, note)
+            except Exception:
+                # A record that cannot be worked out (a damaged count) is dropped
+                # rather than failing every round over it.
+                job.pop("runProgress", None)
+                _print_exc_quietly()
+                return
+            ended.append(dict(job))
+
         def log_held() -> None:
             # Written however the round ends: a held run's job keeps its changes in memory
             # (a later round saves them) and is not due again, to be logged then.
+            for snapshot in ended:
+                report = str(snapshot.get("lastError") or "")
+                self.append_bot_log(
+                    "schedule.run.error" if report else "schedule.run.success",
+                    account_id=str(snapshot.get("accountId") or ""),
+                    schedule=snapshot,
+                    ok=not report,
+                    detail=report,
+                    listed_only=True,
+                )
+            ended.clear()
             for snapshot, why in held:
                 self.append_bot_log(
                     "schedule.run.missed" if why == "missed" else "schedule.run.already_sent",
@@ -32094,10 +32228,30 @@ class WebState:
             saving = False
             try:
                 for job in self.schedules:
-                    if not job.get("enabled") or job.get("running"):
-                        continue
                     job_account_id = str(job.get("accountId") or "")
                     account = accounts.get(job_account_id)
+                    # A run of it that was cut short (LinePassport stopped partway, or a
+                    # chat's turn could not be saved), if any: its next start goes on
+                    # with it.
+                    cut = _cut_run(job)
+                    if cut is not None and cut.get("manual"):
+                        # A Run now goes on by itself, whatever the schedule's own times
+                        # (and whether it is switched on), once its account can send:
+                        # it waits while the account is paused or has to be connected
+                        # again, as the account's due sends do.
+                        cut_id = str(job.get("id") or "")
+                        if (
+                            cut_id not in self.schedule_inflight
+                            and account is not None
+                            and _account_channel(account) == "line"
+                            and AccountStore._session_state(account) != "reauth_required"
+                            and not settings_for(job_account_id)["paused"]
+                        ):
+                            self.schedule_inflight.add(cut_id)
+                            resumed.append(cut_id)
+                        continue
+                    if not job.get("enabled") or job.get("running"):
+                        continue
                     if job_account_id and _account_channel(account) != "line":
                         if job.get("status") != "unsupported":
                             job["status"] = "unsupported"
@@ -32147,7 +32301,24 @@ class WebState:
                         settings = settings_for(job_account_id)
                         if settings["paused"]:
                             continue
+                        if cut is not None and _cut_run_overtaken(job, cut, now):
+                            # Its next run has come due since it was cut short: that run
+                            # goes out, to every chat, and the cut one ends as it stands.
+                            end_cut_run(job, cut)
+                            cut = None
+                            changed = True
                         why, until = _due_run_deferred(job, now)
+                        if why and cut is not None and _job_on_last_run(job):
+                            # No run of it comes after this one, so nothing is too
+                            # near: the rest of it goes out now, however late.
+                            why, until = "", None
+                        # Too late for the rest of a run cut short as well: it ends as it
+                        # stands, and its own history line says what it reached.
+                        cut_ended = bool(why) and cut is not None
+                        if why and cut is not None:
+                            end_cut_run(job, cut)
+                            cut = None
+                            changed = True
                         if why:
                             # Not sent now: due again at its next start, or done.
                             job["nextRunAt"] = until
@@ -32159,7 +32330,7 @@ class WebState:
                                 job["status"] = "completed"
                             elif job.get("status") in {"queued", "retrying", "login required"}:
                                 job["status"] = "waiting"
-                            if why == "missed":
+                            if why == "missed" and not cut_ended:
                                 _append_history(
                                     job, {"at": _now_iso(), "ok": False, "error": _MISSED_RUN}
                                 )
@@ -32167,6 +32338,9 @@ class WebState:
                             changed = True
                             continue
                         needed = max(1, len(job.get("targets") or []))
+                        if cut is not None:
+                            # A run that goes on sends to the chats with no turn yet.
+                            needed = _chats_left(job)
                         left = self._schedule_quota_left(
                             job_account_id, settings
                         ) - reserved.get(job_account_id, 0)
@@ -32199,16 +32373,18 @@ class WebState:
                 # save that fails does not: a run is saved as running before it sends
                 # (see _execute_schedule), so none starts while saving fails, and
                 # save_schedules said why.
-                for schedule_id in due:
+                for schedule_id in due + resumed:
                     self.schedule_inflight.discard(schedule_id)
                 log_held()
                 if saving and isinstance(exc, Exception):
                     return
                 raise
         log_held()
-        for schedule_id in due:
+        starts = [(schedule_id, self._run_due_schedule) for schedule_id in due]
+        starts += [(schedule_id, self._resume_cut_run) for schedule_id in resumed]
+        for schedule_id, start in starts:
             try:
-                future = self.schedule_executor.submit(self._run_due_schedule, schedule_id)
+                future = self.schedule_executor.submit(start, schedule_id)
             except Exception:
                 with self.schedule_lock:
                     self.schedule_inflight.discard(schedule_id)
@@ -32258,7 +32434,11 @@ class WebState:
             return False
         if not job.get("nextRunAt") or due_at > time.time():
             return False
-        if _due_run_deferred(job, time.time(), slack=_sender_slack(job))[0]:
+        if _due_run_deferred(job, time.time(), slack=_sender_slack(job))[0] and not (
+            # (The rest of a run cut short that has none after it goes out however
+            # late: the round let it through for that, see run_due_schedules.)
+            _cut_run(job) is not None and _job_on_last_run(job)
+        ):
             return False  # held: the scheduler's next round moves it to its next start
         return not self.schedule_settings_for(str(job.get("accountId") or ""))["paused"]
 
@@ -32272,6 +32452,150 @@ class WebState:
                 return {"ok": False, "skipped": True, "messageIds": []}
             begun = self._begin_schedule_run(schedule_id, None)
         return self._execute_schedule(schedule_id, manual=False, begun=begun)
+
+    def _resume_cut_run(self, schedule_id: str) -> dict[str, Any]:
+        """A Run now that was cut short, as a sender starts it again (see
+        run_due_schedules): it goes on only if it is cut short still (not deleted, and
+        not begun again by a Run now meanwhile)."""
+        with self.schedule_lock:
+            job = self._schedule_or_none(schedule_id)
+            if job is None or _cut_run(job) is None:
+                return {"ok": False, "skipped": True, "messageIds": []}
+            begun = self._begin_schedule_run(schedule_id, None)
+        return self._execute_schedule(schedule_id, manual=True, begun=begun)
+
+    def _begin_chat_turn(
+        self,
+        schedule_id: str,
+        token: str,
+        target: Mapping[str, Any],
+        *,
+        manual: bool,
+        fresh: bool,
+    ) -> str:
+        """Write into the job, and save, that a chat's turn in a run begins, before
+        anything is sent to that chat: from then on the chat gets nothing more from
+        this run, whatever becomes of the send and of LinePassport (see _run_turns).
+
+        Returns "" once that is saved. Otherwise nothing may be sent to the chat:
+        "gone" when the job is not marked as this run any more (it was deleted, its
+        account was removed, or another run of it has begun), and "unsaved" when the
+        save failed (the turn is then taken back). ``fresh``: the first turn of a run
+        that does not go on from an earlier one; it starts the record anew."""
+        with self.schedule_lock:
+            job = self._schedule_or_none(schedule_id)
+            if job is None or str(job.get("runToken") or "") != token:
+                return "gone"
+            previous = job.get("runProgress")
+            note: dict[str, Any] | None = (
+                previous if isinstance(previous, dict) and not fresh else None
+            )
+            if note is None or not isinstance(note.get("chats"), list):
+                note = {
+                    "manual": bool(manual),
+                    "startedAt": _now_iso(),
+                    "sentCount": job.get("sentCount") or 0,
+                    "chats": [],
+                }
+            written = note.get("at")
+            note["chats"].append(
+                {
+                    "mid": str(target.get("mid") or ""),
+                    "name": str(target.get("name") or ""),
+                    "state": "sending",
+                }
+            )
+            note["at"] = time.time()
+            job["runProgress"] = note
+            try:
+                self.save_schedules()
+            except Exception:
+                # save_schedules said why. As it was: nothing went to this chat.
+                note["chats"].pop()
+                if written is None:
+                    note.pop("at", None)
+                else:
+                    note["at"] = written
+                if previous is None:
+                    job.pop("runProgress", None)
+                else:
+                    job["runProgress"] = previous
+                return "unsaved"
+            return ""
+
+    def _end_chat_turn(
+        self,
+        schedule_id: str,
+        token: str,
+        mid: str,
+        state: str,
+        *,
+        error: str = "",
+        message_ids: list[Any] | None = None,
+        save: bool,
+    ) -> None:
+        """Write into the job what came of a chat's turn (see _begin_chat_turn): "sent",
+        "part" or "failed". ``save``: now, for a chat that others follow (LinePassport
+        may stop in the pause before the next one); the last chat's is saved with the
+        run's end. A save that fails is left to the scheduler's next round that can:
+        after a restart before that, the chat shows as one that may not have got it,
+        and still gets nothing again."""
+        with self.schedule_lock:
+            job = self._schedule_or_none(schedule_id)
+            if job is None or str(job.get("runToken") or "") != token:
+                return
+            note = job.get("runProgress")
+            chats = note.get("chats") if isinstance(note, dict) else None
+            if not isinstance(note, dict) or not isinstance(chats, list):
+                return
+            for chat in reversed(chats):
+                if isinstance(chat, dict) and chat.get("mid") == mid:
+                    chat["state"] = state
+                    if error:
+                        chat["error"] = error
+                    if message_ids:
+                        chat["messageIds"] = list(message_ids)
+                    break
+            else:
+                return
+            note["at"] = time.time()
+            if save:
+                try:
+                    self.save_schedules()
+                except Exception:
+                    pass  # save_schedules said why
+
+    def _cut_schedule_run(
+        self, schedule_id: str, token: str, why: str
+    ) -> dict[str, Any] | None:
+        """A run that reached some chats and cannot go on now (``why``: "unsaved", a
+        chat's turn could not be saved): its job is not marked as running any more and
+        keeps the record of its turns, so its next start goes on with the other chats
+        (see _cut_run). Saved now, or at the scheduler's next round that can save; what
+        is saved until then is the run as it was, which a restart cuts short as well."""
+        with self.schedule_lock:
+            job = self._schedule_or_none(schedule_id)
+            if job is None or str(job.get("runToken") or "") != token:
+                return None
+            _mark_run_cut(job, why)
+            try:
+                self.save_schedules()
+            except Exception:
+                pass  # save_schedules said why
+            return dict(job)
+
+    @contextlib.contextmanager
+    def _sending_scheduled_message(self) -> Iterator[None]:
+        """While a scheduled message is on its way to a chat: a stop waits a moment for
+        it (see close)."""
+        with self.schedule_sends_cond:
+            self.schedule_sends_now += 1
+        try:
+            yield
+        finally:
+            with self.schedule_sends_cond:
+                self.schedule_sends_now -= 1
+                self.schedule_sends_cond.notify_all()
 
     def _begin_schedule_run(
         self, schedule_id: str, account_id: str | None
@@ -32307,11 +32631,18 @@ class WebState:
             return before, dict(job)
 
     def _unbegin_schedule_run(
-        self, schedule_id: str, before: dict[str, Any], *, note: str = ""
+        self,
+        schedule_id: str,
+        before: dict[str, Any],
+        *,
+        note: str = "",
+        forget_turns: bool = False,
     ) -> dict[str, Any] | None:
         """A begun run that sent nothing: the job's run keys go back to ``before`` (saved
         now, or at the scheduler's next round that can). ``note``: why, for a run nobody
-        waited for (a queued Run now), shown on the job as a failed run."""
+        waited for (a queued Run now), shown on the job as a failed run.
+        ``forget_turns``: the run had turns, and none of them reached its chat (see
+        _run_turns): they are dropped, so the job's next run starts anew."""
         with self.schedule_lock:
             try:
                 job: dict[str, Any] | None = self._find_schedule(schedule_id)
@@ -32321,6 +32652,8 @@ class WebState:
                 for key in _SCHEDULE_RUN_KEYS:
                     job.pop(key, None)
                 job.update(before)
+                if forget_turns:
+                    job.pop("runProgress", None)
                 if note:
                     job["status"] = "error"
                     job["lastError"] = note
@@ -32344,7 +32677,45 @@ class WebState:
         a scheduled run, see _run_due_schedule). A begun run that waited for a free
         sender sends nothing once it is not marked as running any more (the schedule
         was deleted, cleared as stuck or its account removed meanwhile), and otherwise
-        sends the schedule as it is now (an edit keeps it marked)."""
+        sends the schedule as it is now (an edit keeps it marked).
+
+        No chat gets one run twice, whatever stops LinePassport. Each chat's turn is
+        written into the job and saved before anything goes to the chat, and what came
+        of it after (the job's runProgress: see _begin_chat_turn and _run_turns); a
+        chat is sent to only once its turn is saved. A run that ends takes the record
+        off its job. A run that finds the record of one cut short (see _cut_run) goes
+        on with that run instead of starting anew:
+        - as the kind of run it began as, whoever starts it now (``manual`` then counts
+          for nothing): a run at its time moves the schedule on when it ends, a Run
+          now does not;
+        - with the schedule as it is now (what it sends is made again: another of its
+          message patterns may be drawn, an AI image is generated again), to the chats
+          that have had no turn, the first of them without the pause between chats;
+        - a chat whose turn had begun when LinePassport stopped gets nothing more: its
+          message may or may not have gone out, and the run's report says so;
+        - it ends as one run: one history line, written when it ends, with "resumed"
+          and the message ids from before and after the stop; sentCount goes up by
+          one; lastRunAt is when it ended. Its line is a failure only if a chat did
+          not get all of it or may not have ("Sent to 2/3 chats. …");
+        - a run at its time whose first try to go on reaches no chat (every send
+          fails, or what it sends cannot be made) is cut short again, with the turns
+          it began with, and tried once more in 5 minutes, as a whole run that
+          reaches nobody is; what its second try cannot send is reported. A Run now
+          gets no second try.
+        When a cut run does not go on at all (its next run has come due, or it is too
+        late for it): see run_due_schedules and _close_cut_run.
+
+        What a stop does to a run that is partway through its chats (it never stops in
+        the middle of a chat):
+        - Ctrl-C ends the run: the chats it did not reach are named in its report and
+          get nothing later;
+        - a stop the system asked for (SIGTERM: stop_pauses_sends, see serve) leaves it
+          as it is, saved as running with its record, and a kill or a crash leaves the
+          same: at the next start it is cut short (_load_schedules), and goes on;
+        - a chat's turn that cannot be saved cuts it short at once (_cut_schedule_run):
+          it goes on once the schedules can be saved again.
+        A run that reached no chat before any of these is not run, as before: one at
+        its time is due again; a Run now is not, and its job says so."""
         if begun is None:
             before, snapshot = self._begin_schedule_run(schedule_id, account_id)
         else:
@@ -32365,11 +32736,28 @@ class WebState:
                 snapshot = dict(current)
 
         account_id = str(snapshot.get("accountId") or "")
-        message_ids: list[Any] = []
-        failures: list[str] = []
+        token = str(snapshot.get("runToken") or "")
+        # The turns of a run that was cut short, which this one goes on with.
+        earlier = _run_turns(snapshot)
+        if earlier:
+            manual = bool(snapshot["runProgress"].get("manual"))
+        had_turn = {str(chat.get("mid") or "") for chat in earlier}
+        # Of the whole run: the chats that got it, or part of it (reached); those whose
+        # turn had begun when LinePassport stopped, which may have got it (unknown).
+        reached, unknown, message_ids, failures = _run_tally(earlier)
         targets: list[dict[str, Any]] = []
-        reached = 0  # the chats that got it, or part of it
         stopped = False  # LinePassport stopped before every chat had its turn
+        paused = False  # ... by the system, partway: the run stays as it is, to go on
+        disowned = False  # the job is not marked as this run any more
+        unsaved = False  # a chat's turn could not be saved
+        signed_out = False  # LINE asked to sign in again partway
+        # A run at its time that goes on gets a second try, like a whole run that
+        # reaches nobody (see below): when this start of it reaches no chat (the
+        # network is not up yet after a reboot, say), it is cut short again and tried
+        # once more in 5 minutes, with the same record. A Run now is not tried again.
+        retry_rest = bool(earlier) and not manual and not snapshot.get("retrying")
+        reached_here = 0  # the chats that got it since this start
+        failed_here: list[str] = []  # the report's lines of those whose send failed
 
         def log_bot(
             action: str,
@@ -32390,37 +32778,73 @@ class WebState:
             return [
                 f"{target.get('name') or target.get('mid') or ''}: not sent, {reason}"
                 for target in targets[start:]
+                if str(target.get("mid") or "") not in had_turn
             ]
 
         try:
             log_bot(
-                "schedule.run.start",
+                "schedule.run.resume" if earlier else "schedule.run.start",
                 "manual" if manual else "scheduled",
-                data={"manual": manual},
+                data={"manual": manual, **({"chatsDone": len(earlier)} if earlier else {})},
             )
-            owner = self.web_auth.user_for_account(account_id)
             targets = list(snapshot.get("targets") or []) or [
                 {"mid": str(snapshot.get("to") or ""), "name": str(snapshot.get("targetName") or "")}
             ]
-            # Resolve once (one AI image for everybody); {name} is filled per chat.
-            items = _resolve_job_contents(
-                {**snapshot, "targetName": "{name}"},
-                ai_settings=self.ai_settings(owner, reveal=True),
-                log=log_bot,
-            )
-            for index, target in enumerate(targets):
+            # The chats still to go: all of them, but for a run that goes on.
+            queue = [
+                (index, target)
+                for index, target in enumerate(targets)
+                if str(target.get("mid") or "") not in had_turn
+            ]
+            try:
+                owner = self.web_auth.user_for_account(account_id)
+                # Resolve once (one AI image for everybody); {name} is filled per chat.
+                # Nothing is made for a run that goes on with no chat left.
+                items = (
+                    _resolve_job_contents(
+                        {**snapshot, "targetName": "{name}"},
+                        ai_settings=self.ai_settings(owner, reveal=True),
+                        log=log_bot,
+                    )
+                    if queue
+                    else []
+                )
+            except Exception as exc:
+                if not (reached or unknown) or retry_rest:
+                    raise
+                # A run that goes on, at its second try (or a Run now), and what it
+                # sends cannot be made: the chats it reached before do not get it
+                # again, so it is not tried again as a whole; the rest are reported.
+                failures.extend(not_reached(0, _safe_log_detail(exc, 300)))
+                queue, items = [], []
+            last = queue[-1][0] if queue else -1
+            turns = 0  # the chats that had their turn since this start
+            for index, target in queue:
                 if self.scheduler.stop_event.is_set() or (
-                    index
+                    turns
                     and self.scheduler.stop_event.wait(
                         random.uniform(*SCHEDULE_TARGET_GAP_SECONDS)
                     )
                 ):
                     stopped = True
-                    if reached:
+                    if (reached or unknown) and self.stop_pauses_sends:
+                        paused = True
+                    elif reached or unknown:
                         failures.extend(not_reached(index, "LinePassport stopped"))
                     break
+                turns += 1
                 label = str(target.get("name") or target.get("mid") or "")
+                mid = str(target.get("mid") or "")
+                # Saved before anything goes to the chat (see _begin_chat_turn).
+                refused = self._begin_chat_turn(
+                    schedule_id, token, target, manual=manual, fresh=turns == 1 and not earlier
+                )
+                if refused:
+                    disowned = refused == "gone"
+                    unsaved = not disowned
+                    break
                 part_error = ""
+                sent_ids: list[Any] = []
                 try:
                     target_items = [
                         {
@@ -32433,41 +32857,68 @@ class WebState:
                         else item
                         for item in items
                     ]
-                    with self.api_lock_for(account_id):
+                    with self._sending_scheduled_message(), self.api_lock_for(account_id):
                         api = self.get_api(account_id)
                         to = _resolve_to(api, target["mid"])
                         self.note_outgoing(account_id, to, "schedule")
-                        message_ids.extend(
-                            _send_job_contents(api, to, snapshot, items=target_items, log=log_bot)
+                        sent_ids = _send_job_contents(
+                            api, to, snapshot, items=target_items, log=log_bot
                         )
+                        message_ids.extend(sent_ids)
                 except _PartlySent as exc:
                     # Its text went out and its picture did not: the chat counts as sent,
                     # so no retry sends the text again, and the picture is reported.
-                    message_ids.extend(exc.message_ids)
+                    sent_ids = list(exc.message_ids)
+                    message_ids.extend(sent_ids)
                     part_error = _safe_log_detail(exc.error, 300)
                 except Exception as exc:
                     if isinstance(exc, LineAuthError) or self.account_store.requires_reauth(
                         account_id
                     ):
-                        if not reached:
+                        if not (reached or unknown):
                             raise
                         # LINE asked to sign in again partway: the chats that got it do
                         # not get it again once the account is connected; the rest are
                         # reported.
                         failures.extend(not_reached(index, "LINE asked to sign in again"))
+                        signed_out = True
                         break
                     failures.append(f"{label}: {_safe_log_detail(exc, 300)}")
+                    failed_here.append(failures[-1])
+                    self._end_chat_turn(
+                        schedule_id,
+                        token,
+                        mid,
+                        "failed",
+                        error=failures[-1][len(label) + 2 :],
+                        save=index != last,
+                    )
                     continue
                 reached += 1
+                reached_here += 1
                 if part_error:
                     failures.append(f"{label}: only part of it went out ({part_error})")
+                self._end_chat_turn(
+                    schedule_id,
+                    token,
+                    mid,
+                    "part" if part_error else "sent",
+                    error=part_error,
+                    message_ids=sent_ids,
+                    save=index != last,
+                )
                 try:
                     self.record_schedule_sends(account_id, 1)
                 except Exception:
                     # It went out: only the saved hourly and daily count misses it.
                     _print_exc_quietly()
-            if not reached and not stopped:
-                raise RuntimeError(failures[0].split(": ", 1)[-1])
+            if not (stopped or disowned or unsaved or signed_out) and (
+                # No chat got it, or may have: the run failed as a whole.
+                not (reached or unknown)
+                # The same for the rest of a run that goes on, at its first try.
+                or (retry_rest and failed_here and not reached_here)
+            ):
+                raise RuntimeError((failed_here or failures)[0].split(": ", 1)[-1])
         except Exception as exc:
             auth_failure = isinstance(exc, LineAuthError) or self.account_store.requires_reauth(
                 str(snapshot.get("accountId") or "")
@@ -32497,6 +32948,22 @@ class WebState:
                 job.pop("runToken", None)
                 job["lastError"] = error_message
                 retry = not manual and not auth_failure and not job.get("retrying")
+                # A run that failed as a whole forgets its turns: no chat got it, so its
+                # next run sends to every chat. The rest of a run that went on, which
+                # failed at its first try (or cannot go on before the account is
+                # connected again), keeps the turns it began with: the chats that got
+                # it, or may have, still get nothing at its next try.
+                turns_kept = [
+                    dict(chat)
+                    for chat in (earlier if retry or auth_failure else [])
+                    if chat.get("state") != "failed"
+                ]
+                record = job.get("runProgress")
+                if turns_kept and isinstance(record, dict):
+                    record["chats"] = turns_kept
+                    record["cut"] = "failed"
+                else:
+                    job.pop("runProgress", None)
                 if retry:
                     # Network blips are common: try once more in 5 minutes. The retry is
                     # for the time the run was for, moved on by its pause (see
@@ -32536,20 +33003,44 @@ class WebState:
                     "line_login_required",
                 ) from exc
             raise WebError(HTTPStatus.BAD_GATEWAY, error_message) from exc
-        if not reached:
-            # LinePassport stopped before anything went out: not run, so it is due again
-            # once LinePassport starts again. A queued Run now (nobody waits for its
-            # answer) says so on the job.
+        if disowned:
+            # The job is not marked as this run any more (it was deleted, its account
+            # was removed, or another run of it has begun): nothing more goes out, and
+            # this run writes nothing to it.
+            return {"ok": False, "skipped": True, "schedule": None, "messageIds": message_ids}
+        if paused or (unsaved and (reached or unknown)):
+            # Cut short after it reached some chats: it goes on with the others, after
+            # the next start (the system stopped LinePassport: the job stays as it is,
+            # saved as running with its turns) or once the schedules can be saved again.
+            cut = None if paused else self._cut_schedule_run(schedule_id, token, "unsaved")
+            return {
+                "ok": False,
+                "cut": True,
+                "schedule": cut or snapshot,
+                "messageIds": message_ids,
+            }
+        if not (reached or unknown):
+            # LinePassport stopped before anything went out, or the first chat's turn
+            # could not be saved: not run, so it is due again once LinePassport starts
+            # again, or can save. A queued Run now (nobody waits for its answer) says so
+            # on the job.
+            why = "the schedules could not be saved" if unsaved else "LinePassport stopped"
             kept = self._unbegin_schedule_run(
                 schedule_id,
                 before,
                 note=(
-                    "Not sent: LinePassport stopped before this Run now reached any chat. "
-                    "Run it again."
+                    f"Not sent: {why} before this Run now reached any chat. Run it again."
                     if manual and begun is not None
                     else ""
                 ),
+                forget_turns=True,
             )
+            if unsaved:
+                raise WebError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "Not sent: the schedules cannot be saved right now. Try again in a moment.",
+                    "schedules_unsaved",
+                )
             if manual:
                 raise WebError(
                     HTTPStatus.SERVICE_UNAVAILABLE,
@@ -32562,16 +33053,26 @@ class WebState:
         # at the scheduler's next round that can.
         message_id = message_ids[-1] if message_ids else None
         sent_at = _now_iso()
+        # A run that went on after it was cut short says so in its history line.
+        went_on: dict[str, Any] = {"resumed": True} if earlier else {}
+        # Every chat of the run: those it is for now, and any that had their turn
+        # before an edit took them off it.
+        chats = len(had_turn | {str(target.get("mid") or "") for target in targets})
         with self.schedule_lock:
             try:
                 found: dict[str, Any] | None = self._find_schedule(schedule_id)
             except WebError:
                 found = None  # deleted while it ran: nothing to note it in
+            if found is not None and str(found.get("runToken") or "") != token:
+                # Not marked as this run any more (its account was removed, or another
+                # run of it began, as its last chat was sent to): nothing is written.
+                found = None
             if found is not None:
                 job = found
                 job["running"] = False
                 job.pop("runningSince", None)
                 job.pop("runToken", None)
+                job.pop("runProgress", None)
                 job["sentCount"] = int(job.get("sentCount") or 0) + 1
                 job["lastRunAt"] = sent_at
                 job["lastMessageId"] = message_id
@@ -32579,14 +33080,23 @@ class WebState:
                 if failures:
                     # Some chats got it: never resend to those; report the rest (the
                     # report's start is _SCHEDULE_PARTIAL_RE).
-                    partial = f"Sent to {reached}/{len(targets)} chats. " + "; ".join(failures)
+                    partial = f"Sent to {reached}/{chats} chats. " + "; ".join(failures)
                     job["lastError"] = partial
                     _append_history(
-                        job, {"at": sent_at, "ok": False, "error": partial, "messageIds": message_ids}
+                        job,
+                        {
+                            "at": sent_at,
+                            "ok": False,
+                            "error": partial,
+                            "messageIds": message_ids,
+                            **went_on,
+                        },
                     )
                 else:
                     job["lastError"] = None
-                    _append_history(job, {"at": sent_at, "ok": True, "messageIds": message_ids})
+                    _append_history(
+                        job, {"at": sent_at, "ok": True, "messageIds": message_ids, **went_on}
+                    )
                 if not manual:
                     _advance_after_success(job)
                 else:
@@ -32597,12 +33107,14 @@ class WebState:
                     self.save_schedules()
                 except Exception:
                     # Kept in memory and saved at the scheduler's next round that can.
-                    # Until then a restart sends it again: the page and the log say so.
+                    # Until then a restart loses the run's end (it goes to no chat
+                    # again: each chat's turn is saved): the page and the log say so.
                     self.schedules_unsaved_sent.add(schedule_id)
                     _print_quietly(
                         f"LinePassport: schedule '{snapshot.get('name') or schedule_id}' "
-                        "went out, but the schedules could not be saved: restarting "
-                        "LinePassport before they are saved sends it again."
+                        "went out, but the schedules could not be saved: after a restart "
+                        "before they are saved, it is sent to no chat again, but a chat "
+                        "whose result is not saved shows as one that may not have got it."
                     )
             done = dict(found if found is not None else snapshot)
         if failures:
@@ -34179,14 +34691,108 @@ def serve(
     print("Press Ctrl-C to stop.")
     if open_browser:
         webbrowser.open(url)
+    stop = _StopSignals(server.state)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nstopping...")
+        try:
+            stop.install()
+            stop.serve_begins()
+            server.serve_forever()
+        except KeyboardInterrupt:
+            stop.serving = False
+            print(f"\nstopping{stop.named()}...")
+        finally:
+            stop.serving = False
+            server.state.close()
+            server.server_close()
     finally:
-        server.state.close()
-        server.server_close()
+        stop.restore()
     return 0
+
+
+class _StopSignals:
+    """While ``okline web`` serves: a stop the system asks for ends serve_forever the
+    way Ctrl-C does, so LinePassport shuts down in order (WebState.close) and exits
+    with code 0, instead of being killed: at once, or, as process 1 of a container that
+    has no handler for the signal, when Docker's grace period ends, which is how
+    ``docker stop`` and a redeploy ended it before.
+
+    The signals are SIGTERM (docker stop, a deploy, systemd, kill) and, on Windows,
+    Ctrl-Break. Unlike Ctrl-C at the terminal, such a stop is not the owner ending the
+    sends: a scheduled send that is partway through its chats pauses, and goes on after
+    the next start (WebState.stop_pauses_sends).
+
+    A handler is set only for a signal that still has its default action (one that is
+    ignored on purpose, or has another handler, stays so), and only when serve() runs
+    in the main thread: Python sets handlers nowhere else, and runs them there. Only
+    the first signal counts, and only while serve_forever runs (or is about to): one
+    that comes during the shutdown changes nothing, so it neither breaks the shutdown
+    off nor turns a stop with Ctrl-C into a pause. restore() puts the default actions
+    back.
+    """
+
+    def __init__(self, state: WebState) -> None:
+        self.state = state
+        # The signal that asked for the stop, once one came.
+        self.received: int | None = None
+        # Whether serve_forever runs: only then does a signal have to end it.
+        self.serving = False
+        # Whether a signal ended serve_forever (and not Ctrl-C).
+        self.ended_serving = False
+        self._handled: list[int] = []
+
+    def serve_begins(self) -> None:
+        """Called right before serve_forever: from here on a signal ends it. One that
+        came since install() ends it now."""
+        self.serving = True
+        if self.received is not None:
+            self._end_serving()
+
+    def _end_serving(self) -> None:
+        # The stop is the system's: sends in progress pause (see stop_pauses_sends).
+        # Ends serve_forever as Ctrl-C does. Python runs a handler in the main thread,
+        # between two of its instructions, so this rises from wherever serve() is.
+        self.ended_serving = True
+        self.state.stop_pauses_sends = True
+        raise KeyboardInterrupt
+
+    def install(self) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            return
+        for name in ("SIGTERM", "SIGBREAK"):
+            signum = getattr(signal, name, None)
+            if signum is None:
+                continue  # not on this system (SIGBREAK is Windows's)
+            try:
+                if signal.getsignal(signum) is not signal.SIG_DFL:
+                    continue
+                signal.signal(signum, self._on_signal)
+            except (ValueError, OSError):
+                continue
+            self._handled.append(signum)
+
+    def restore(self) -> None:
+        while self._handled:
+            try:
+                signal.signal(self._handled.pop(), signal.SIG_DFL)
+            except (ValueError, OSError):
+                pass
+
+    def named(self) -> str:
+        """For the line serve() prints as it stops: the signal that ended serve_forever,
+        in brackets after a space, or nothing for Ctrl-C."""
+        if self.received is None or not self.ended_serving:
+            return ""
+        try:
+            return f" ({signal.Signals(self.received).name})"
+        except ValueError:
+            return f" (signal {self.received})"
+
+    def _on_signal(self, signum: int, frame: Any) -> None:
+        if self.received is not None:
+            return
+        self.received = signum
+        if self.serving:
+            self._end_serving()
 
 
 def _bind_server(config: WebConfig) -> OkLineWebServer:
@@ -34881,6 +35487,219 @@ def _schedule_timing(job: dict[str, Any]) -> tuple[Any, ...] | None:
 _SCHEDULE_PARTIAL_RE = re.compile(r"Sent to \d+/\d+ chats\. ")
 # The last error of a schedule whose LINE account has to be connected again.
 _SCHEDULE_SIGN_IN_ERROR = "LINE session expired or was revoked. Connect the account again."
+
+# -- a run's record of its chats (the job's "runProgress") ---------------------------
+# A run writes each chat's turn into its job, and saves it with the schedules, before
+# anything goes to that chat, and writes what came of the turn afterwards:
+#
+#   "runProgress": {
+#     "manual": false,                # a Run now (true), or a run at its time
+#     "startedAt": "2026-11-24T09:00:07",
+#     "sentCount": 12,                # the job's sentCount as the run began
+#     "at": 1795485612.4,             # when it was last written (epoch seconds)
+#     "cut": "stopped",               # once the run is cut short: why (see below)
+#     "chats": [                      # in the order they had their turn
+#       {"mid": "u…", "name": "Ann", "state": "sent", "messageIds": ["…"]},
+#       {"mid": "c…", "name": "Shop group", "state": "sending"}
+#     ]
+#   }
+#
+# A chat's state is "sending" from the moment its turn is saved (its message is on its
+# way, or LinePassport stopped while it was), and then "sent", "part" (its text went
+# out and its picture did not: "error" says why) or "failed" ("error"). A run that ends
+# takes the record off its job. A record that outlives its run is of a run cut short:
+# LinePassport was killed or crashed, the system stopped it between two chats
+# ("cut": "stopped"), a chat's turn could not be saved ("unsaved"), or a run that went
+# on reached nobody at its first try and waits for its second ("failed"). The job's
+# next start then goes on with that run, to the chats that have had no turn, so no
+# chat gets one run twice. See _run_turns, _cut_run and WebState._execute_schedule.
+# How a report names a chat whose turn had begun when LinePassport stopped.
+_RUN_TURN_UNKNOWN = "may not have got it, LinePassport stopped while it was being sent"
+
+
+def _job_targets(job: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The chats a job sends to: its targets, or the single chat of an older job."""
+    targets = job.get("targets")
+    chats = [target for target in targets if isinstance(target, dict)] if isinstance(
+        targets, list
+    ) else []
+    return chats or [
+        {"mid": str(job.get("to") or ""), "name": str(job.get("targetName") or "")}
+    ]
+
+
+def _run_turns(job: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The chats that have had their turn in the job's run (its runProgress), in that
+    order, once one of them got the message or may have. A record that names only
+    chats whose send failed counts for nothing: that run reached nobody, so it is due
+    again in full, as a run was before these records were kept."""
+    note = job.get("runProgress")
+    chats = note.get("chats") if isinstance(note, dict) else None
+    if not isinstance(chats, list):
+        return []
+    turns = [chat for chat in chats if isinstance(chat, dict) and str(chat.get("mid") or "")]
+    return turns if any(chat.get("state") != "failed" for chat in turns) else []
+
+
+def _cut_run(job: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The record of the job's run that was cut short (see _run_turns): one that no
+    sender holds any more. None while a run of it is going on, and when it has none."""
+    if job.get("running") or not _run_turns(job):
+        return None
+    note = job.get("runProgress")
+    return note if isinstance(note, dict) else None
+
+
+def _chats_left(job: Mapping[str, Any]) -> int:
+    """How many of the job's chats have had no turn in its run that was cut short."""
+    had_turn = {str(chat.get("mid") or "") for chat in _run_turns(job)}
+    return sum(
+        1 for target in _job_targets(job) if str(target.get("mid") or "") not in had_turn
+    )
+
+
+def _run_tally(turns: list[dict[str, Any]]) -> tuple[int, int, list[Any], list[str]]:
+    """What came of the turns of a run (see _run_turns): how many chats got the message
+    or part of it, how many may have (LinePassport stopped while theirs was on its
+    way), the ids of the messages that went out, and the report's lines for the chats
+    that did not get all of it."""
+    reached = unknown = 0
+    message_ids: list[Any] = []
+    failures: list[str] = []
+    for chat in turns:
+        label = str(chat.get("name") or chat.get("mid") or "")
+        state = chat.get("state")
+        if state in ("sent", "part"):
+            reached += 1
+            sent = chat.get("messageIds")
+            message_ids.extend(sent if isinstance(sent, list) else [])
+            if state == "part":
+                failures.append(
+                    f"{label}: only part of it went out ({chat.get('error') or ''})"
+                )
+        elif state == "failed":
+            failures.append(f"{label}: {chat.get('error') or ''}")
+        else:
+            unknown += 1
+            failures.append(f"{label}: {_RUN_TURN_UNKNOWN}")
+    return reached, unknown, message_ids, failures
+
+
+def _mark_run_cut(job: dict[str, Any], why: str) -> None:
+    """Mark a job whose run reached some chats and cannot go on now (``why``:
+    "stopped", LinePassport stopped; "unsaved", a chat's turn could not be saved): it
+    is not running any more and keeps the record of its turns (see _cut_run)."""
+    job["running"] = False
+    job.pop("runningSince", None)
+    job.pop("runToken", None)
+    job["status"] = "waiting" if job.get("enabled") and job.get("nextRunAt") else "paused"
+    note = job.get("runProgress")
+    if isinstance(note, dict):
+        note["cut"] = why
+
+
+def _cut_run_time(note: Mapping[str, Any]) -> float | None:
+    """When a run's record was last written (epoch seconds), or None when it does not
+    say (a damaged value)."""
+    at = note.get("at")
+    if isinstance(at, bool) or not isinstance(at, (int, float)):
+        return None
+    try:
+        _dt.datetime.fromtimestamp(float(at))
+    except (ValueError, OverflowError, OSError):
+        return None
+    return float(at) if at > 0 else None
+
+
+def _run_record_stale(job: Mapping[str, Any]) -> bool:
+    """Whether the job has counted a run since the run of its record began (the record
+    notes the job's sentCount then). A run takes its record along when it is counted,
+    so this is so only after a version without these records ran the job (LinePassport
+    was put back to an earlier version for a while): the record is then of no run that
+    goes on. A record or a count that cannot be read is not stale."""
+    note = job.get("runProgress")
+    if not isinstance(note, dict) or "sentCount" not in note:
+        return False
+    try:
+        return int(note["sentCount"] or 0) != int(job.get("sentCount") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _job_on_last_run(job: Mapping[str, Any]) -> bool:
+    """Whether the job has no run left after the one it is in: it runs once, or the run
+    is the last its maxRuns allows. A count that cannot be read counts as none."""
+    if job.get("mode") == "once":
+        return True
+    try:
+        max_runs = int(job.get("maxRuns") or 0)
+        return bool(max_runs) and int(job.get("sentCount") or 0) + 1 >= max_runs
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _cut_run_overtaken(job: dict[str, Any], note: Mapping[str, Any], now: float) -> bool:
+    """Whether a repeating job's run at its time that was cut short has been overtaken:
+    had it ended when it was cut, its next run would be due by ``now``. That next run
+    then goes out, to every chat, and the cut one stays as far as it got (see
+    _close_cut_run). A run with none after it (see _job_on_last_run), a Run now, and a
+    record whose time cannot be read are never overtaken: such a run goes on whenever
+    its job next starts."""
+    if note.get("manual") or _job_on_last_run(job):
+        return False
+    cut_at = _cut_run_time(note)
+    if cut_at is None:
+        return False
+    try:
+        after = _next_run_after(job, _dt.datetime.fromtimestamp(cut_at))
+    except (WebError, TypeError, ValueError, OverflowError, OSError):
+        return False
+    return after is not None and after <= now
+
+
+def _close_cut_run(job: dict[str, Any], note: Mapping[str, Any]) -> None:
+    """End a job's run that was cut short and does not go on (its next run has come
+    due, or it is too late for the rest of it: see WebState.run_due_schedules). It
+    counts as a run that ended when it was cut: sentCount goes up by one, lastRunAt and
+    its history line carry that time, and the line names the chats it did not reach.
+    The caller decides the job's next run. A run with none after it is never ended
+    this way: it goes on (see _job_on_last_run)."""
+    turns = _run_turns(job)
+    reached, _unknown, message_ids, failures = _run_tally(turns)
+    had_turn = {str(chat.get("mid") or "") for chat in turns}
+    targets = _job_targets(job)
+    why = {
+        "unsaved": "the schedules could not be saved",
+        "failed": "the send failed when it went on",
+    }.get(str(note.get("cut") or ""), "LinePassport stopped")
+    failures.extend(
+        f"{target.get('name') or target.get('mid') or ''}: not sent, {why}"
+        for target in targets
+        if str(target.get("mid") or "") not in had_turn
+    )
+    total = len(had_turn | {str(target.get("mid") or "") for target in targets})
+    cut_at = _cut_run_time(note)
+    ended = (
+        _now_iso()
+        if cut_at is None
+        else _dt.datetime.fromtimestamp(cut_at).replace(microsecond=0).isoformat()
+    )
+    sent_count = int(job.get("sentCount") or 0) + 1
+    job.pop("runProgress", None)
+    job.pop("retrying", None)
+    job["sentCount"] = sent_count
+    job["lastRunAt"] = ended
+    if message_ids:
+        job["lastMessageId"] = message_ids[-1]
+    entry: dict[str, Any] = {"at": ended, "ok": not failures, "messageIds": message_ids}
+    if failures:
+        report = f"Sent to {reached}/{total} chats. " + "; ".join(failures)
+        entry["error"] = report
+        job["lastError"] = report
+        job["status"] = "error"
+    else:
+        job["lastError"] = None
+    _append_history(job, entry)
 
 
 class _PartlySent(Exception):
