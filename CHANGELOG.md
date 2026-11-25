@@ -429,6 +429,44 @@ All notable changes to OkLine are documented here. The format follows
   this release move to the team owner's shop info on the first start, once;
   those of removed users, or of staff whose owner is gone, stay where they
   are.
+- **A shop lost all its search vectors when one part of its info had none.**
+  When God answers moved to a team owner on the first start (see above), an
+  owner whose own AI key had made search vectors lost every one of them, and
+  questions were answered from keyword search until the owner pressed
+  **Reindex** (อัปเดต AI) on the Knowledge page; "AI update pending" there
+  was the only sign. The same happened in normal use whenever the search
+  model failed (a rate limit, say) while an answer was approved or shop info
+  was saved. Now the parts that did not change keep their vectors and only
+  the new parts wait for the next update. A question meanwhile is still
+  ranked by vector, and a waiting part keeps the place keyword search would
+  give it. The page shows "AI update pending", or the provider's error, until
+  an update works. An install that made the move before this fix is not
+  changed: there the owner presses Reindex once.
+- **A damaged auto-reply record left the move to per-workspace AI half done.**
+  When the saved auto-reply settings could not be read at the first start
+  after the update (a damaged file, or a database value that is not a JSON
+  object), the move still marked itself as done and switched no auto reply
+  off. After a repair, the auto replies of workspaces that had used Ollama or
+  the shared AI stayed switched on with no notice, and sent nothing. The move
+  now waits instead: nothing is changed, the server log says why, and a later
+  start tries again once the record is repaired or saved anew.
+- **An AI answer with a character that cannot be stored was sent but not
+  kept.** An answer holding a NUL character or half of a surrogate pair went
+  to the customer as it was, on LINE and Telegram, and its question and its
+  activity log lines could not be saved (a NUL character is refused by
+  PostgreSQL, half of a surrogate pair by every install). Such characters are
+  now removed where answers are cut to 5,000 characters, so what is sent is
+  what is stored. The question, the model name and every activity log line
+  are cleaned the same way, and a message that holds nothing else is passed
+  over like an empty one.
+- **One failed scheduled send could stop the schedules from being saved.** On
+  PostgreSQL, a send that failed with an error text holding a NUL character
+  kept that text on the schedule, and every later save of the schedules was
+  refused ("the schedules cannot be saved right now", also when creating a
+  schedule) until LinePassport was restarted. Error texts are now cleaned
+  before they are kept on a schedule, in its history and in the activity log.
+  The same goes for what is kept with an account: its sign-in error, and the
+  name and picture LINE reports for it.
 - **A LINE message could get two auto replies.** A reply that finished while
   the next check was reading the chats could be sent again, and a check that
   failed partway left its chats never answered again.

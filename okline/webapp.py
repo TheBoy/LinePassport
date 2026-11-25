@@ -19148,7 +19148,9 @@ def _send_custom_ai_request(
 
 def _ai_error_text(value: Any, *secrets: str) -> str:
     """A provider failure as the page shows it: keys hidden, URLs shortened."""
-    text = str(value or "")
+    # Cleaned first: a key echoed with a refused character inside it would otherwise
+    # be passed over here and put together again by the cleaning below.
+    text = _storable_text(str(value or ""))
     for secret in secrets:
         # Only a key long enough to be a secret is hidden: a stray "a" typed by
         # mistake would otherwise garble every word of the reason.
@@ -19202,6 +19204,37 @@ def _other_workspaces_vector_values(data: Mapping[str, Any], owner_id: str) -> i
             if isinstance(vector, list):
                 total += len(vector)
     return total
+
+
+def _rank_own_chunks(
+    question: str,
+    chunks: list[dict[str, Any]],
+    *,
+    query_embedding: list[float] | None,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """A workspace's chunks ranked for a question, at most ``top_k`` (1 to 12) of them:
+    by vector when ``query_embedding`` is given, else by keyword.
+
+    Chunks that wait for their vector (see WebState._tenant_vector_size) have none to
+    compare, and a keyword score says nothing next to a vector's. So a waiting chunk
+    keeps a place exactly when keyword search over all the chunks, the ranking used
+    when there are no vectors, would give it one; the other places go to the chunks
+    with vectors, best match first, and the waiting ones follow them.
+    """
+    if query_embedding is None or all("embedding" in chunk for chunk in chunks):
+        return rank_chunks(question, chunks, query_embedding=query_embedding, top_k=top_k)
+    picked = [
+        item for item in rank_chunks(question, chunks, top_k=top_k) if "embedding" not in item
+    ]
+    by_vector = rank_chunks(
+        question,
+        [chunk for chunk in chunks if "embedding" in chunk],
+        query_embedding=query_embedding,
+        top_k=top_k,
+    )
+    places = max(1, min(int(top_k), 12)) - len(picked)
+    return [*by_vector[: max(0, places)], *picked]
 
 
 def _question_log_holder(item: Mapping[str, Any]) -> str:
@@ -19893,6 +19926,15 @@ class StateStore:
         for key, value in values.items():
             self.set(key, value)
 
+    def holds(self, key: str) -> bool:
+        """Whether anything is stored under ``key``, readable or not.
+
+        ``get`` gives its default both for a key never saved and for one whose value
+        cannot be read (a damaged file); this tells the two apart.
+        """
+        missing = object()
+        return self.get(key, missing) is not missing
+
     def label(self) -> str:
         raise NotImplementedError
 
@@ -19988,6 +20030,10 @@ class FileStateStore(StateStore):
                 raise
             for key in values:
                 _saved_whole(self._path(key))
+
+    def holds(self, key: str) -> bool:
+        with self.lock:
+            return os.path.exists(self._path(key))
 
     def label(self) -> str:
         return "file"
@@ -20133,6 +20179,11 @@ class PostgresStateStore(StateStore):
                     """,
                     (key, raw),
                 )
+
+    def holds(self, key: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM okline_web_state WHERE key = %s", (key,))
+            return cur.fetchone() is not None
 
     def label(self) -> str:
         return "postgresql"
@@ -21307,6 +21358,10 @@ class AccountStore:
                 return
 
     def update_profile(self, account_id: str, profile: dict[str, Any]) -> None:
+        # What the channel says about the account (its name, say). The accounts are
+        # kept in memory and saved whole, so one text a store refuses in a record would
+        # fail every later save of them.
+        profile = _storable_value(profile)
         with self.lock:
             for account in self.data.get("accounts", []):
                 if isinstance(account, dict) and account.get("id") == account_id:
@@ -22140,8 +22195,10 @@ class WebState:
         global_ai, apart from the AI providers flag, so an install that already moved
         to per-workspace providers gets it too), each such answer joins the owner's
         approved answers; when the owner already has an answer to the same question,
-        the newer one stays. The owner's chunks are rebuilt for keyword search
-        (_rebuild_chunks_without_ai). A staff record left with nothing of its own is
+        the newer one stays. The owner's chunks are rebuilt with no AI call
+        (_rebuild_chunks_without_ai): those that did not change keep their search
+        vectors, and the moved answers wait for theirs until the next index update,
+        found by keyword meanwhile. A staff record left with nothing of its own is
         removed. A record whose user or team owner no longer exists is left alone, and
         so is a global_ai record that cannot be read. No AI is called. A failure is
         printed and the start goes on; it is tried again on the next start.
@@ -22206,22 +22263,34 @@ class WebState:
     def _rebuild_chunks_without_ai(self, tenant: dict[str, Any], owner_id: str) -> None:
         """Rebuild a workspace's chunks from its record, with no AI call.
 
-        The vectors carry over (by chunk id) only when every new chunk has one. Else
-        they are all dropped: the index is keyword search, "needs-reindex" when it had
-        vectors (the page then asks for an update), else "keyword" ("empty" for none).
+        A chunk that did not change (the same id and the same text) keeps its vector.
+        When every new chunk has one, the index stays as it is. When only some have,
+        those keep theirs, made by the model the record names, and the others wait for
+        the next index update: the index is "needs-reindex" (the page asks for an
+        update), and a question meanwhile finds the waiting chunks by keyword (see
+        _rank_own_chunks). With no vector to keep, or none whose model is named, the
+        index is keyword search: "needs-reindex" when it had vectors, else "keyword"
+        ("empty" for no chunks).
         """
         old = {
-            str(chunk.get("id") or ""): chunk["embedding"]
+            str(chunk.get("id") or ""): (str(chunk.get("text") or ""), chunk["embedding"])
             for chunk in tenant.get("chunks") or []
             if isinstance(chunk, dict)
             and isinstance(chunk.get("embedding"), list)
             and chunk["embedding"]
         }
         fresh = self._build_knowledge_chunks(tenant, scope=f"tenant:{owner_id}")
-        if fresh and all(str(chunk["id"]) in old for chunk in fresh):
-            for chunk in fresh:
-                chunk["embedding"] = old[str(chunk["id"])]
-            tenant["chunks"] = fresh
+        kept = 0
+        for chunk in fresh:
+            known = old.get(str(chunk["id"]))
+            if known is not None and known[0] == chunk["text"]:
+                chunk["embedding"] = known[1]
+                kept += 1
+        tenant["chunks"] = fresh
+        if fresh and kept == len(fresh):
+            return
+        if kept and (tenant.get("embeddingModel") or tenant.get("embeddingProvider")):
+            tenant["indexMode"] = "needs-reindex"
             return
         had_vectors = bool(
             old
@@ -22229,7 +22298,8 @@ class WebState:
             or tenant.get("embeddingProvider")
             or tenant.get("indexMode") in {"embedding", "needs-reindex"}
         )
-        tenant["chunks"] = fresh
+        for chunk in fresh:
+            chunk.pop("embedding", None)
         tenant["embeddingProvider"] = ""
         tenant["embeddingModel"] = ""
         tenant["indexMode"] = ("needs-reindex" if had_vectors else "keyword") if fresh else "empty"
@@ -22255,9 +22325,10 @@ class WebState:
         Records of staff members are not workspaces and are skipped (their God answers
         moved to the team owner first, see _move_staff_answers). The notice clears once
         the owner saves a working AI. Nobody is moved to Gemini with the AI image
-        tool's key. A global_ai record that cannot be read is left as it is. A failure
-        is printed and the start goes on (the readers still understand the old
-        records); it is tried again on the next start.
+        tool's key. A global_ai record that cannot be read is left as it is, and so is
+        an auto-reply record that cannot be read: then nothing is moved at all, and a
+        later start tries again. A failure is printed and the start goes on (the
+        readers still understand the old records); it is tried again on the next start.
         """
         try:
             self._run_ai_providers_migration()
@@ -22274,6 +22345,25 @@ class WebState:
         data: dict[str, Any] = raw_global
         if isinstance(data.get(AI_PROVIDERS_MIGRATION_KEY), dict):
             return
+        # The auto replies of the workspaces that lose their AI are switched off below.
+        # A saved auto-reply record that cannot be read (a damaged file, a value that is
+        # not a JSON object, accounts that are not one) is left as it is, and so is
+        # everything else: nothing is moved and no flag is written, so a later start
+        # tries again, with the record repaired or saved anew. One never saved has no
+        # auto reply to switch off.
+        raw_auto = self.store.get("ai_auto_reply", None)
+        if not isinstance(raw_auto, dict) or not isinstance(
+            raw_auto.get("accounts", {}), dict
+        ):
+            if raw_auto is not None or self.store.holds("ai_auto_reply"):
+                _print_quietly(
+                    "LinePassport: the saved auto-reply settings cannot be read, so the "
+                    "move to per-workspace AI providers waits for a later start. No "
+                    "auto reply was switched off and nothing else was changed."
+                )
+                return
+            raw_auto = {}
+        auto: dict[str, Any] = raw_auto
         now = _now_iso()
         shared = data.pop("settings", None)
         shared_active = (
@@ -22310,8 +22400,6 @@ class WebState:
             if notice:
                 notices[str(owner_id)] = notice
         # Auto replies of the workspaces that lost their AI are switched off.
-        raw_auto = self.store.get("ai_auto_reply", {"accounts": {}})
-        auto: dict[str, Any] = raw_auto if isinstance(raw_auto, dict) else {}
         raw_accounts = auto.get("accounts")
         accounts: dict[str, Any] = raw_accounts if isinstance(raw_accounts, dict) else {}
         new_logs: list[dict[str, Any]] = []
@@ -22437,10 +22525,27 @@ class WebState:
             tenant.pop("aiNotice", None)
         raw_chunks = tenant.get("chunks")
         chunks: list[Any] = raw_chunks if isinstance(raw_chunks, list) else []
-        if vectors_from and chunks and all(
-            isinstance(chunk, dict) and isinstance(chunk.get("embedding"), list)
+        with_vectors = sum(
+            1
             for chunk in chunks
-        ):
+            if isinstance(chunk, dict) and isinstance(chunk.get("embedding"), list)
+        )
+        # Every chunk has its vector; or some wait for theirs since answers moved in
+        # just before (_rebuild_chunks_without_ai marks that index "needs-reindex")
+        # and the others keep the vectors this provider's model made.
+        usable = bool(chunks) and (
+            with_vectors == len(chunks)
+            or (
+                bool(with_vectors)
+                and tenant.get("indexMode") == "needs-reindex"
+                and all(
+                    isinstance(chunk, dict)
+                    and ("embedding" not in chunk or isinstance(chunk["embedding"], list))
+                    for chunk in chunks
+                )
+            )
+        )
+        if vectors_from and usable:
             tenant["embeddingProvider"] = vectors_from
         elif tenant.get("embeddingModel") or any(
             isinstance(chunk, dict) and "embedding" in chunk for chunk in chunks
@@ -23768,7 +23873,9 @@ class WebState:
         if detail:
             entry["detail"] = _bot_log_detail(entry["action"], detail)
         if data:
-            entry["data"] = data
+            # Questions, answers and names from chats: nothing in a line may be
+            # something the store refuses, or the line is lost.
+            entry["data"] = _storable_value(data)
         return {key: value for key, value in entry.items() if value not in (None, "")}
 
     def append_bot_log(
@@ -25359,7 +25466,8 @@ class WebState:
     def _telegram_auto_reply(
         self, account_id: str, owner_id: str, chat_id: str, message: dict[str, Any]
     ) -> None:
-        question = str(message.get("text") or "").strip()
+        # A message with nothing in it but characters no store takes is no question.
+        question = _storable_text(str(message.get("text") or "")).strip()
         if _coerce_int(message.get("contentType")) != 0 or not question:
             return
         record = self._ai_auto_reply_record(account_id)
@@ -28697,32 +28805,44 @@ class WebState:
         )
 
     @staticmethod
-    def _tenant_vectors_usable(
+    def _tenant_vector_size(
         tenant: Mapping[str, Any],
         settings: Mapping[str, Any],
         chunks: list[dict[str, Any]],
-    ) -> bool:
-        """Whether a workspace's chunks can be ranked by vectors with ``settings``.
+    ) -> int:
+        """The size of the vectors a workspace's chunks can be ranked by with
+        ``settings``; 0 when they cannot be.
 
         Only when its index was built by the provider and search model in use now
-        (stored as embeddingProvider and embeddingModel) and every chunk has a vector
-        of the same size: vectors of another model do not compare.
+        (stored as embeddingProvider and embeddingModel), since vectors of another
+        model do not compare, and every vector in it has the same size. Every chunk
+        has one, unless the index says that some wait for theirs ("needs-reindex":
+        answers moved in, or an index update failed, see _rebuild_chunks_without_ai
+        and reindex_assistant_knowledge); those are found by keyword meanwhile
+        (_rank_own_chunks). An index that says it is whole and is not, or that holds
+        anything else in place of a vector, is not used.
         """
         provider = get_provider(str(settings.get("provider") or ""))
         model = str(settings.get("embeddingModel") or "")
         if not chunks or provider is None or not provider.embeddings or not model:
-            return False
+            return 0
         if (
             str(tenant.get("embeddingProvider") or "") != provider.id
             or str(tenant.get("embeddingModel") or "") != model
         ):
-            return False
-        first = chunks[0].get("embedding")
-        size = len(first) if isinstance(first, list) else 0
-        return bool(size) and all(
-            isinstance(chunk.get("embedding"), list) and len(chunk["embedding"]) == size
-            for chunk in chunks
-        )
+            return 0
+        some_wait = tenant.get("indexMode") == "needs-reindex"
+        size = 0
+        for chunk in chunks:
+            if "embedding" not in chunk:
+                if not some_wait:
+                    return 0
+                continue
+            vector = chunk["embedding"]
+            if not isinstance(vector, list) or not vector or (size and len(vector) != size):
+                return 0
+            size = len(vector)
+        return size
 
     def assistant_settings(self, user: dict[str, Any] | None) -> dict[str, Any]:
         """GET /api/assistant/settings: the workspace's AI and every provider it can pick.
@@ -29588,10 +29708,14 @@ class WebState:
 
         Chunks get vectors only from a provider with embeddings and a search model
         chosen; Claude, Z.ai, DeepSeek, Grok and Kimi (no embeddings) and a blank
-        search model index for keyword search without calling the AI. On any provider
-        failure the index falls back to keyword search, with the reason (key hidden)
-        in indexError. ``embeddingProvider`` and ``embeddingModel`` record what made
-        the vectors, so a question only compares vectors of the same model.
+        search model index for keyword search without calling the AI. On a provider
+        failure the reason (key hidden) is in indexError: the chunks that did not
+        change keep the vectors the same model made for them and only the others wait
+        for the next update ("needs-reindex"), and with no such vector to keep, or
+        with the AI not set up, the index falls back to keyword search.
+        ``embeddingProvider`` and
+        ``embeddingModel`` record what made the vectors, so a question only compares
+        vectors of the same model.
         """
         data = self._global_ai_all()
         settings = self._assistant_settings_for(data, user)
@@ -29632,17 +29756,21 @@ class WebState:
             fresh = self._build_knowledge_chunks(current, scope=f"tenant:{owner_id}")
             now_settings = self._assistant_settings_for(latest, user)
             now_uses = (str(now_settings["provider"]), str(now_settings["embeddingModel"]))
-            # A chunk id hashes its text, so a vector carries over to the same chunk:
-            # from this run, or from a run for the same model that finished first.
+            # A chunk id hashes its text, so a vector carries over to the same chunk (the
+            # same id and the same text): from this run, or from a run for the same
+            # model that finished first.
             stored: dict[str, Any] = {}
             if now_uses[1] and (
                 str(current.get("embeddingProvider") or ""),
                 str(current.get("embeddingModel") or ""),
             ) == now_uses:
+                texts = {str(item["id"]): item["text"] for item in fresh}
                 stored = {
                     str(item.get("id") or ""): item.get("embedding")
                     for item in current.get("chunks", [])
-                    if isinstance(item, dict) and isinstance(item.get("embedding"), list)
+                    if isinstance(item, dict)
+                    and isinstance(item.get("embedding"), list)
+                    and texts.get(str(item.get("id") or "")) == item.get("text")
                 }
             if made_by == now_uses:
                 stored.update(vectors)
@@ -29650,26 +29778,42 @@ class WebState:
                 vector = stored.get(str(item["id"]))
                 if isinstance(vector, list) and vector:
                     item["embedding"] = vector
-            embedded = bool(fresh) and bool(now_uses[1]) and all(
-                isinstance(item.get("embedding"), list) for item in fresh
+            have = (
+                [item for item in fresh if isinstance(item.get("embedding"), list)]
+                if now_uses[1]
+                else []
             )
-            if embedded:
-                # Vectors carried over from an earlier run obey the same limits.
+            embedded = bool(fresh) and len(have) == len(fresh)
+            # No vector for some chunks (the provider failed, or the shop info changed
+            # while it worked): the chunks that did not change keep theirs, and only
+            # the others wait for the next update. A question meanwhile uses the
+            # vectors there are (see _tenant_vector_size). Not while the AI is not set
+            # up: then no update could make the missing vectors and no question is
+            # asked, so the index is keyword search, as it always was.
+            some_wait = bool(have) and not embedded and bool(now_settings["configured"])
+            if have:
+                # Vectors carried over from an earlier run obey the same limits, as if
+                # every chunk had one.
                 problem = _vector_size_problem(
-                    max(len(item["embedding"]) for item in fresh),
+                    max(len(item["embedding"]) for item in have),
                     len(fresh),
                     _other_workspaces_vector_values(latest, owner_id),
                 )
                 if problem:
-                    embedded = False
+                    embedded = some_wait = False
                     index_error = index_error or problem
-            if not embedded:
+            if not embedded and not some_wait:
                 for item in fresh:
                     item.pop("embedding", None)
             current["chunks"] = fresh
-            current["embeddingProvider"] = now_uses[0] if embedded else ""
-            current["embeddingModel"] = now_uses[1] if embedded else ""
-            current["indexMode"] = ("embedding" if embedded else "keyword") if fresh else "empty"
+            current["embeddingProvider"] = now_uses[0] if embedded or some_wait else ""
+            current["embeddingModel"] = now_uses[1] if embedded or some_wait else ""
+            if not fresh:
+                current["indexMode"] = "empty"
+            elif embedded:
+                current["indexMode"] = "embedding"
+            else:
+                current["indexMode"] = "needs-reindex" if some_wait else "keyword"
             current["indexError"] = "" if embedded else index_error
             current["indexedAt"] = _now_iso()
             self.store.set("global_ai", latest)
@@ -29905,7 +30049,7 @@ class WebState:
         The ask path already hides the key in provider errors; this also covers any
         other failure that might repeat it.
         """
-        text = str(exc)
+        text = _storable_text(str(exc))  # before the key is looked for, see _ai_error_text
         if owner is not None:
             try:
                 key = str(self._assistant_settings_for(self._global_ai_all(), owner)["apiKey"])
@@ -30944,7 +31088,9 @@ class WebState:
                     cursor_updates[chat_mid] = cursor
                     continue
                 summary = _message_summary(api, latest, {})
-                question = str(summary.get("text") or "").strip()
+                # A message with nothing in it but characters no store takes is no
+                # question: passed over like an empty one.
+                question = _storable_text(str(summary.get("text") or "")).strip()
                 if not question or question == "[encrypted]":
                     cursor_updates[chat_mid] = cursor
                     continue
@@ -31507,7 +31653,9 @@ class WebState:
         (_assistant_settings_for), when the caller has just read them. The answer comes
         back even when the question log cannot be saved; ``logged`` says whether it was.
         """
-        question = question.strip()
+        # A message from a chat may hold what the stores refuse; the AI is asked, and
+        # the log keeps, the question without it.
+        question = _storable_text(question).strip()
         if not question:
             raise WebError(HTTPStatus.BAD_REQUEST, "Question is required.")
         if len(question) > MAX_ASSISTANT_QUESTION_LENGTH:
@@ -31535,7 +31683,8 @@ class WebState:
         # model in use now, else by keyword.
         own_chunks = [item for item in tenant["chunks"] if isinstance(item, dict)]
         query_embedding: list[float] | None = None
-        if self._tenant_vectors_usable(tenant, settings, own_chunks):
+        vector_size = self._tenant_vector_size(tenant, settings, own_chunks)
+        if vector_size:
             try:
                 vectors = client.embed(
                     settings["embeddingModel"],
@@ -31546,9 +31695,9 @@ class WebState:
                 vectors = []
             first = vectors[0] if vectors else None
             # A vector of another size cannot be compared: keyword search instead.
-            if isinstance(first, list) and len(first) == len(own_chunks[0]["embedding"]):
+            if isinstance(first, list) and len(first) == vector_size:
                 query_embedding = first
-        ranked = rank_chunks(
+        ranked = _rank_own_chunks(
             question,
             own_chunks,
             query_embedding=query_embedding,
@@ -31598,14 +31747,20 @@ class WebState:
                     "ai_unavailable",
                 ) from exc
         can_answer = bool(result.get("canAnswer"))
-        # What the AI sent is cut to a sane size before it is stored (every logged
-        # question lives in the record all workspaces share) or sent to a customer.
+        # What the AI sent is cleaned of what the stores refuse (_storable_text) and cut
+        # to a sane size, here and nowhere else, before it is stored (every logged
+        # question lives in the record all workspaces share) or sent to a customer: what
+        # is sent is what is stored.
         answer = (
-            str(result.get("answer") or "").strip()[:MAX_AI_ANSWER_LENGTH].rstrip()
+            _storable_text(str(result.get("answer") or ""))
+            .strip()[:MAX_AI_ANSWER_LENGTH]
+            .rstrip()
             if can_answer
             else ""
         )
-        model_name = str(result.get("model") or settings["chatModel"])[:MAX_AI_MODEL_NAME_LENGTH]
+        model_name = _storable_text(str(result.get("model") or settings["chatModel"]))[
+            :MAX_AI_MODEL_NAME_LENGTH
+        ]
         now = _now_iso()
         item = {
             "id": uuid.uuid4().hex,
@@ -34995,8 +35150,50 @@ def _ensure_schedule_image_quota(
         )
 
 
+# What a store may not be given inside a text: PostgreSQL's jsonb refuses a NUL
+# character, and a lone surrogate cannot be written as UTF-8 at all.
+_UNSTORABLE_CHARACTERS = re.compile(r"[\x00\ud800-\udfff]")
+_SPLIT_SURROGATE_PAIR = re.compile(r"[\ud800-\udbff][\udc00-\udfff]")
+
+
+def _join_surrogate_pair(match: re.Match[str]) -> str:
+    pair = match.group()
+    return chr(0x10000 + ((ord(pair[0]) - 0xD800) << 10) + (ord(pair[1]) - 0xDC00))
+
+
+def _storable_text(text: str) -> str:
+    """``text`` without what the stores refuse: NUL characters and lone surrogates.
+
+    PostgreSQL takes neither, and the file store no lone surrogate: one of them in any
+    text fails the save of the whole record it is in. So text from outside (an AI's
+    answer, an error text, a name or a message from a chat) goes through this before
+    it enters the stored state or is sent on. Two surrogates that stand for one
+    character become that character; everything else stays as it is.
+    """
+    if not _UNSTORABLE_CHARACTERS.search(text):
+        return text
+    return _UNSTORABLE_CHARACTERS.sub("", _SPLIT_SURROGATE_PAIR.sub(_join_surrogate_pair, text))
+
+
+def _storable_value(value: Any) -> Any:
+    """A copy of a JSON-like ``value`` that the stores take: each text in it (keys
+    too) through _storable_text, and None in place of NaN and the infinities."""
+    if isinstance(value, str):
+        return _storable_text(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Mapping):
+        return {
+            (_storable_text(key) if isinstance(key, str) else key): _storable_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_storable_value(item) for item in value]
+    return value
+
+
 def _short_text(value: Any, limit: int = 240) -> str:
-    text = str(value or "").strip()
+    text = _storable_text(str(value or "")).strip()
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 3)] + "..."
@@ -35006,7 +35203,9 @@ _URL_IN_TEXT_RE = re.compile(r"(?:https?|socks5h?)://[^\s)>,]+", re.IGNORECASE)
 
 
 def _safe_log_detail(value: Any, limit: int = 220) -> str:
-    text = " ".join(str(value or "").split())
+    """An error or other outside text as the logs, job records and pages keep it: on
+    one line, with nothing a store refuses (_storable_text), URLs shortened, cut."""
+    text = " ".join(_storable_text(str(value or "")).split())
     if not text:
         return ""
     lowered = text.lower()
@@ -35023,7 +35222,7 @@ def _safe_log_detail(value: Any, limit: int = 220) -> str:
 def _bot_log_detail(action: Any, value: Any) -> str:
     action_name = str(action or "")
     if action_name == "content.ai.start" or action_name.startswith("ai.auto_reply."):
-        return str(value or "").strip()[:MAX_TEXT_LENGTH]
+        return _storable_text(str(value or "")).strip()[:MAX_TEXT_LENGTH]
     if action_name == "content.ai.error":
         return _safe_log_detail(value, MAX_TEXT_LENGTH)
     return _safe_log_detail(value)

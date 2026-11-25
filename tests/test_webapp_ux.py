@@ -4071,9 +4071,15 @@ def test_god_answers_filed_under_staff_ids_move_to_the_team_owner(
         texts = [chunk["text"] for chunk in owner_tenant["chunks"]]
         assert any("ยังไม่ส่งต่างประเทศ" in text for text in texts)
         assert not any("คำตอบเก่าของพนักงาน" in text for text in texts)
-        # The new chunks have no vector yet: keyword search, and the page asks for an update.
-        assert all("embedding" not in chunk for chunk in owner_tenant["chunks"])
-        assert (owner_tenant["embeddingProvider"], owner_tenant["embeddingModel"]) == ("", "")
+        # The answers that moved in have no vector yet, and the page asks for an update.
+        # The chunks that did not change (the shop info, the owner's own newer answer)
+        # keep theirs, from the model the index still names.
+        assert [chunk.get("embedding") for chunk in owner_tenant["chunks"]] == [
+            [0.1, 0.2], [0.1, 0.2], None, None, None
+        ]
+        assert (owner_tenant["embeddingProvider"], owner_tenant["embeddingModel"]) == (
+            "gemini", "gemini-embedding-001"
+        )
         assert owner_tenant["indexMode"] == "needs-reindex"
         # The staff record is gone; one with shop info of its own keeps only that.
         assert ids["staff"] not in tenants
